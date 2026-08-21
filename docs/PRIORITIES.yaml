@@ -87,7 +87,8 @@ tasks:
   - id: P0B-1
     rank: 3
     title: "Metal harness + dual timing utility (GPU timestamps AND wall clock)"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-21T22:03:51Z
     depends_on: [SETUP-1]
     blocks: [P0B-2, P0B-3, P0B-4]
     deliverable:
