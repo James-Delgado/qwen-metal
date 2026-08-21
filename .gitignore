@@ -4,6 +4,9 @@
 # macOS
 .DS_Store
 
+# Editor config (auto-generated per-developer; repo dev loop is CLI/Xcode)
+.vscode/
+
 # Swift build artifacts
 .build/
 *.xcodeproj/xcuserdata/
