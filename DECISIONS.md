@@ -73,3 +73,15 @@ outside-voice (cross-model) findings, all accepted. Load-bearing decisions:
   (milestone placeholder, replaced by real tasks when the spec lands). This makes
   the just-in-time spec rule an enforceable DAG edge instead of convention.
 - AUDIT-1 retargeted to depend on P1-5 (audit needs code to exist).
+
+## 2026-08-21 — Architecture PDF generator incorporated (docs/generator/)
+
+- Adopted the browser-agent's system-design PDF generator: make_diagrams.py
+  (Figures 1-7) + build_pdf.py -> docs/architecture.pdf. Paths made repo-relative.
+- Content drift fixed before first commit (v1.1): absolute success metric wording
+  (>=0.75x MLX measured, canonical window), phys_footprint as the sole memory
+  metric, "MLX ~61 tok/s" relabeled published/provisional, finding count corrected
+  to 20, parity pins + regenerate-loop added to the methodology section.
+- Its CLAUDE.md was NOT adopted (it predated the v2 hard rules); only its
+  "Architecture document upkeep" section (regeneration triggers + anti-drift
+  clause) was merged into ours. Root README.md added.

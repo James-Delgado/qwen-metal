@@ -155,3 +155,14 @@ the previous phase's results, not invented mid-session.
   and Phase 3 quality gate). Regeneration scripts live in tools/ with pinned
   Python dependency versions and the pinned model revision — regenerating fixtures
   with unpinned versions is a bug.
+
+## Architecture document upkeep
+
+docs/architecture.pdf is a rendered snapshot of PLAN.md + DECISIONS.md + the
+phase specs, produced by docs/generator/ (see its README for the procedure).
+At the end of each phase — or when a DECISIONS.md entry changes an invariant,
+exit criterion, or number the PDF displays — regenerate it: update the generator
+scripts' content from the new entries, bump the version/date, rerun both scripts,
+and commit scripts + figures + PDF together. Never edit the PDF's claims without
+a matching DECISIONS.md basis, and never let it drift silently: if it is stale
+relative to DECISIONS.md, say so rather than presenting it as current.
