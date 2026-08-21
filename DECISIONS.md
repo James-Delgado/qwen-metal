@@ -121,3 +121,14 @@ outside-voice (cross-model) findings, all accepted. Load-bearing decisions:
   beta, macOS 26 SDK line). Fine for scaffold/unit tests; before any benchmark
   row or numeric-gate commitment lands, note the toolchain build in the row per
   the benchmark protocol, and prefer a release Xcode once available.
+
+## 2026-08-21 — Toolchain pinned to release Xcode 26.6 (beta caution retired)
+
+- James installed release Xcode 26.6 (build 17F113) at /Applications/Xcode.app
+  and switched xcode-select to it. `swift test` re-verified without any
+  DEVELOPER_DIR prefix: "Executed 1 test, with 0 failures (0 unexpected)";
+  `swift run qwen-metal-cli` prints the banner.
+- The previous entry's beta caution is resolved: dev + benchmarks run on the
+  release toolchain. Xcode-beta.app remains installed side-by-side; it is NOT
+  to be used for benchmark rows. CLAUDE.md environment section updated
+  (DEVELOPER_DIR prefix removed).
