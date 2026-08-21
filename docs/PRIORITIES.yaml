@@ -124,7 +124,8 @@ tasks:
   - id: P0B-3
     rank: 5
     title: "Naive fp16 matmul kernel (one thread per output element) + XCTest vs CPU"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-21T22:32:50Z
     depends_on: [P0B-1]
     blocks: []
     deliverable:
