@@ -65,7 +65,7 @@ def footer(canvas, doc):
     canvas.setFont("Helvetica", 7.5)
     canvas.setFillColor(GRAY)
     canvas.drawString(0.75 * inch, 0.45 * inch,
-                      "qwen-metal — Architecture & System Design  ·  v1.1  ·  2026-08-21")
+                      "qwen-metal — Architecture & System Design  ·  v1.2  ·  2026-08-21")
     canvas.drawRightString(letter[0] - 0.75 * inch, 0.45 * inch, f"Page {doc.page}")
     canvas.setStrokeColor(colors.HexColor("#e2e8f0"))
     canvas.line(0.75 * inch, 0.62 * inch, letter[0] - 0.75 * inch, 0.62 * inch)
@@ -86,7 +86,7 @@ S.append(Paragraph("Architecture &amp; System Design Document", ParagraphStyle(
 S.append(Paragraph("A from-scratch, single-model LLM inference engine in Swift + Metal for iPhone — "
                    "Qwen ~1.5–2B, 4-bit quantized — benchmarked head-to-head against MLX Swift and "
                    "llama.cpp on the same physical device.", SUB))
-S.append(Paragraph("Version 1.1 · August 21, 2026 · Companion to PLAN.md, CLAUDE.md, DECISIONS.md, and the phase specs. "
+S.append(Paragraph("Version 1.2 · August 21, 2026 · Companion to PLAN.md, CLAUDE.md, DECISIONS.md, and the phase specs. "
                    "Where this document and DECISIONS.md disagree, DECISIONS.md (the append-only log) wins.", CAP))
 S.append(HRFlowable(width="100%", color=INK, thickness=1.2, spaceAfter=10))
 
@@ -162,8 +162,8 @@ S.append(Paragraph(
     "compute-bound within ~10 tokens, which would invalidate every bandwidth-based measurement the later phases rely on.", BODY))
 S += fig(f"{D}/d2_dataflow.png", CW,
          "Figure 2 — One decode step. Orange = quantized-weight kernels (bandwidth-critical); green = hand-rolled "
-         "numeric logic; purple = cache state. The residual stream (elbow, right) connects the attention block to the "
-         "MLP block within each layer.")
+         "numeric logic; purple = cache state. The top row (attention) runs left-to-right; the middle row (attention "
+         "output through the MLP block) runs right-to-left.")
 S.append(Paragraph(
     "Qwen's grouped-query attention (GQA) matters twice here: the attention kernel must map multiple query heads onto "
     "each shared KV head, and the cache shrinks proportionally — with far fewer KV heads than Q heads, a 4K-context "

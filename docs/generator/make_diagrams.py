@@ -56,8 +56,8 @@ ax.set_xlim(0, 10); ax.set_ylim(0, 6); ax.axis("off")
 # Engine package (center)
 ax.add_patch(FancyBboxPatch((2.6, 1.15), 4.8, 3.6, boxstyle="round,pad=0.02",
                             fc="#f8fafc", ec=INK, lw=2))
-ax.text(5.0, 4.52, "QwenMetalEngine  (shared Swift package — all engine logic lives here)",
-        ha="center", fontsize=9.5, fontweight="bold")
+ax.text(5.0, 4.52, "QwenMetalEngine — shared Swift package (all engine logic)",
+        ha="center", fontsize=8.6, fontweight="bold")
 
 box(ax, 2.85, 3.55, 1.42, 0.72, "WeightLoader", BLUEF, BLUE, 8,
     sub="safetensors, mmap\n4-bit packed fmt")
@@ -92,8 +92,8 @@ arrow(ax, 7.85, 1.7, 7.4, 1.85, color=GRAY)
 
 # Dev loop banner
 ax.add_patch(Rectangle((0.25, 0.15), 9.5, 0.75, fc="#fffbeb", ec="#d97706", lw=1.2))
-ax.text(5.0, 0.52, "Dev loop:  build + test + first-pass profile on macOS (identical Metal API)   →   deploy to physical iPhone for all official benchmark numbers",
-        ha="center", va="center", fontsize=8.6, color="#92400e")
+ax.text(5.0, 0.52, "Dev loop:  build + test + first-pass profile on macOS (identical Metal API)\n→  deploy to physical iPhone for all official benchmark numbers",
+        ha="center", va="center", fontsize=8.2, color="#92400e")
 plt.tight_layout(); plt.savefig(f"{OUT}/d1_system.png", dpi=200, bbox_inches="tight"); plt.close()
 
 # ----------------------------------------------------------------------------
@@ -102,16 +102,20 @@ plt.tight_layout(); plt.savefig(f"{OUT}/d1_system.png", dpi=200, bbox_inches="ti
 fig, ax = plt.subplots(figsize=(9.2, 6.4))
 ax.set_xlim(0, 10); ax.set_ylim(0, 7); ax.axis("off")
 
+ax.text(0.38, 6.78, "One decode step (batch = 1, incremental via KV cache from Phase 2 onward)",
+        fontsize=10, fontweight="bold")
 box(ax, 0.2, 6.1, 1.7, 0.65, "token id (t)", GRAYF, GRAY, 9)
 box(ax, 2.25, 6.1, 2.0, 0.65, "Embedding lookup", BLUEF, BLUE, 9, sub="row read, fp16")
 arrow(ax, 1.9, 6.42, 2.25, 6.42)
 
-# layer block
-ax.add_patch(FancyBboxPatch((0.35, 1.5), 9.3, 4.2, boxstyle="round,pad=0.02",
+# layer block: top row runs left-to-right, middle row runs RIGHT-TO-LEFT,
+# KV cache lives in the corridor between them. No long elbow routes.
+ax.add_patch(FancyBboxPatch((0.35, 2.35), 9.3, 3.35, boxstyle="round,pad=0.02",
                             fc="#fcfcfd", ec=INK, lw=1.8))
-ax.text(5.0, 5.45, "× N layers  (Qwen: ~28)", ha="center", fontsize=9.5, fontweight="bold")
+ax.text(5.0, 5.42, "× N layers  (Qwen: ~28)", ha="center", fontsize=9.5, fontweight="bold")
 arrow(ax, 3.25, 6.1, 3.25, 5.7)
 
+# top row (attention half, L→R)
 box(ax, 0.6, 4.45, 1.55, 0.7, "RMSNorm", GREENF, GREEN, 8.5, sub="fp32 accum")
 box(ax, 2.45, 4.45, 2.05, 0.7, "QKV projections", ORANGEF, ORANGE, 8.5,
     sub="fused dequant-matvec\n(4-bit weights)")
@@ -121,29 +125,30 @@ box(ax, 8.2, 4.45, 1.25, 0.7, "SDPA", ORANGEF, ORANGE, 8.5, sub="GQA, fused\nove
 arrow(ax, 2.15, 4.8, 2.45, 4.8); arrow(ax, 4.5, 4.8, 4.8, 4.8)
 arrow(ax, 6.15, 4.8, 6.45, 4.8); arrow(ax, 7.95, 4.8, 8.2, 4.8)
 
-# KV cache
-box(ax, 5.55, 3.15, 2.5, 0.72, "KV cache (preallocated)", PURPLEF, PURPLE, 8.5,
-    sub="[layers × kv-heads × 4K ctx × head-dim]")
-arrow(ax, 7.0, 4.45, 6.9, 3.87, color=PURPLE)
-arrow(ax, 7.9, 3.87, 8.5, 4.45, color=PURPLE)
-ax.text(8.62, 4.12, "read all\npast K,V", fontsize=7, color=PURPLE, ha="left")
+# KV cache in the inter-row corridor, under append/SDPA
+box(ax, 5.35, 3.55, 2.8, 0.55, "KV cache (preallocated)", PURPLEF, PURPLE, 8,
+    sub="[layers × kv-heads × 4K ctx × head-dim]", subfs=6.4)
+arrow(ax, 7.2, 4.45, 7.2, 4.10, color=PURPLE)                # append writes
+arrow(ax, 7.9, 4.10, 8.5, 4.45, color=PURPLE)               # SDPA reads
+ax.text(8.35, 3.98, "read past K,V", fontsize=6.8, color=PURPLE, ha="left")
 
-box(ax, 0.6, 3.15, 1.9, 0.7, "attn out proj", ORANGEF, ORANGE, 8.5,
+# middle row (attention out → MLP half, R→L)
+box(ax, 8.0, 2.55, 1.55, 0.7, "attn out proj", ORANGEF, ORANGE, 8.5,
     sub="dequant-matvec")
-box(ax, 2.85, 3.15, 1.3, 0.7, "residual +", GRAYF, GRAY, 8.5)
-arrow(ax, 8.8, 4.45, 8.8, 2.6); arrow(ax, 8.8, 2.6, 2.55, 2.6, style="-")
-arrow(ax, 1.55, 2.98, 1.55, 3.15)  # dummy small
-# route: SDPA -> out proj (drawn as elbow)
-arrow(ax, 2.55, 2.6, 2.5, 3.5, style="-")
-arrow(ax, 2.5, 3.5, 2.5, 3.5)
-# simpler explicit arrows
-arrow(ax, 2.5, 3.5, 2.5, 3.5)
-
-box(ax, 0.6, 1.85, 1.55, 0.7, "RMSNorm", GREENF, GREEN, 8.5, sub="fp32 accum")
-box(ax, 2.45, 1.85, 2.5, 0.7, "SwiGLU MLP", ORANGEF, ORANGE, 8.5,
+box(ax, 6.3, 2.55, 1.25, 0.7, "residual +", GRAYF, GRAY, 8.5)
+box(ax, 4.55, 2.55, 1.5, 0.7, "RMSNorm", GREENF, GREEN, 8.5, sub="fp32 accum")
+box(ax, 2.3, 2.55, 1.95, 0.7, "SwiGLU MLP", ORANGEF, ORANGE, 8.5,
     sub="gate/up/down: 3 ×\ndequant-matvec")
-box(ax, 5.25, 1.85, 1.3, 0.7, "residual +", GRAYF, GRAY, 8.5)
-arrow(ax, 2.15, 2.2, 2.45, 2.2); arrow(ax, 4.95, 2.2, 5.25, 2.2)
+box(ax, 0.6, 2.55, 1.4, 0.7, "residual +", GRAYF, GRAY, 8.5)
+arrow(ax, 8.82, 4.45, 8.82, 3.25)                            # SDPA → attn out proj
+arrow(ax, 8.0, 2.9, 7.55, 2.9); arrow(ax, 6.3, 2.9, 6.05, 2.9)
+arrow(ax, 4.55, 2.9, 4.25, 2.9); arrow(ax, 2.3, 2.9, 2.0, 2.9)
+
+# exit after N layers → final head
+ax.text(0.45, 1.9, "after\nlayer N", fontsize=6.8, color=GRAY, ha="left")
+arrow(ax, 1.25, 2.35, 1.25, 1.2)
+ax.text(5.5, 1.75, "orange = quantized-weight kernels (bandwidth-critical)     green = hand-rolled logic     purple = KV cache state",
+        ha="center", fontsize=7.6, color=GRAY)
 
 box(ax, 0.35, 0.55, 1.75, 0.65, "final RMSNorm", GREENF, GREEN, 8.5)
 box(ax, 2.4, 0.55, 2.2, 0.65, "logits head", ORANGEF, ORANGE, 8.5,
@@ -152,13 +157,6 @@ box(ax, 4.95, 0.55, 2.15, 0.65, "sample (greedy/temp)", GRAYF, GRAY, 8.5)
 box(ax, 7.5, 0.55, 2.1, 0.65, "next token → repeat", BLUEF, BLUE, 8.5)
 arrow(ax, 2.1, 0.87, 2.4, 0.87); arrow(ax, 4.6, 0.87, 4.95, 0.87)
 arrow(ax, 7.1, 0.87, 7.5, 0.87)
-arrow(ax, 1.2, 1.5, 1.2, 1.2)
-ax.text(5.0, 6.75, "", fontsize=1)
-ax.text(9.72, 0.87, "", fontsize=1)
-ax.text(0.38, 6.78, "One decode step (batch = 1, incremental via KV cache from Phase 2 onward)",
-        fontsize=10, fontweight="bold")
-ax.text(5.0, 1.35, "orange = quantized-weight kernels (bandwidth-critical)     green = hand-rolled logic     purple = KV cache state",
-        ha="center", fontsize=7.6, color=GRAY)
 plt.savefig(f"{OUT}/d2_dataflow.png", dpi=200, bbox_inches="tight"); plt.close()
 
 # ----------------------------------------------------------------------------
@@ -167,7 +165,7 @@ plt.savefig(f"{OUT}/d2_dataflow.png", dpi=200, bbox_inches="tight"); plt.close()
 fig, ax = plt.subplots(figsize=(9.2, 3.4))
 segs = [("Weights (4-bit, mmap, file-backed)", 1.30, BLUE, BLUEF),
         ("Scales + biases", 0.10, "#1d4ed8", "#bfdbfe"),
-        ("KV cache @4K ctx (fp16, GQA, prealloc)", 0.15, PURPLE, PURPLEF),
+        ("KV cache @4K (fp16)", 0.15, PURPLE, PURPLEF),
         ("Activations + scratch", 0.10, GREEN, GREENF),
         ("App + runtime + tokenizer", 0.15, GRAY, GRAYF)]
 total = sum(s[1] for s in segs)
@@ -180,15 +178,21 @@ for name, sz, ec, fc in segs:
 ax.add_patch(Rectangle((x, 0.8), ceiling - x, 0.8, fc="white", ec=GRAY, lw=1.2, ls="--"))
 ax.text(x + (ceiling-x)/2, 1.2, f"headroom  ≈ {ceiling-total:.1f} GB\n(margin of safety vs. jetsam)",
         ha="center", va="center", fontsize=8, color=GRAY)
-# labels with leader lines
-labels_y = [2.25, 1.95, 2.25, 1.95, 2.25]
+# labels fanned out to fixed anchors with leader lines (segments 2-5 are thin
+# and clustered — labels at segment centers would pile on top of each other)
+labels_x = [0.65, 1.30, 1.95, 2.60, 3.10]
+labels_y = [2.18, 1.88, 2.18, 1.88, 2.18]
 x = 0
-for (name, sz, ec, fc), ly in zip(segs, labels_y):
+for (name, sz, ec, fc), lx, ly in zip(segs, labels_x, labels_y):
     cx = x + sz/2
-    ax.plot([cx, cx], [1.6, ly-0.12], color=ec, lw=0.9)
-    ax.text(cx, ly, f"{name}\n≈ {sz:.2f} GB", ha="center", fontsize=7.6, color=ec)
+    if lx - cx > 1.2:
+        # long reach: elbow (shallow diagonal under the other labels, then up)
+        ax.plot([cx, lx, lx], [1.62, 1.70, ly - 0.16], color=ec, lw=0.9)
+    else:
+        ax.plot([cx, lx], [1.62, ly - 0.16], color=ec, lw=0.9)
+    ax.text(lx, ly, f"{name}\n≈ {sz:.2f} GB", ha="center", fontsize=7.6, color=ec)
     x += sz
-ax.axvline(ceiling, color=RED, lw=2)
+ax.plot([ceiling, ceiling], [0.62, 2.4], color=RED, lw=2)
 ax.text(ceiling+0.05, 1.2, "practical iOS\nmemory ceiling\n(jetsam; with\nIncreased Memory\nLimit entitlement)",
         fontsize=7.6, color=RED, va="center")
 ax.text(0, 0.45, "0 GB", fontsize=8, color=GRAY)
@@ -210,30 +214,30 @@ box(ax, 2.7, 3.55, 1.7, 0.75, "Dequant kernel", REDF, RED, 8.5)
 box(ax, 0.4, 2.35, 1.7, 0.75, "DRAM\nfp16 scratch\n(~2.6 GB!)", REDF, RED, 8)
 box(ax, 2.7, 2.35, 1.7, 0.75, "Matmul kernel", REDF, RED, 8.5)
 arrow(ax, 2.1, 3.92, 2.7, 3.92, color=GRAY)
-ax.text(2.4, 4.08, "read 0.5 B", fontsize=7.2, color=GRAY, ha="center")
+ax.text(2.38, 4.14, "read 0.5 B", fontsize=6.5, color=GRAY, ha="center")
 arrow(ax, 2.7, 3.55, 2.1, 3.0, color=RED)
-ax.text(2.63, 3.28, "write 2 B", fontsize=7.2, color=RED, ha="left")
+ax.text(2.63, 3.28, "write 2 B", fontsize=6.5, color=RED, ha="left")
 arrow(ax, 2.1, 2.72, 2.7, 2.72, color=RED)
-ax.text(2.4, 2.9, "read 2 B", fontsize=7.2, color=RED, ha="center")
-ax.add_patch(Rectangle((0.4, 1.15), 4.0, 0.8, fc=REDF, ec=RED, lw=1.5))
-ax.text(2.4, 1.55, "≈ 4.5 bytes of DRAM traffic per weight, per token\n(~9× the fused path)  +  a disqualifying scratch buffer",
-        ha="center", va="center", fontsize=8.4, color=RED, fontweight="bold")
+ax.text(2.4, 2.9, "read 2 B", fontsize=6.5, color=RED, ha="center")
+ax.add_patch(Rectangle((0.3, 1.15), 4.5, 0.8, fc=REDF, ec=RED, lw=1.5))
+ax.text(2.55, 1.55, "≈ 4.5 bytes of DRAM traffic per weight, per token\n(~9× the fused path)  +  a disqualifying scratch buffer",
+        ha="center", va="center", fontsize=7.8, color=RED, fontweight="bold")
 
 ax.text(7.4, 4.75, "FUSED  dequant-matvec  (the design)", fontsize=10, fontweight="bold",
         color=GREEN, ha="center")
 box(ax, 5.5, 3.55, 1.7, 0.75, "DRAM\n4-bit weights\n+ scales/biases", GRAYF, GRAY, 8)
 ax.add_patch(FancyBboxPatch((7.7, 2.5), 2.0, 1.85, boxstyle="round,pad=0.02",
                             fc=GREENF, ec=GREEN, lw=1.6))
-ax.text(8.7, 4.12, "One kernel, per thread:", fontsize=8, fontweight="bold", ha="center")
-ax.text(8.7, 3.35, "unpack nibbles\n(shift + mask)\nw = scale·q + bias\n→ registers only\nfma into fp32 acc",
+ax.text(8.7, 4.05, "One kernel, per thread:", fontsize=8, fontweight="bold", ha="center")
+ax.text(8.7, 3.28, "unpack nibbles\n(shift + mask)\nw = scale·q + bias\n→ registers only\nfma into fp32 acc",
         fontsize=7.8, ha="center", va="center")
 arrow(ax, 7.2, 3.92, 7.7, 3.75, color=GRAY)
-ax.text(7.42, 4.06, "read 0.5 B", fontsize=7.2, color=GRAY, ha="center")
+ax.text(7.42, 3.42, "read 0.5 B", fontsize=7.2, color=GRAY, ha="center")
 box(ax, 7.85, 1.45, 1.7, 0.7, "output vector\n(fp16, tiny)", GREENF, GREEN, 8)
 arrow(ax, 8.7, 2.5, 8.7, 2.15, color=GREEN)
-ax.add_patch(Rectangle((5.5, 1.15), 1.95, 1.0, fc=GREENF, ec=GREEN, lw=1.5))
-ax.text(6.47, 1.65, "≈ 0.5 bytes per weight,\nper token — weights\ntouch DRAM exactly once",
-        ha="center", va="center", fontsize=8.2, color=GREEN, fontweight="bold")
+ax.add_patch(Rectangle((5.3, 1.15), 2.3, 1.0, fc=GREENF, ec=GREEN, lw=1.5))
+ax.text(6.45, 1.65, "≈ 0.5 bytes per weight,\nper token — weights\ntouch DRAM exactly once",
+        ha="center", va="center", fontsize=7.8, color=GREEN, fontweight="bold")
 ax.text(5.0, 0.55, "Decode roofline:  tok/s  ≈  DRAM bandwidth  ÷  bytes read per token.   Bandwidth is fixed by hardware;\nthe denominator is the only lever. Fusion is not an optimization on top of the design — it is the design.",
         ha="center", fontsize=8.4, color=INK)
 plt.savefig(f"{OUT}/d4_fused.png", dpi=200, bbox_inches="tight"); plt.close()
@@ -255,7 +259,7 @@ ax.annotate("same model @ fp16\n≈ 19 tok/s ceiling", (3.1, 19.4), xytext=(2.45
             fontsize=8.5, color=GRAY, arrowprops=dict(arrowstyle="->", color=GRAY))
 ax.scatter([1.1], [61], s=90, color=GREEN, marker="*", zorder=6)
 ax.annotate("MLX (published): ~61 tok/s\n(iPhone 17 Pro; provisional until\nPhase 0 rows land)", (1.1, 61),
-            xytext=(0.5, 88), fontsize=8.5, color=GREEN,
+            xytext=(1.45, 84), fontsize=8.5, color=GREEN,
             arrowprops=dict(arrowstyle="->", color=GREEN))
 ax.set_xlabel("Bytes read per generated token (GB)  ≈  packed weights + scales + KV reads", fontsize=9)
 ax.set_ylabel("Decode tokens / second (ceiling)", fontsize=9)
@@ -279,7 +283,7 @@ box(ax, 3.3, 5.3, 2.5, 0.8, "Slim fixtures (~13 MB)", GREENF, GREEN, 8.5,
 box(ax, 6.3, 5.3, 2.5, 0.8, "mlx-lm (fp16)", GRAYF, GRAY, 8.5,
     sub="loose-tolerance ecosystem\nsanity check only")
 arrow(ax, 2.8, 5.7, 3.3, 5.7, color=GREEN)
-box(ax, 3.3, 3.95, 2.5, 0.85, "CPU fp32 reference\n(Phase 1)", BLUEF, BLUE, 8.8,
+box(ax, 3.3, 3.95, 2.5, 0.85, "CPU fp32 reference (P1)", BLUEF, BLUE, 8.8,
     sub="plain Swift logic +\nAccelerate sgemm wrapper")
 arrow(ax, 4.55, 5.3, 4.55, 4.8, color=GREEN)
 ax.text(4.68, 5.03, "max |Δ| ≤ 1e-3\nno loosening", fontsize=7, color=GREEN)
@@ -291,7 +295,7 @@ arrow(ax, 2.7, 4.37, 3.3, 4.37, color=GRAY)
 
 box(ax, 6.3, 3.95, 2.6, 0.85, "Packing script (offline)", PURPLEF, PURPLE, 8.5,
     sub="4-bit grouped affine +\nadversarial round-trip fixtures")
-box(ax, 3.3, 2.6, 2.5, 0.85, "CPU-quant reference\n(Phase 3)", BLUEF, BLUE, 8.8,
+box(ax, 3.3, 2.6, 2.5, 0.85, "CPU-quant reference (P3)", BLUEF, BLUE, 8.8,
     sub="same code path, weights\ndequantized from packed fmt")
 arrow(ax, 4.55, 3.95, 4.55, 3.45, color=BLUE)
 arrow(ax, 6.9, 3.95, 5.6, 3.3, color=PURPLE)
