@@ -66,7 +66,8 @@ tasks:
   - id: SETUP-1
     rank: 2
     title: "Swift package scaffold: engine package + qwen-metal-cli macOS target"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-21T07:40:00Z
     depends_on: []
     blocks: [P0B-1, P1-2, P1-3]
     deliverable:
