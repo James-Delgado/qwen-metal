@@ -105,3 +105,19 @@ outside-voice (cross-model) findings, all accepted. Load-bearing decisions:
   the blocker noted; NOT worked around (e.g. no swap to a non-XCTest framework).
   Downstream P0B tasks all require XCTest + the Metal compiler (also Xcode-only),
   so the install unblocks the whole Phase 0b chain.
+
+## 2026-08-21 — Xcode blocker resolved; SETUP-1 closed (Xcode 27.0 beta via DEVELOPER_DIR)
+
+- Xcode IS installed — as /Applications/Xcode-beta.app (Xcode 27.0, build
+  27A5237l), which is why `xcode-select -s /Applications/Xcode.app` failed.
+  James's sudo also can't run inside the agent session (no TTY for password).
+- Resolution: no xcode-select switch needed. `DEVELOPER_DIR=/Applications/
+  Xcode-beta.app swift test` runs the full toolchain. Agents use this env prefix
+  for all swift test/build/run until xcode-select is switched system-wide.
+- `swift test` result: "Executed 1 test, with 0 failures (0 unexpected)" —
+  SETUP-1's exit condition verified; marked done; P0B-1, P1-2, P1-3 flipped to
+  ready.
+- CAUTION recorded: the only full toolchain on this machine is a BETA (Xcode 27
+  beta, macOS 26 SDK line). Fine for scaffold/unit tests; before any benchmark
+  row or numeric-gate commitment lands, note the toolchain build in the row per
+  the benchmark protocol, and prefer a release Xcode once available.

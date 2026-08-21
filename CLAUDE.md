@@ -51,8 +51,11 @@ Planned (Phase 2): `QwenMetalApp/` — thin iOS SwiftUI shell.
 
 ## Environment & running
 
-- Swift toolchain via Xcode (macOS). Engine package tests: `swift test` (from the
-  package directory once it exists). CLI: `swift run qwen-metal-cli ...`.
+- Swift toolchain via Xcode (macOS). Xcode lives at `/Applications/Xcode-beta.app`
+  and `xcode-select` points at CommandLineTools (no XCTest/Metal there), so prefix
+  all Swift commands: `DEVELOPER_DIR=/Applications/Xcode-beta.app swift test` /
+  `... swift run qwen-metal-cli ...`. (Drop the prefix if xcode-select is ever
+  switched system-wide — see DECISIONS.md 2026-08-21.)
 - iOS target: never built/run by agents — James deploys manually in Xcode.
 - Python tooling (`tools/`): `python3`, deps pinned in `tools/requirements.txt`.
 - Backlog drift test: `.venv/bin/python -m pytest tests/test_priorities.py -q`

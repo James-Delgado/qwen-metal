@@ -66,8 +66,9 @@ tasks:
   - id: SETUP-1
     rank: 2
     title: "Swift package scaffold: engine package + qwen-metal-cli macOS target"
-    status: in_progress
-    started_at: 2026-08-21T07:40:00Z
+    status: done
+    started_at: 2026-08-21T17:47:00Z
+    completed_at: 2026-08-21T18:12:04Z
     depends_on: []
     blocks: [P0B-1, P1-2, P1-3]
     deliverable:
@@ -78,15 +79,15 @@ tasks:
       Trivially-true gap: no Package.swift in tree. Engine core = shared package,
       no engine logic in app targets (CLAUDE.md project shape).
       2026-08-21: scaffold committed; `swift build` + `swift run qwen-metal-cli`
-      verified green. BLOCKED ON JAMES: no Xcode on this machine (CLT only, no
-      XCTest) so `swift test` cannot run — install Xcode + `sudo xcode-select -s
-      /Applications/Xcode.app`, then an agent verifies the test and marks done.
-      See DECISIONS.md 2026-08-21 entry.
+      verified green. XCTest initially blocked (CLT only, no XCTest); resolved
+      same day — Xcode 27.0 beta at /Applications/Xcode-beta.app, tests run via
+      DEVELOPER_DIR (no xcode-select switch needed). 1 test, 0 failures.
+      See DECISIONS.md 2026-08-21 entries.
 
   - id: P0B-1
     rank: 3
     title: "Metal harness + dual timing utility (GPU timestamps AND wall clock)"
-    status: blocked
+    status: ready
     depends_on: [SETUP-1]
     blocks: [P0B-2, P0B-3, P0B-4]
     deliverable:
@@ -173,7 +174,7 @@ tasks:
   - id: P1-2
     rank: 9
     title: "safetensors parser + config loader + 7 edge-case tests"
-    status: blocked
+    status: ready
     depends_on: [SETUP-1]
     blocks: [P1-4]
     deliverable:
@@ -187,7 +188,7 @@ tasks:
   - id: P1-3
     rank: 10
     title: "Accelerate sgemm wrapper + triple-loop validation test"
-    status: blocked
+    status: ready
     depends_on: [SETUP-1]
     blocks: [P1-4]
     deliverable:
