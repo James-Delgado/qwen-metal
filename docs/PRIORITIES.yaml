@@ -1,0 +1,373 @@
+# Living task backlog. The next action = lowest-`rank` task with `status: ready`.
+# Selection is by RANK among ready tasks; `depends_on` is the hard ordering
+# constraint, `rank` is the tiebreak. Keep file order roughly rank-sorted for humans.
+#
+# Seeded 2026-08-20 from the reviewed plan. Phase 0 + Phase 1 tasks are concrete
+# (their specs exist: docs/PRD-phase-0.md, docs/phases/phase-0-1.md). Phases 2-6
+# get only a SPEC task + an EXEC milestone: per PLAN.md's just-in-time rule, a
+# phase's build tasks are seeded by its SPEC task, never invented earlier.
+# Context sources for SPEC tasks: docs/reviews/2026-08-20-eng-review.md Part 4.
+#
+# Full-project DAG (∥ = parallelizable):
+#
+#   PIN-1 (james) ──────────────┬──────────────► P0A-1 (james)
+#                               │                   ▲
+#   SETUP-1 ──► P0B-1 ──┬► P0B-2│                   │
+#            ∥          ├► P0B-3│                   │
+#            ∥          └► P0B-4├───────────────────┘
+#            ∥                  │
+#            └► P1-2 ∥ P1-3     │   PIN-1 ──► P1-1
+#                    │          │              │
+#                    └────┬─────┴──────────────┘
+#                         ▼
+#                       P1-4 ──► P1-5 ──┬─► AUDIT-1
+#                                       │
+#            P0A-1 ─────────────────────┤
+#                                       ▼
+#                                    SPEC-P2 ──► P2-EXEC ──► SPEC-P3 ──► P3-EXEC
+#                                                                          │
+#            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
+#
+version: 1
+last_updated: 2026-08-20
+
+schema:
+  task_status: [ready, blocked, in_progress, done, skipped]
+  complexity: [small, medium, large]
+
+execution_model:
+  concurrency: single-threaded
+  pick_procedure: |
+    1. Read this file. 2. Find lowest-rank `ready` task. 3. Mark in_progress,
+    commit alone. 4. Do the work + tests. 5. Post-task review. 6. Mark done,
+    flip unblocked dependents to ready. 7. Commit deliverable + this file.
+  # Drift test (tests/test_priorities.py) enforces: status in enum;
+  # depends_on/blocks resolve to real ids; <=1 in_progress; done has completed_at.
+  # Tasks with `owner: james` are never executed by agents (see AGENT_OPERATION.md).
+
+tasks:
+  # ---------- Phase 0 ----------
+  - id: PIN-1
+    rank: 1
+    title: "Pin model repo + revision in DECISIONS.md (Qwen 2.5 vs Qwen 3 fork)"
+    status: ready
+    owner: james
+    depends_on: []
+    blocks: [P0A-1, P1-1]
+    deliverable:
+      file: DECISIONS.md
+      tests: "n/a (decision entry)"
+    est_complexity: small
+    notes: |
+      Architecture fork: Qwen 2.5 = QKV biases; Qwen 3 = no biases + QK-norm.
+      Fixes the Phase 1 module list. Must land before any baseline run (PRD 0a.1)
+      and before fixture dumps (P1-1). Agent may prepare a comparison brief.
+
+  - id: SETUP-1
+    rank: 2
+    title: "Swift package scaffold: engine package + qwen-metal-cli macOS target"
+    status: ready
+    depends_on: []
+    blocks: [P0B-1, P1-2, P1-3]
+    deliverable:
+      file: Package.swift
+      tests: "placeholder XCTest green via `swift test`"
+    est_complexity: small
+    notes: |
+      Trivially-true gap: no Package.swift in tree. Engine core = shared package,
+      no engine logic in app targets (CLAUDE.md project shape).
+
+  - id: P0B-1
+    rank: 3
+    title: "Metal harness + dual timing utility (GPU timestamps AND wall clock)"
+    status: blocked
+    depends_on: [SETUP-1]
+    blocks: [P0B-2, P0B-3, P0B-4]
+    deliverable:
+      file: "engine package (Metal harness module)"
+      tests: "timing sanity: nonzero, start <= end, wall >= GPU"
+    est_complexity: medium
+    notes: |
+      PRD 0b.1-0b.2. Hard rule 7: GPU-only timing forbidden; wall-GPU delta is
+      the dispatch-overhead metric Phase 4 consumes.
+
+  - id: P0B-2
+    rank: 4
+    title: "saxpy kernel + XCTest vs CPU"
+    status: blocked
+    depends_on: [P0B-1]
+    blocks: []
+    deliverable:
+      file: "engine package (kernels + tests)"
+      tests: "GPU output == CPU within phase tolerance"
+    est_complexity: small
+    notes: PRD 0b.3 — establishes dispatch -> readback -> test loop.
+
+  - id: P0B-3
+    rank: 5
+    title: "Naive fp16 matmul kernel (one thread per output element) + XCTest vs CPU"
+    status: blocked
+    depends_on: [P0B-1]
+    blocks: []
+    deliverable:
+      file: "engine package (kernels + tests)"
+      tests: "GPU output vs CPU within tolerance on odd shapes"
+    est_complexity: small
+    notes: PRD 0b.4.
+
+  - id: P0B-4
+    rank: 6
+    title: "Streaming triad bandwidth microbench (>=1GB working set), Mac run + iPhone-ready"
+    status: blocked
+    depends_on: [P0B-1]
+    blocks: [P0A-1]
+    deliverable:
+      file: "engine package (bandwidth kernel) + benchmarks/results.md row (Mac)"
+      tests: "reports sustained GB/s; working set defeats SLC"
+    est_complexity: medium
+    notes: |
+      PRD 0a.6/0b.5. Output on iPhone (run by James) is the roofline denominator
+      for the whole project (PLAN.md invariant 1).
+
+  - id: P0A-1
+    rank: 7
+    title: "Baseline benchmarks on the phone: MLX + llama.cpp provisional rows, energy dry-run, measured bandwidth"
+    status: blocked
+    owner: james
+    depends_on: [PIN-1, P0B-4]
+    blocks: [SPEC-P2]
+    deliverable:
+      file: benchmarks/results.md
+      tests: "PRD acceptance checklist (docs/PRD-phase-0.md)"
+    est_complexity: large
+    notes: |
+      Manual, on-device. Includes committing the absolute decode target
+      (0.75 x MLX measured) and measured GB/s to DECISIONS.md. Rows marked
+      PROVISIONAL per staleness rule. Agents prepare harnesses only.
+      Phase 0 exit when this + all P0B tasks are done.
+
+  # ---------- Phase 1 (spec exists: docs/phases/phase-0-1.md) ----------
+  - id: P1-1
+    rank: 8
+    title: "Python tools: reference/fixture dump scripts (pinned deps) + committed fixtures"
+    status: blocked
+    depends_on: [PIN-1]
+    blocks: [P1-4, P1-5]
+    deliverable:
+      file: "tools/ (dump scripts, requirements.txt) + tests/fixtures/"
+      tests: "fixtures regenerate reproducibly from the documented command"
+    est_complexity: medium
+    notes: |
+      HF transformers CPU fp32 primary dump: full-vocab fp32 logits at steps
+      {0,1,mid,last}, per-step logsumexp/mean/std fingerprints, top-64,
+      top-1-vs-top-2 margins, argmax sequence, per-module activations (prompt #1),
+      Python tokenizer ids for all 5 prompts. mlx-lm secondary dump. Pinned
+      transformers/torch/mlx-lm versions + model revision. ~13MB budget.
+
+  - id: P1-2
+    rank: 9
+    title: "safetensors parser + config loader + 7 edge-case tests"
+    status: blocked
+    depends_on: [SETUP-1]
+    blocks: [P1-4]
+    deliverable:
+      file: "engine package (io module)"
+      tests: "parser x5 + config x2 edge tests (phase-0-1.md enumerated list)"
+    est_complexity: medium
+    notes: |
+      ~150 lines, mmap, single-file only, bf16->fp32 exact upcast, sharded
+      checkpoints rejected loudly.
+
+  - id: P1-3
+    rank: 10
+    title: "Accelerate sgemm wrapper + triple-loop validation test"
+    status: blocked
+    depends_on: [SETUP-1]
+    blocks: [P1-4]
+    deliverable:
+      file: "engine package (blas wrapper)"
+      tests: "odd-shaped random-matrix diff vs test-only naive triple-loop"
+    est_complexity: small
+    notes: |
+      Hard rule 8: ALL matmul-shaped work routes through this one wrapper,
+      including per-head QK^T / PV later.
+
+  - id: P1-4
+    rank: 11
+    title: "CPU modules (family-correct) + per-module activation tests"
+    status: blocked
+    depends_on: [P1-1, P1-2, P1-3]
+    blocks: [P1-5]
+    deliverable:
+      file: "engine package (model modules)"
+      tests: "each module vs its dumped activation slice, before pipeline wiring"
+    est_complexity: large
+    notes: |
+      Embedding, RMSNorm, RoPE, GQA attention (+QKV bias OR QK-norm per pinned
+      family), SwiGLU, final norm/lm_head. fp32 accumulation. Readable over fast.
+
+  - id: P1-5
+    rank: 12
+    title: "Decode loop + CLI + full logit-match suite + tokenizer equivalence (Phase 1 exit)"
+    status: blocked
+    depends_on: [P1-4]
+    blocks: [AUDIT-1, SPEC-P2]
+    deliverable:
+      file: "engine package (decode, cli)"
+      tests: "logit suite <=1e-3 all 5 prompts; tie-aware argmax; decode stops; CLI edge inputs; tokenizer ids"
+    est_complexity: medium
+    notes: |
+      Phase 1 exit criteria per phase-0-1.md. Closes with a DECISIONS.md entry
+      (tokenizer observations, family notes).
+
+  # ---------- Cross-cutting ----------
+  - id: AUDIT-1
+    rank: 13
+    title: "Run /code-audit to populate the backlog with verified findings"
+    status: blocked
+    depends_on: [P1-5]
+    blocks: []
+    deliverable:
+      file: docs/PRIORITIES.yaml
+      tests: "n/a"
+    est_complexity: small
+    notes: |
+      Bootstrap task from /project-init, retargeted 2026-08-20: audit runs once a
+      real codebase exists (after Phase 1). Do not hand-infer analysis tasks.
+
+  # ---------- Phases 2-6: spec tasks + exec milestones (just-in-time rule) ----------
+  - id: SPEC-P2
+    rank: 14
+    title: "Write Phase 2 PRD/spec (Metal port + minimal KV cache) with pre-committed gates"
+    status: blocked
+    depends_on: [P1-5, P0A-1]
+    blocks: [P2-EXEC]
+    deliverable:
+      file: docs/phases/phase-2.md
+      tests: "gates committed in DECISIONS.md BEFORE P2-EXEC starts"
+    est_complexity: medium
+    notes: |
+      Context: docs/reviews/2026-08-20-eng-review.md Part 4. Must pre-commit
+      per-module fp16 tolerances vs activation fixtures + top-1-agreement-over-N
+      gate (OV#5/#11); include mmap-vs-wired sustained-stability bench (OV#9);
+      "before" row per parity pins (OV#12). Spec seeds P2 build tasks here.
+
+  - id: P2-EXEC
+    rank: 15
+    title: "Execute Phase 2 per spec (tasks seeded by SPEC-P2)"
+    status: blocked
+    depends_on: [SPEC-P2]
+    blocks: [SPEC-P3]
+    deliverable:
+      file: "per docs/phases/phase-2.md"
+      tests: "Phase 2 exit criteria (PLAN.md table)"
+    est_complexity: large
+    notes: |
+      Milestone placeholder — replaced by concrete tasks when SPEC-P2 lands.
+      Includes on-device work by James ("before" row, stability bench).
+
+  - id: SPEC-P3
+    rank: 16
+    title: "Write Phase 3 spec (4-bit quant + fused dequant-matvec) with pre-committed gates"
+    status: blocked
+    depends_on: [P2-EXEC]
+    blocks: [P3-EXEC]
+    deliverable:
+      file: docs/phases/phase-3.md
+      tests: "bandwidth fraction + quality-gate metrics committed pre-phase"
+    est_complexity: medium
+    notes: |
+      Context: review record Part 1 Issue 2 (layered oracle, full design) +
+      Part 4: microbench fraction (OV#11), perplexity slice named (OV#12),
+      mlx-community provenance check (OV#12), embeddings/lm_head quant (OV#4).
+
+  - id: P3-EXEC
+    rank: 17
+    title: "Execute Phase 3 per spec (tasks seeded by SPEC-P3)"
+    status: blocked
+    depends_on: [SPEC-P3]
+    blocks: [SPEC-P4]
+    deliverable:
+      file: "per docs/phases/phase-3.md"
+      tests: "Phase 3 exit criteria (PLAN.md table)"
+    est_complexity: large
+    notes: "Milestone placeholder. Includes offline packer, CPU-quant mode, kernels."
+
+  - id: SPEC-P4
+    rank: 18
+    title: "Write Phase 4 spec (fused attention + dispatch reduction) with pre-committed gates"
+    status: blocked
+    depends_on: [P3-EXEC]
+    blocks: [P4-EXEC]
+    deliverable:
+      file: docs/phases/phase-4.md
+      tests: "dispatch/latency/roofline targets committed pre-phase"
+    est_complexity: medium
+    notes: |
+      Context: review record Part 4 (OV#10 — wall-GPU delta is the overhead
+      metric). End-to-end decode-vs-roofline judgment lives HERE, not Phase 3.
+
+  - id: P4-EXEC
+    rank: 19
+    title: "Execute Phase 4 per spec (tasks seeded by SPEC-P4)"
+    status: blocked
+    depends_on: [SPEC-P4]
+    blocks: [SPEC-P5]
+    deliverable:
+      file: "per docs/phases/phase-4.md"
+      tests: "Phase 4 exit criteria (PLAN.md table)"
+    est_complexity: large
+    notes: "Milestone placeholder."
+
+  - id: SPEC-P5
+    rank: 20
+    title: "Write Phase 5 spec (tiled prefill GEMM) with pre-committed gates"
+    status: blocked
+    depends_on: [P4-EXEC]
+    blocks: [P5-EXEC]
+    deliverable:
+      file: docs/phases/phase-5.md
+      tests: "prefill targets committed pre-phase"
+    est_complexity: small
+    notes: "threadgroup memory + simdgroup_matrix; prefill vs MLX separately."
+
+  - id: P5-EXEC
+    rank: 21
+    title: "Execute Phase 5 per spec (tasks seeded by SPEC-P5)"
+    status: blocked
+    depends_on: [SPEC-P5]
+    blocks: [SPEC-P6]
+    deliverable:
+      file: "per docs/phases/phase-5.md"
+      tests: "Phase 5 exit criteria (PLAN.md table)"
+    est_complexity: medium
+    notes: "Milestone placeholder."
+
+  - id: SPEC-P6
+    rank: 22
+    title: "Write Phase 6 spec (benchmark writeup + final measurement round)"
+    status: blocked
+    depends_on: [P5-EXEC]
+    blocks: [P6-EXEC]
+    deliverable:
+      file: docs/phases/phase-6.md
+      tests: "n/a (spec)"
+    est_complexity: small
+    notes: |
+      Context: review record Part 4 — same-session/same-OS re-runs (OV#7),
+      energy calendar budget + possible llama.cpp energy drop (OV#8),
+      measurement-limitations section (Issue 3).
+
+  - id: P6-EXEC
+    rank: 23
+    title: "Execute Phase 6: final same-session benchmark round (james) + writeup"
+    status: blocked
+    depends_on: [SPEC-P6]
+    blocks: []
+    deliverable:
+      file: "writeup + benchmarks/results.md final rows"
+      tests: "Phase 6 exit criteria (PLAN.md table)"
+    est_complexity: large
+    notes: |
+      Milestone placeholder. Heavy James involvement: interleaved re-runs of all
+      three engines on one OS build; full energy rounds (budget real days).

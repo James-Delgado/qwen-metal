@@ -1,0 +1,21 @@
+# Claude Code personal settings (per-developer, never committed)
+.claude/settings.local.json
+
+# macOS
+.DS_Store
+
+# Swift build artifacts
+.build/
+*.xcodeproj/xcuserdata/
+DerivedData/
+
+# Model weights — never in git (multi-GB; pinned by revision in DECISIONS.md)
+models/
+*.safetensors
+*.gguf
+
+# Python tooling
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
