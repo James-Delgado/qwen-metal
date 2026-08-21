@@ -132,3 +132,21 @@ outside-voice (cross-model) findings, all accepted. Load-bearing decisions:
   release toolchain. Xcode-beta.app remains installed side-by-side; it is NOT
   to be used for benchmark rows. CLAUDE.md environment section updated
   (DEVELOPER_DIR prefix removed).
+
+## 2026-08-21 — P0B-1 landed: Metal harness + dual-timing utility
+
+- MetalContext (device/queue/library/pipeline setup, explicit error enum) and
+  DispatchTiming land in Sources/QwenMetalEngine/Metal/. timedDispatch brackets
+  the whole batch (create -> encode -> commit -> waitUntilCompleted) with
+  CACurrentMediaTime and reads MTLCommandBuffer.gpuStartTime/gpuEndTime — both
+  clocks share the mach host-time domain, so wall >= GPU holds by construction
+  and dispatchOverhead = wall - gpu is the Phase 4 overhead metric (hard rule 7).
+- Convention (reversible): Phase 0 toy kernels compile from source strings at
+  runtime via device.makeLibrary(source:), not SPM-compiled .metal resources.
+  Chosen so the test kernel can live in the test target and the engine ships no
+  kernels before P0B-2; a precompiled-metallib path can be added when a phase
+  needs it (e.g. iOS deployment of the triad bench may prefer it — revisit at
+  P0B-4).
+- Verified: `swift test` — "Executed 7 tests, with 0 failures (0 unexpected)"
+  (6 new harness tests + placeholder). No numeric gates involved; timing sanity
+  assertions (nonzero, start <= end, wall >= GPU) are structural, not tolerances.

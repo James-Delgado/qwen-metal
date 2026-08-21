@@ -87,8 +87,9 @@ tasks:
   - id: P0B-1
     rank: 3
     title: "Metal harness + dual timing utility (GPU timestamps AND wall clock)"
-    status: in_progress
+    status: done
     started_at: 2026-08-21T22:03:51Z
+    completed_at: 2026-08-21T22:12:00Z
     depends_on: [SETUP-1]
     blocks: [P0B-2, P0B-3, P0B-4]
     deliverable:
@@ -98,11 +99,14 @@ tasks:
     notes: |
       PRD 0b.1-0b.2. Hard rule 7: GPU-only timing forbidden; wall-GPU delta is
       the dispatch-overhead metric Phase 4 consumes.
+      2026-08-21: landed as Sources/QwenMetalEngine/Metal/{MetalContext,
+      DispatchTiming}.swift + MetalHarnessTests (6 tests). Toy kernels compile
+      from source strings at runtime (see DECISIONS.md 2026-08-21).
 
   - id: P0B-2
     rank: 4
     title: "saxpy kernel + XCTest vs CPU"
-    status: blocked
+    status: ready
     depends_on: [P0B-1]
     blocks: []
     deliverable:
@@ -114,7 +118,7 @@ tasks:
   - id: P0B-3
     rank: 5
     title: "Naive fp16 matmul kernel (one thread per output element) + XCTest vs CPU"
-    status: blocked
+    status: ready
     depends_on: [P0B-1]
     blocks: []
     deliverable:
@@ -126,7 +130,7 @@ tasks:
   - id: P0B-4
     rank: 6
     title: "Streaming triad bandwidth microbench (>=1GB working set), Mac run + iPhone-ready"
-    status: blocked
+    status: ready
     depends_on: [P0B-1]
     blocks: [P0A-1]
     deliverable:
