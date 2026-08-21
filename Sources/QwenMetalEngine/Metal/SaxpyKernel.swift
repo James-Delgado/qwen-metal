@@ -5,6 +5,8 @@ import Metal
 public enum KernelInputError: Error, CustomStringConvertible, Equatable {
     case emptyInput
     case lengthMismatch(x: Int, y: Int)
+    case nonPositiveDimensions(m: Int, k: Int, n: Int)
+    case elementCountMismatch(matrix: String, expected: Int, actual: Int)
 
     public var description: String {
         switch self {
@@ -12,6 +14,10 @@ public enum KernelInputError: Error, CustomStringConvertible, Equatable {
             return "Kernel input arrays must be non-empty"
         case .lengthMismatch(let x, let y):
             return "Kernel input lengths differ: x has \(x) elements, y has \(y)"
+        case .nonPositiveDimensions(let m, let k, let n):
+            return "Matrix dimensions must all be positive: m=\(m), k=\(k), n=\(n)"
+        case .elementCountMismatch(let matrix, let expected, let actual):
+            return "Matrix \(matrix) has \(actual) elements, expected \(expected)"
         }
     }
 }

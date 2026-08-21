@@ -165,3 +165,27 @@ outside-voice (cross-model) findings, all accepted. Load-bearing decisions:
   hard rule 8 (Accelerate sgemm wrapper) applies only to matmul-shaped work and
   is not implicated here. The P0B-3 matmul tolerance is NOT set by this entry;
   it gets its own pre-committed gate when P0B-3 starts.
+
+## 2026-08-21 — P0B-3 gate pre-committed: naive fp16 matmul GPU-vs-CPU tolerance
+
+- Kernel numeric design (convention-following): operands are fp16, the kernel
+  accumulates in fp32 and rounds once to half on store — matching the project's
+  recorded "fp32 accumulation both sides" convention (2026-08-20 entry, item 3)
+  that Phase 2-5 kernels will use. "Naive fp16 matmul" in PRD 0b.4 names the
+  operand type, not the accumulator.
+- Gate, set BEFORE the test was written or run (METHODOLOGY rule 2): per output
+  element, |gpu − ref| <= max(2^-9, 2^-9 · |ref|), where ref is the UNROUNDED
+  fp32 CPU value accumulated from the same fp16 inputs; inputs drawn fp16 from
+  [-1, 1] via the seeded deterministic generator. Rationale: with fp32
+  accumulation on both sides, the GPU-vs-CPU difference is one half
+  round-to-nearest on store (<= 2^-11 relative) plus fp32 reduction-order noise
+  (orders of magnitude below half spacing at these K); 2^-9 gives ~4x headroom
+  on the rounding term, and the matching absolute floor covers cancellation
+  near zero, where relative error is unbounded but absolute error stays at
+  accumulation-noise scale. Any real indexing/transpose/stride bug produces
+  O(1) errors. Per the standing rule this tolerance never loosens.
+- Oracle scoping: hard rule 8 (single Accelerate sgemm wrapper) binds the
+  Phase 1 model CPU reference. The P1-3 wrapper does not exist yet and P0B-3
+  does not depend on it in the DAG, so this toy-kernel test uses a TEST-ONLY
+  naive fp32 triple loop — the same species of oracle P1-3 itself will be
+  validated against. It lives in the test target and is not engine code.

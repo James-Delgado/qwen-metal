@@ -124,15 +124,21 @@ tasks:
   - id: P0B-3
     rank: 5
     title: "Naive fp16 matmul kernel (one thread per output element) + XCTest vs CPU"
-    status: in_progress
+    status: done
     started_at: 2026-08-21T22:32:50Z
+    completed_at: 2026-08-21T22:37:28Z
     depends_on: [P0B-1]
     blocks: []
     deliverable:
       file: "engine package (kernels + tests)"
       tests: "GPU output vs CPU within tolerance on odd shapes"
     est_complexity: small
-    notes: PRD 0b.4.
+    notes: |
+      PRD 0b.4.
+      2026-08-21: landed as Sources/QwenMetalEngine/Metal/NaiveMatmulKernel.swift
+      + NaiveMatmulKernelTests (7 tests; odd shapes 67x129x45 and 301x257x173).
+      fp16 operands, fp32 accumulation; gate max(2^-9, 2^-9*|ref|) pre-committed
+      in DECISIONS.md before the tests were written; held unmodified first run.
 
   - id: P0B-4
     rank: 6
