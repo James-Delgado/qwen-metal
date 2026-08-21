@@ -106,7 +106,8 @@ tasks:
   - id: P0B-2
     rank: 4
     title: "saxpy kernel + XCTest vs CPU"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-21T22:12:07Z
     depends_on: [P0B-1]
     blocks: []
     deliverable:
