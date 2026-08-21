@@ -29,6 +29,11 @@ PLAN.md                     project charter: goal, non-goals, invariants, phases
 CLAUDE.md                   this file — standing instructions + SOP entry point
 DECISIONS.md                append-only decision/measurement ledger
 TODOS.md                    deferred work with context (currently: CI)
+Package.swift               engine package manifest: QwenMetalEngine library +
+                            qwen-metal-cli executable (target QwenMetalCLI)
+Sources/
+  QwenMetalEngine/          engine core (shared library — all engine logic here)
+  QwenMetalCLI/             macOS CLI entry point (thin; no engine logic)
 docs/
   AGENT_OPERATION.md        per-task SOP (authoritative for this repo)
   PRIORITIES.yaml           ranked task backlog (drift-tested)
@@ -36,13 +41,13 @@ docs/
   PRD-phase-0.md            Phase 0 deliverables + acceptance criteria
   phases/phase-0-1.md       engineering spec for Phases 0b and 1
 benchmarks/                 results.md + pinned prompt set (created when first row lands)
-tests/                      test_priorities.py (backlog drift test); Swift tests live
-                            in the engine package once it exists
+tests/                      test_priorities.py (backlog drift test) +
+                            QwenMetalEngineTests/ (XCTest; explicit path in manifest —
+                            repo test root is lowercase on a case-insensitive FS)
 tools/                      Python fixture/reference-dump scripts (Phase 1, pinned deps)
 ```
 
-Planned (Phase 0b+): `Package.swift` — shared engine Swift package + `qwen-metal-cli`
-macOS target; `QwenMetalApp/` — thin iOS SwiftUI shell (Phase 2).
+Planned (Phase 2): `QwenMetalApp/` — thin iOS SwiftUI shell.
 
 ## Environment & running
 

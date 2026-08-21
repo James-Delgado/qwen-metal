@@ -77,6 +77,11 @@ tasks:
     notes: |
       Trivially-true gap: no Package.swift in tree. Engine core = shared package,
       no engine logic in app targets (CLAUDE.md project shape).
+      2026-08-21: scaffold committed; `swift build` + `swift run qwen-metal-cli`
+      verified green. BLOCKED ON JAMES: no Xcode on this machine (CLT only, no
+      XCTest) so `swift test` cannot run — install Xcode + `sudo xcode-select -s
+      /Applications/Xcode.app`, then an agent verifies the test and marks done.
+      See DECISIONS.md 2026-08-21 entry.
 
   - id: P0B-1
     rank: 3

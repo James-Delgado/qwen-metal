@@ -85,3 +85,23 @@ outside-voice (cross-model) findings, all accepted. Load-bearing decisions:
 - Its CLAUDE.md was NOT adopted (it predated the v2 hard rules); only its
   "Architecture document upkeep" section (regeneration triggers + anti-drift
   clause) was merged into ours. Root README.md added.
+
+## 2026-08-21 — SETUP-1 scaffold landed; BLOCKED on missing Xcode (james)
+
+- Swift package scaffold committed: root Package.swift (swift-tools-version 5.9),
+  library target QwenMetalEngine (engine core, shared), executable target
+  QwenMetalCLI exposed as product `qwen-metal-cli` (hyphens aren't valid module
+  names, so the target is CamelCase and the product keeps the CLI-facing name),
+  test target QwenMetalEngineTests with the placeholder XCTest. Platform floors:
+  macOS 14 / iOS 17 (reversible; chosen for Metal feature parity headroom).
+- ENVIRONMENT CONFLICT (SOP "spec conflicts with reality"): this machine has NO
+  Xcode — only CommandLineTools (`xcode-select -p` = /Library/Developer/
+  CommandLineTools; no Xcode bundle found). CLT lacks XCTest, so `swift test`
+  fails with "error: XCTest not available". Verified working under CLT:
+  `swift build` (Build complete!) and `swift run qwen-metal-cli` (banner prints).
+  SETUP-1's exit condition ("placeholder XCTest green via `swift test`") cannot
+  be verified until James installs Xcode and runs
+  `sudo xcode-select -s /Applications/Xcode.app`. SETUP-1 stays in_progress with
+  the blocker noted; NOT worked around (e.g. no swap to a non-XCTest framework).
+  Downstream P0B tasks all require XCTest + the Metal compiler (also Xcode-only),
+  so the install unblocks the whole Phase 0b chain.
