@@ -150,3 +150,18 @@ outside-voice (cross-model) findings, all accepted. Load-bearing decisions:
 - Verified: `swift test` — "Executed 7 tests, with 0 failures (0 unexpected)"
   (6 new harness tests + placeholder). No numeric gates involved; timing sanity
   assertions (nonzero, start <= end, wall >= GPU) are structural, not tolerances.
+
+## 2026-08-21 — P0B-2 gate pre-committed: saxpy GPU-vs-CPU tolerance
+
+- Gate, set BEFORE the test was written or run (METHODOLOGY rule 2): saxpy GPU
+  output vs hand-rolled CPU reference, max absolute element difference <= 1e-6,
+  inputs drawn from [-1, 1] (seeded deterministic generator). Rationale: fp32 ulp
+  at these magnitudes is ~1.2e-7; the Metal compiler may legally contract
+  a*x + y into fma while the Swift reference rounds twice, so a few-ulp headroom
+  is required — 1e-6 (~4-8 ulp) covers that while any real indexing/dispatch bug
+  produces errors orders of magnitude larger. Per the standing rule this
+  tolerance never loosens.
+- Scope note: saxpy is elementwise, so the CPU reference is a hand-rolled loop —
+  hard rule 8 (Accelerate sgemm wrapper) applies only to matmul-shaped work and
+  is not implicated here. The P0B-3 matmul tolerance is NOT set by this entry;
+  it gets its own pre-committed gate when P0B-3 starts.

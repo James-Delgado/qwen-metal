@@ -106,15 +106,20 @@ tasks:
   - id: P0B-2
     rank: 4
     title: "saxpy kernel + XCTest vs CPU"
-    status: in_progress
+    status: done
     started_at: 2026-08-21T22:12:07Z
+    completed_at: 2026-08-21T22:15:36Z
     depends_on: [P0B-1]
     blocks: []
     deliverable:
       file: "engine package (kernels + tests)"
       tests: "GPU output == CPU within phase tolerance"
     est_complexity: small
-    notes: PRD 0b.3 — establishes dispatch -> readback -> test loop.
+    notes: |
+      PRD 0b.3 — establishes dispatch -> readback -> test loop.
+      2026-08-21: landed as Sources/QwenMetalEngine/Metal/SaxpyKernel.swift +
+      SaxpyKernelTests (6 tests). Tolerance 1e-6 pre-committed in DECISIONS.md
+      before the test was written; gate held unmodified.
 
   - id: P0B-3
     rank: 5

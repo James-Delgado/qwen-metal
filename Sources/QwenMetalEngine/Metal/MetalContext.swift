@@ -10,6 +10,7 @@ public enum MetalHarnessError: Error, CustomStringConvertible {
     case functionNotFound(name: String)
     case commandBufferCreationFailed
     case encoderCreationFailed
+    case bufferAllocationFailed(length: Int)
     case gpuExecutionFailed(status: MTLCommandBufferStatus, underlying: Error?)
 
     public var description: String {
@@ -26,6 +27,8 @@ public enum MetalHarnessError: Error, CustomStringConvertible {
             return "Failed to create command buffer"
         case .encoderCreationFailed:
             return "Failed to create compute command encoder"
+        case .bufferAllocationFailed(let length):
+            return "Failed to allocate a \(length)-byte Metal buffer"
         case .gpuExecutionFailed(let status, let underlying):
             let detail = underlying.map { ": \($0)" } ?? ""
             return "Command buffer finished with status \(status.rawValue), not completed\(detail)"
