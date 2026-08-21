@@ -143,7 +143,8 @@ tasks:
   - id: P0B-4
     rank: 6
     title: "Streaming triad bandwidth microbench (>=1GB working set), Mac run + iPhone-ready"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-21T23:59:35Z
     depends_on: [P0B-1]
     blocks: [P0A-1]
     deliverable:
