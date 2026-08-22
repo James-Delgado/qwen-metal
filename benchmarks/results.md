@@ -57,3 +57,53 @@ prefill-only ≈ 374).
 **Warm-burst median decode = 39.2 tok/s** → absolute success target committed
 in DECISIONS.md: **0.75 × 39.2 = 29.4 tok/s**. Roofline context: 39.2 ≈ ~89%
 of the ~44 tok/s naive ceiling (43.84 GB/s ÷ ~1.0 GB/token).
+
+## Phase 0a baselines — llama.cpp (PROVISIONAL)
+
+### 2026-08-22 — llama.swiftui, iPhone 15 Pro
+
+Session: iOS 26.5.2, battery health 85%, start ~74% charge, rested, Xcode
+26.6 (17F113), **Release**, **Metal API Validation OFF** (scheme diagnostics
+— note: the MLX session ran with it ON; a validation-off MLX spot-check is
+owed before Phase 6). Engine: llama.swiftui example @ llama.cpp b9999
+(`47c78692`) + measurement/parity patches (greedy sampler; parse_special
+tokenization; batch 512→2048; burst cap n_len 640; per-token print/UI-flush
+removal; t/s computed from actual n_decode — upstream divided by the cap;
+per-completion state reset — upstream no-ops every 2nd run; bundled pinned
+prompts; all diffs live in ~/Projects/llama.cpp, documented in DECISIONS.md).
+Checkpoint: locally converted models/qwen3-1.7b-70d244cc-Q4_K_M.gguf (5.03
+BPW, sha256 in DECISIONS.md). Feeding mode: pinned RENDERED prompts
+(bundled), no app-side template. Prompt counts: 84 / 852 (llama.cpp = HF
+counts here). Zero <think> content. phys_footprint: not captured this
+session (gauge not observed — follow-up). Harness-defect anecdotes (NOT
+rows): two earlier 2048-cap runs measured 10.47 and 14.26 t/s — UI
+re-layout + console printing + mis-computed rate, since fixed.
+
+| Run | Prompt (tokens) | Mode | Cold/warm | TTFT | Generated | Total time | Decode tok/s |
+|---|---|---|---|---|---|---|---|
+| 1 | decode-essay (84) | burst | cold | 414 ms | 556 (cap) | 17.96 s | 30.95 |
+| 2 | decode-essay (84) | burst | warm | 223 ms | 556 (cap) | 17.14 s | 32.44 |
+| 3 | decode-essay (84) | burst | warm | 225 ms | 556 (cap) | 16.01 s | 34.73 |
+| 4 | prefill-summarize (852) | prefill | warm | 1917 ms | 617 (EOS) | 21.80 s | 28.31 |
+
+Prefill tok/s ≈ 852 / 1.89 s ≈ **452** (TTFT minus one decode step). Run 4's
+lower decode rate (28.31) reflects the deeper KV (852-token prompt) —
+consistent with bytes/token growth.
+
+| Sustained (repeat decode-essay sends, same session) | Value |
+|---|---|
+| Duration / generations | 5 min / 13 |
+| First generation decode tok/s | 31.42 (TTFT 227 ms) |
+| Last generation decode tok/s | 20.88 (TTFT 226 ms; −34% — smooth thermal decline) |
+
+Auxiliary (app Bench button, validation OFF, run AFTER the sustained loop —
+thermally loaded): pp512 265.11 ± 22.88 t/s (vs 430.83 ± 51.08 rested with
+validation ON — thermal state dominates prefill), tg128 31.55 ± 0.37 t/s
+(vs 26.11 ± 0.12 validation ON — validation cost ~17% on decode).
+
+**Warm-burst median decode = 32.44 tok/s ≈ 83% of MLX's 39.2.** Roofline
+note (rough BPW math, see DECISIONS.md): 32.44 × ~1.3 GB/token ≈ 42 GB/s
+≈ 96% of the 43.84 triad figure; the MLX equivalent lands ≈ 102%. Both
+engines saturate ~triad-level bandwidth — decode is read-dominated and the
+2R+1W triad likely understates read-mostly achievable bandwidth (follow-up
+BW-1 seeded).

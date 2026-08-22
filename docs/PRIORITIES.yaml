@@ -434,3 +434,23 @@ tasks:
     notes: |
       Milestone placeholder. Heavy James involvement: interleaved re-runs of all
       three engines on one OS build; full energy rounds (budget real days).
+
+  # ---------- Follow-ups (seeded from measurements) ----------
+  - id: BW-1
+    rank: 24
+    title: "Read-only streaming bandwidth microbench variant (complements triad)"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: "engine package (bandwidth kernel variant) + results rows (Mac + iPhone)"
+      tests: "correctness gate pre-committed before implementation; same protocol shape as P0B-4"
+    est_complexity: small
+    notes: |
+      Seeded 2026-08-22 from the P0A-1 baseline analysis (DECISIONS.md):
+      both MLX and llama.cpp decode at ~96-102% of the 2R+1W triad figure —
+      decode traffic is read-dominated and triad likely understates
+      read-mostly achievable DRAM bandwidth by ~5-10%. A read-only (sum or
+      checksum-reduce) variant bounds the true roofline denominator for
+      decode-shaped traffic. iPhone run is owner-james when it lands.
+      Deliberately ranked last: filler task, never blocks the phase chain.

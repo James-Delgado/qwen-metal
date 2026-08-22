@@ -445,3 +445,46 @@ Decisions by James this session; agent prepared the harnesses (P0A-1 stays
   template" feeding mode for PROVISIONAL rows; Phase 6 should pin the system
   prompt (or feed rendered forms everywhere) for the publishable head-to-head.
 - Remaining P0A-1: llama.cpp baseline rows, energy method dry-run.
+
+## 2026-08-22 — llama.cpp baseline measured; example-app harness defects found + fixed
+
+- **llama.cpp warm-burst decode (median): 32.44 tok/s ≈ 83% of MLX's 39.2.**
+  Prefill ≈ 452 tok/s (vs MLX ~370 — llama.cpp's stronger leg). Sustained
+  5-min: 31.42 → 20.88 (−34%; MLX showed −30% — same thermal envelope).
+  Full rows + session metadata in benchmarks/results.md (PROVISIONAL).
+  Checkpoint: our locally converted Q4_K_M (5.03 BPW). Zero <think> content.
+- **Harness lesson (recorded because Phase 6 re-runs must not repeat it):**
+  the upstream llama.swiftui example was NOT measurement-grade. Defects
+  found via cross-checking against the app's own bench + the Mac roofline:
+  (1) per-token SwiftUI full-transcript re-layout + per-token console
+  printing throttled generation itself (2048-token runs read 10.5–14.3 t/s
+  vs a true ~31); (2) reported t/s divided by the length CAP, not actual
+  tokens generated; (3) completion state (`is_done`, `n_decode`) never
+  reset — every post-first generation in a session no-oped instantly;
+  (4) `parse_special=false` would have tokenized the rendered template's
+  markers as literal text; (5) batch hardcoded to 512 — our 852-token
+  prefill prompt would overflow it. All patched (diffs in
+  ~/Projects/llama.cpp, commented `qwen-metal P0A-1`); prompts now BUNDLED
+  in-app after Universal Clipboard expiry silently substituted stale raw
+  text for the rendered form twice (72-token signature caught it both times).
+- **Metal API Validation costs ~17% decode** (tg128 26.11 validation-on
+  rested vs 31.55 validation-off; burst runs confirm ~31–35 with it off).
+  The MLX session ran validation ON → MLX's 39.2 and the 29.4 target are
+  possibly UNDERSTATED. The committed target stands (hard rule 6 — it never
+  loosens; if anything the true bar is higher). ACTION for Phase 6 (and
+  opportunistically sooner): re-run MLX with validation off; benchmark
+  protocol addendum — all future rows record the validation setting, default
+  OFF.
+- **Roofline interpretation finding (seeds BW-1):** rough BPW math puts both
+  engines at ~96–102% of the 43.84 GB/s triad figure (llama.cpp 32.44 ×
+  ~1.3 GB/token ≈ 42 GB/s; MLX 39.2 × ~1.14 ≈ 44.7). Decode is
+  read-dominated; a 2-read+1-write triad understates read-mostly achievable
+  DRAM bandwidth, so the roofline denominator is likely conservative by
+  ~5–10% for decode-shaped traffic. Backlog task BW-1 added: read-only
+  streaming bandwidth microbench variant to bound this properly. Until then,
+  roofline fractions quoted against 43.84 carry this caveat.
+- Bench-after-sustained observation: pp512 fell to 265 ± 23 (from 431 ± 51
+  rested) — prefill (compute-bound) throttles much harder than decode;
+  auxiliary bench runs must record thermal state.
+- Remaining P0A-1: energy method dry-run (MLX, sustained); phys_footprint
+  for llama.cpp not captured — grab the gauge peak during any later run.
