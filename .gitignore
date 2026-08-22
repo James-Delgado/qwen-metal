@@ -11,6 +11,8 @@
 .build/
 *.xcodeproj/xcuserdata/
 DerivedData/
+# Per-user Xcode state created when the package is opened in Xcode
+.swiftpm/
 
 # Model weights — never in git (multi-GB; pinned by revision in DECISIONS.md)
 models/
