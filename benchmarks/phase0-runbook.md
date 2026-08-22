@@ -77,13 +77,31 @@ Outputs: sustained GB/s + spread → results.md row + DECISIONS.md OPEN item.
 
 ## 4. Energy method dry-run (one validated cycle — MLX)
 
-Battery-delta protocol (DECISIONS.md 2026-08-20 item 4): sustained
-regenerate-loop on `decode-essay`; ≥8–10% SoC burn; 80→70% band; airplane
-mode, min brightness, background refresh off, unplugged, rested start;
-idle baseline same duration/conditions subtracted; battery health–scaled
-capacity → joules ÷ tokens; implied watts must land in 3–9 W. One valid cycle
-validates the method (full ≥3-repeat rounds are Phase 6); record the
-operational method + result in DECISIONS.md (closes an OPEN item).
+Battery-delta protocol (DECISIONS.md 2026-08-20 item 4), operationalized
+2026-08-22 with the LLMEval **Loop** button (toolbar; added for this — shows
+cumulative `LOOP N gens | M tokens | Ts wall | first/last t/s`):
+
+**Numbers for this device** (iPhone 15 Pro ≈ 12.6 Wh rated × 85% health ≈
+10.7 Wh effective ⇒ 10% SoC ≈ 3.9 kJ; at 4–6 W the 80→70% burn takes
+**~12–18 min** — over the ≥8–10% floor by construction).
+
+1. Setup: airplane mode ON, brightness MINIMUM, Background App Refresh off,
+   unplugged, rested to ambient, charge to ≥80%, Metal API Validation OFF.
+   Run attached to Xcode ONCE first for the validation-off MLX spot-check
+   burst (§5 ride-along) + phys_footprint glance, then relaunch DETACHED
+   (from the home screen) for the energy cycle itself — the debugger costs
+   energy.
+2. At exactly 80% SoC (Settings → Battery): load `decode-essay` prompt, tap
+   **Loop**, note wall-clock start.
+3. At exactly 70% SoC: tap **Stop Loop**. Record: wall time, the LOOP line
+   (generations, total tokens, first/last t/s).
+4. **Idle baseline**: same screen-on state, same brightness, airplane mode,
+   app open but NOT generating, same wall duration; record SoC drop.
+5. Math: energy_J = (10% − idle_SoC_drop%) × 10.7 Wh × 36; J/token =
+   energy_J ÷ loop total tokens; implied W = energy_J ÷ run seconds must
+   land in 3–9 W or the cycle is invalid. One valid cycle validates the
+   method (≥3-repeat rounds are Phase 6); record method + result in
+   DECISIONS.md (closes the last OPEN item).
 
 ## 5. Row templates (append to benchmarks/results.md — never overwrite)
 

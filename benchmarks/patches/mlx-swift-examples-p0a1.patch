@@ -1,0 +1,147 @@
+From 47c36a0f044b14428202d41f90d297d7332868d4 Mon Sep 17 00:00:00 2001
+From: James-Delgado <jado650@berkeley.edu>
+Date: Sat, 22 Aug 2026 13:03:29 -0400
+Subject: [PATCH] qwen-metal P0A-1: parity pins + sustained loop for LLMEval
+
+Revision-pinned mlx-community/Qwen3-1.7B-4bit@3b1b1768; greedy (temp 0);
+sustained regenerate-loop toggle with cumulative token counters (energy
+protocol). Base: 378f2449. See qwen-metal DECISIONS.md 2026-08-22.
+---
+ .../LLMEval/ViewModels/LLMEvaluator.swift     | 45 ++++++++++++++++++-
+ Applications/LLMEval/Views/ContentView.swift  | 23 ++++++++++
+ Package.resolved                              | 13 +++++-
+ 3 files changed, 77 insertions(+), 4 deletions(-)
+
+diff --git a/Applications/LLMEval/ViewModels/LLMEvaluator.swift b/Applications/LLMEval/ViewModels/LLMEvaluator.swift
+index 2aacbd2..bcffd2e 100644
+--- a/Applications/LLMEval/ViewModels/LLMEvaluator.swift
++++ b/Applications/LLMEval/ViewModels/LLMEvaluator.swift
+@@ -47,11 +47,15 @@ class LLMEvaluator {
+     private var firstTokenTime: TimeInterval = 0
+ 
+     /// This controls which model loads.
+-    var modelConfiguration = LLMRegistry.qwen3_8b_4bit
++    // qwen-metal P0A-1 parity pin: PIN-1 checkpoint, exact revision (DECISIONS.md)
++    var modelConfiguration = ModelConfiguration(
++        id: "mlx-community/Qwen3-1.7B-4bit",
++        revision: "3b1b1768f8f8cf8351c712464f906e86c2b8269e")
+ 
+     /// Parameters controlling the generation output (max tokens and temperature).
+     var generateParameters: GenerateParameters {
+-        GenerateParameters(maxTokens: maxTokens, temperature: 0.6)
++        // qwen-metal P0A-1 parity pin: greedy sampling (temperature 0)
++        GenerateParameters(maxTokens: maxTokens, temperature: 0.0)
+     }
+ 
+     /// A task responsible for handling the generation process.
+@@ -387,5 +391,42 @@ class LLMEvaluator {
+         generationTimer?.invalidate()
+         generationTimer = nil
+         running = false
++        looping = false
++    }
++
++    // qwen-metal P0A-1 energy protocol: sustained regenerate loop — repeats
++    // greedy generation with the SAME prompt until stopped (pinned reset
++    // policy: fresh context each generation), accumulating the counters the
++    // battery-delta math needs (total tokens over the burn window).
++    var looping = false
++    var loopStatus = ""
++
++    func startSustainedLoop() {
++        guard !running, !looping else { return }
++        let currentPrompt = prompt
++        guard !currentPrompt.isEmpty else { return }
++        looping = true
++        generationTask = Task {
++            running = true
++            var generations = 0
++            var cumulativeTokens = 0
++            var firstTps: Double = 0.0
++            let wallStart = Date()
++            while looping && !Task.isCancelled {
++                await generate(prompt: currentPrompt)
++                generations += 1
++                cumulativeTokens += totalTokens
++                if generations == 1 { firstTps = tokensPerSecond }
++                let wall = Date().timeIntervalSince(wallStart)
++                loopStatus = String(
++                    format: "LOOP %d gens | %d tokens | %.0fs wall | first %.2f t/s | last %.2f t/s",
++                    generations, cumulativeTokens, wall, firstTps, tokensPerSecond)
++            }
++            running = false
++        }
++    }
++
++    func stopSustainedLoop() {
++        looping = false
+     }
+ }
+diff --git a/Applications/LLMEval/Views/ContentView.swift b/Applications/LLMEval/Views/ContentView.swift
+index e3372f2..59dcea9 100644
+--- a/Applications/LLMEval/Views/ContentView.swift
++++ b/Applications/LLMEval/Views/ContentView.swift
+@@ -59,6 +59,14 @@ struct ContentView: View {
+                 cacheMemory: deviceStat.gpuUsage.cacheMemory,
+                 peakMemory: deviceStat.gpuUsage.peakMemory
+             )
++
++            // qwen-metal P0A-1: sustained-loop cumulative counters
++            // (energy protocol — total tokens over the burn window)
++            if !llm.loopStatus.isEmpty {
++                Text(llm.loopStatus)
++                    .font(.footnote.monospaced())
++                    .padding(.top, 4)
++            }
+         }
+         #if os(visionOS)
+             .padding(40)
+@@ -78,6 +86,21 @@ struct ContentView: View {
+                 .labelStyle(.titleAndIcon)
+             }
+ 
++            // qwen-metal P0A-1: sustained regenerate-loop toggle
++            ToolbarItem(placement: .primaryAction) {
++                Button {
++                    if llm.looping {
++                        llm.stopSustainedLoop()
++                    } else {
++                        llm.startSustainedLoop()
++                    }
++                } label: {
++                    Label(
++                        llm.looping ? "Stop Loop" : "Loop",
++                        systemImage: llm.looping ? "stop.circle" : "repeat.circle")
++                }
++                .labelStyle(.titleAndIcon)
++            }
+         }
+         .task {
+             do {
+diff --git a/Package.resolved b/Package.resolved
+index 30b3e81..96b9fa1 100644
+--- a/Package.resolved
++++ b/Package.resolved
+@@ -23,8 +23,17 @@
+       "kind" : "remoteSourceControl",
+       "location" : "https://github.com/ml-explore/mlx-swift",
+       "state" : {
+-        "revision" : "61b9e011e09a62b489f6bd647958f1555bdf2896",
+-        "version" : "0.31.3"
++        "revision" : "0bb916c67f4b9e5c682cbe02a42c701c93ab5021",
++        "version" : "0.31.6"
++      }
++    },
++    {
++      "identity" : "swift-argument-parser",
++      "kind" : "remoteSourceControl",
++      "location" : "https://github.com/apple/swift-argument-parser",
++      "state" : {
++        "revision" : "6a52f3251125d74daf04fcbd5e6f08a75d074382",
++        "version" : "1.8.2"
+       }
+     },
+     {
+-- 
+2.50.1 (Apple Git-155)
+

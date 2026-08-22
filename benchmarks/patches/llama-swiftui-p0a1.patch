@@ -1,0 +1,345 @@
+From 97e552a3eefbd1c1692e4bd100d38a3635a7b7cc Mon Sep 17 00:00:00 2001
+From: James-Delgado <jado650@berkeley.edu>
+Date: Sat, 22 Aug 2026 13:00:32 -0400
+Subject: [PATCH] qwen-metal P0A-1: measurement-grade + parity patches for
+ llama.swiftui
+
+Greedy sampler (parity pin); parse_special tokenization for rendered
+chat-template prompts; batch 512->2048 (852-token prefill prompt overflowed);
+burst cap n_len 640; per-token print/UI-flush removed (throttled generation);
+t/s from actual n_decode (was divided by cap); per-completion state reset
+(second runs no-oped); bundled pinned prompts + load buttons; unique bundle
+id. Base: b9999/47c78692. See qwen-metal DECISIONS.md 2026-08-22.
+---
+ .../llama.cpp.swift/LibLlama.swift            | 39 +++++++++++++----
+ .../llama.swiftui.xcodeproj/project.pbxproj   | 18 +++++---
+ .../llama.swiftui/Models/LlamaState.swift     | 42 +++++++++++++++----
+ .../models/decode-essay.rendered.txt          |  7 ++++
+ .../models/prefill-summarize.rendered.txt     | 19 +++++++++
+ .../llama.swiftui/UI/ContentView.swift        | 30 ++++++++++++-
+ 6 files changed, 133 insertions(+), 22 deletions(-)
+ create mode 100644 examples/llama.swiftui/llama.swiftui/Resources/models/decode-essay.rendered.txt
+ create mode 100644 examples/llama.swiftui/llama.swiftui/Resources/models/prefill-summarize.rendered.txt
+
+diff --git a/examples/llama.swiftui/llama.cpp.swift/LibLlama.swift b/examples/llama.swiftui/llama.cpp.swift/LibLlama.swift
+index dc2bafc..e9ab814 100644
+--- a/examples/llama.swiftui/llama.cpp.swift/LibLlama.swift
++++ b/examples/llama.swiftui/llama.cpp.swift/LibLlama.swift
+@@ -33,7 +33,15 @@ actor LlamaContext {
+     /// This variable is used to store temporarily invalid cchars
+     private var temporary_invalid_cchars: [CChar]
+ 
+-    var n_len: Int32 = 1024
++    // qwen-metal P0A-1 burst protocol: total-length cap 640 — covers the
++    // canonical decode window (tokens 128-512 generated after a ~92-token
++    // prompt) while keeping runs ~25s so thermal decline and transcript
++    // re-layout don't drag the average (observed: 2048-cap runs averaged
++    // ~half the bench tg rate)
++    var n_len: Int32 = 640
++    // qwen-metal P0A-1: prompt token count of the current completion,
++    // for prefill tok/s reporting
++    var n_prompt: Int32 = 0
+     var n_cur: Int32 = 0
+ 
+     var n_decode: Int32 = 0
+@@ -42,12 +50,13 @@ actor LlamaContext {
+         self.model = model
+         self.context = context
+         self.tokens_list = []
+-        self.batch = llama_batch_init(512, 0, 1)
++        // qwen-metal P0A-1: 512 overflowed on the ~860-token prefill prompt
++        self.batch = llama_batch_init(2048, 0, 1)
+         self.temporary_invalid_cchars = []
+         let sparams = llama_sampler_chain_default_params()
+         self.sampling = llama_sampler_chain_init(sparams)
+-        llama_sampler_chain_add(self.sampling, llama_sampler_init_temp(0.4))
+-        llama_sampler_chain_add(self.sampling, llama_sampler_init_dist(1234))
++        // qwen-metal P0A-1 parity pin: greedy sampling (was temp 0.4 + dist)
++        llama_sampler_chain_add(self.sampling, llama_sampler_init_greedy())
+         vocab = llama_model_get_vocab(model)
+     }
+ 
+@@ -118,7 +127,14 @@ actor LlamaContext {
+         print("attempting to complete \"\(text)\"")
+ 
+         tokens_list = tokenize(text: text, add_bos: true)
++        n_prompt = Int32(tokens_list.count)
+         temporary_invalid_cchars = []
++        // qwen-metal P0A-1: reset per-completion state — upstream clear()
++        // never resets these, so every generation after the first in an app
++        // session no-oped instantly (is_done still true) and reported stale
++        // counts
++        is_done = false
++        n_decode = 0
+ 
+         let n_ctx = llama_n_ctx(context)
+         let n_kv_req = tokens_list.count + (Int(n_len) - tokens_list.count)
+@@ -129,9 +145,11 @@ actor LlamaContext {
+             print("error: n_kv_req > n_ctx, the required KV cache size is not big enough")
+         }
+ 
+-        for id in tokens_list {
+-            print(String(cString: token_to_piece(token: id) + [0]))
+-        }
++        // qwen-metal P0A-1: per-token console printing removed — with the
++        // debugger attached it distorts timing measurements
++        // for id in tokens_list {
++        //     print(String(cString: token_to_piece(token: id) + [0]))
++        // }
+ 
+         llama_batch_clear(&batch)
+ 
+@@ -175,7 +193,7 @@ actor LlamaContext {
+         } else {
+             new_token_str = ""
+         }
+-        print(new_token_str)
++        // qwen-metal P0A-1: per-token print removed (timing distortion)
+         // tokens_list.append(new_token_id)
+ 
+         llama_batch_clear(&batch)
+@@ -299,7 +317,10 @@ actor LlamaContext {
+         let utf8Count = text.utf8.count
+         let n_tokens = utf8Count + (add_bos ? 1 : 0) + 1
+         let tokens = UnsafeMutablePointer<llama_token>.allocate(capacity: n_tokens)
+-        let tokenCount = llama_tokenize(vocab, text, Int32(utf8Count), tokens, Int32(n_tokens), add_bos, false)
++        // qwen-metal P0A-1: parse_special=true — prompts are fed as the
++        // pinned RENDERED chat-template form, whose <|im_start|>/<think>
++        // markers must map to special token ids, not literal text
++        let tokenCount = llama_tokenize(vocab, text, Int32(utf8Count), tokens, Int32(n_tokens), add_bos, true)
+ 
+         var swiftTokens: [llama_token] = []
+         for i in 0..<tokenCount {
+diff --git a/examples/llama.swiftui/llama.swiftui.xcodeproj/project.pbxproj b/examples/llama.swiftui/llama.swiftui.xcodeproj/project.pbxproj
+index 6f08fe2..5819655 100644
+--- a/examples/llama.swiftui/llama.swiftui.xcodeproj/project.pbxproj
++++ b/examples/llama.swiftui/llama.swiftui.xcodeproj/project.pbxproj
+@@ -3,7 +3,7 @@
+ 	archiveVersion = 1;
+ 	classes = {
+ 	};
+-	objectVersion = 56;
++	objectVersion = 70;
+ 	objects = {
+ 
+ /* Begin PBXBuildFile section */
+@@ -53,6 +53,10 @@
+ 		F1FE20E12B465EC900B45541 /* LoadCustomButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoadCustomButton.swift; sourceTree = "<group>"; };
+ /* End PBXFileReference section */
+ 
++/* Begin PBXFileSystemSynchronizedRootGroup section */
++		48E4456D3039F53E00DAB2AF /* models */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = models; sourceTree = "<group>"; };
++/* End PBXFileSystemSynchronizedRootGroup section */
++
+ /* Begin PBXFrameworksBuildPhase section */
+ 		8A1C83702AC328BD0096AF73 /* Frameworks */ = {
+ 			isa = PBXFrameworksBuildPhase;
+@@ -70,6 +74,7 @@
+ 		8A1C836A2AC328BD0096AF73 = {
+ 			isa = PBXGroup;
+ 			children = (
++				48E4456D3039F53E00DAB2AF /* models */,
+ 				DF2D2FE72B4A59BE00FCB72D /* llama.cpp */,
+ 				8A907F312AC7134E006146EA /* llama.cpp.swift */,
+ 				8A3F84232AC4C891005E2EE8 /* models */,
+@@ -167,6 +172,9 @@
+ 			);
+ 			dependencies = (
+ 			);
++			fileSystemSynchronizedGroups = (
++				48E4456D3039F53E00DAB2AF /* models */,
++			);
+ 			name = llama.swiftui;
+ 			packageProductDependencies = (
+ 			);
+@@ -366,7 +374,7 @@
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CODE_SIGN_STYLE = Automatic;
+ 				CURRENT_PROJECT_VERSION = 1;
+-				DEVELOPMENT_TEAM = K5UQJPP73A;
++				DEVELOPMENT_TEAM = C6U857449W;
+ 				ENABLE_PREVIEWS = YES;
+ 				GENERATE_INFOPLIST_FILE = YES;
+ 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+@@ -380,7 +388,7 @@
+ 					"@executable_path/Frameworks",
+ 				);
+ 				MARKETING_VERSION = 1.0;
+-				PRODUCT_BUNDLE_IDENTIFIER = "com.bachittle.llama-swift";
++				PRODUCT_BUNDLE_IDENTIFIER = com.jamesdelgado.qwenmetal.llamabench;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+ 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+@@ -398,7 +406,7 @@
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CODE_SIGN_STYLE = Automatic;
+ 				CURRENT_PROJECT_VERSION = 1;
+-				DEVELOPMENT_TEAM = K5UQJPP73A;
++				DEVELOPMENT_TEAM = C6U857449W;
+ 				ENABLE_PREVIEWS = YES;
+ 				GENERATE_INFOPLIST_FILE = YES;
+ 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+@@ -412,7 +420,7 @@
+ 					"@executable_path/Frameworks",
+ 				);
+ 				MARKETING_VERSION = 1.0;
+-				PRODUCT_BUNDLE_IDENTIFIER = "com.bachittle.llama-swift";
++				PRODUCT_BUNDLE_IDENTIFIER = com.jamesdelgado.qwenmetal.llamabench;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+ 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+diff --git a/examples/llama.swiftui/llama.swiftui/Models/LlamaState.swift b/examples/llama.swiftui/llama.swiftui/Models/LlamaState.swift
+index b8f6a31..b2bafd9 100644
+--- a/examples/llama.swiftui/llama.swiftui/Models/LlamaState.swift
++++ b/examples/llama.swiftui/llama.swiftui/Models/LlamaState.swift
+@@ -132,26 +132,54 @@ class LlamaState: ObservableObject {
+         messageLog += "\(text)"
+ 
+         Task.detached {
++            // qwen-metal P0A-1 measurement fixes:
++            // 1) flush UI every 32 tokens, not per token — per-token
++            //    main-actor hops + full-transcript SwiftUI re-layout are
++            //    O(n^2) and were throttling generation itself;
++            // 2) t/s uses the ACTUAL generated count (n_decode), not n_len
++            //    (the upstream code divides by the cap, which is only
++            //    correct when generation happens to hit it).
++            var pendingText = ""
++            var tokensSinceFlush = 0
++            var t_first_token: Double? = nil
+             while await !llamaContext.is_done {
+                 let result = await llamaContext.completion_loop()
+-                await MainActor.run {
+-                    self.messageLog += "\(result)"
++                if t_first_token == nil {
++                    t_first_token =
++                        Double(DispatchTime.now().uptimeNanoseconds - t_start) / self.NS_PER_S
++                }
++                pendingText += result
++                tokensSinceFlush += 1
++                if tokensSinceFlush >= 32 {
++                    let flush = pendingText
++                    pendingText = ""
++                    tokensSinceFlush = 0
++                    await MainActor.run { self.messageLog += flush }
+                 }
+             }
+ 
+             let t_end = DispatchTime.now().uptimeNanoseconds
+             let t_generation = Double(t_end - t_heat_end) / self.NS_PER_S
+-            let tokens_per_second = Double(await llamaContext.n_len) / t_generation
++            let n_generated = await llamaContext.n_decode
++            let tokens_per_second = Double(n_generated) / t_generation
++            let n_prompt = await llamaContext.n_prompt
++            let ttft_ms = (t_first_token ?? t_heat) * 1000
+ 
++            let finalFlush = pendingText
+             await llamaContext.clear()
+ 
+             await MainActor.run {
+-                self.messageLog += """
++                // Note: prompt enqueue is ASYNC on the Metal backend — the
++                // real prefill cost lands in TTFT (enqueue + prompt compute
++                // + first token). Derive prefill tok/s from TTFT, not the
++                // enqueue time.
++                self.messageLog += finalFlush + String(format: """
+                     \n
+                     Done
+-                    Heat up took \(t_heat)s
+-                    Generated \(tokens_per_second) t/s\n
+-                    """
++                    Prompt: %d tokens (enqueue %.3fs — async, not prefill)
++                    Time to first token: %.0f ms  <- true prefill+1 lives here
++                    Generated: %d tokens in %.2fs (%.2f t/s)\n
++                    """, n_prompt, t_heat, ttft_ms, n_generated, t_generation, tokens_per_second)
+             }
+         }
+     }
+diff --git a/examples/llama.swiftui/llama.swiftui/Resources/models/decode-essay.rendered.txt b/examples/llama.swiftui/llama.swiftui/Resources/models/decode-essay.rendered.txt
+new file mode 100644
+index 0000000..82ce13f
+--- /dev/null
++++ b/examples/llama.swiftui/llama.swiftui/Resources/models/decode-essay.rendered.txt
+@@ -0,0 +1,7 @@
++<|im_start|>user
++Write a detailed history of computing for a general audience. Cover at least ten major milestones in chronological order, from mechanical calculators to modern smartphones. For each milestone, give the approximate date, name the key people or organizations involved, describe what changed technically, and explain why it mattered for what came after. Do not stop until you have covered all ten milestones.<|im_end|>
++<|im_start|>assistant
++<think>
++
++</think>
++
+diff --git a/examples/llama.swiftui/llama.swiftui/Resources/models/prefill-summarize.rendered.txt b/examples/llama.swiftui/llama.swiftui/Resources/models/prefill-summarize.rendered.txt
+new file mode 100644
+index 0000000..d42581d
+--- /dev/null
++++ b/examples/llama.swiftui/llama.swiftui/Resources/models/prefill-summarize.rendered.txt
+@@ -0,0 +1,19 @@
++<|im_start|>user
++Read the following passage carefully, then follow the instructions at the end.
++
++Before the middle of the twentieth century, moving goods across an ocean was a slow, expensive, and labor-intensive affair. Cargo arrived at the docks in an assortment of barrels, sacks, crates, and bales, each of which had to be handled individually. Gangs of longshoremen carried or winched every item out of trucks and railcars, into the hold of a ship, and stowed it piece by piece so the load would not shift at sea. A single freighter could spend a week or more in port, and the cost of loading and unloading often exceeded the cost of the entire ocean crossing. Theft and damage were endemic, insurance was priced accordingly, and any factory that depended on imported parts had to hold months of inventory as a buffer against the unpredictable schedule of break-bulk shipping.
++
++The person most responsible for changing this was not a shipowner but a trucking entrepreneur from North Carolina named Malcom McLean. His insight was that the shipping industry's product was not the voyage but the movement of goods from origin to destination, and that the handling of individual items at every transfer point was the true bottleneck. In 1956 he sent a converted wartime tanker, the Ideal X, from Newark to Houston carrying fifty-eight truck trailer bodies detached from their chassis. The economics were startling: loading the ship cost cents per ton where conventional loading cost dollars per ton. The essential idea of containerization was that a standardized sealed box could be lifted by crane from a truck to a ship to a train without its contents ever being touched.
++
++Standardization was the hard part, and it took a decade of committee warfare. Railroads, truckers, shipowners, and the military all had incompatible preferences for box dimensions and corner fittings. Through the 1960s, negotiations under the International Organization for Standardization eventually settled on the twenty-foot and forty-foot boxes with standardized corner castings that remain the world's units of account for trade today. The corner casting, a small steel block with oblong holes, is arguably the most consequential piece of industrial design of the century: it allowed any crane, chassis, or cell guide anywhere on earth to grip any container, which is what made the box a universal interface rather than one company's equipment.
++
++The consequences arrived in waves. First, the docks themselves transformed. Container cranes and terminals required enormous capital but little labor, so employment for longshoremen collapsed even as tonnage soared, and old urban ports like Manhattan's and central London's gave way to vast greenfield terminals with rail connections and deep water. Second, ship sizes exploded, because once loading time no longer scaled with cargo volume, the economies of scale of a larger hull became decisive. Third, and most profoundly, reliable and cheap ocean transport rewired manufacturing itself. When a box could move from a factory gate in Asia to a warehouse in Europe on a predictable schedule for a trivial cost per item, firms could split production across continents, source components wherever they were cheapest, and run assembly lines on just-in-time deliveries instead of deep inventories. The global supply chain as we know it is, in a real sense, an emergent property of the box.
++
++The system's weaknesses are the mirror image of its strengths. Because the whole network optimizes for the frictionless flow of standardized units, it has little slack, and disruptions propagate globally: a grounded ship in a canal, a closed terminal, or a shortage of empty boxes in the wrong hemisphere can idle factories thousands of miles away. Because the box is sealed and anonymous, customs and security inspection can only ever sample a small fraction of the flow. And because the economics reward scale so heavily, the industry has consolidated into a handful of alliances operating ships so large that only a short list of ports can receive them, concentrating risk at a few choke points.
++
++Instructions: First, summarize the passage above in three detailed paragraphs in your own words. Then list the five most important specific facts the passage contains, as a numbered list. Finally, explain in one paragraph which single claim in the passage you consider most debatable and why.<|im_end|>
++<|im_start|>assistant
++<think>
++
++</think>
++
+diff --git a/examples/llama.swiftui/llama.swiftui/UI/ContentView.swift b/examples/llama.swiftui/llama.swiftui/UI/ContentView.swift
+index 1c3cd9d..6504783 100644
+--- a/examples/llama.swiftui/llama.swiftui/UI/ContentView.swift
++++ b/examples/llama.swiftui/llama.swiftui/UI/ContentView.swift
+@@ -41,7 +41,21 @@ struct ContentView: View {
+                     }
+                 }
+                 .buttonStyle(.bordered)
+-                .padding()
++
++                // qwen-metal P0A-1: load the pinned rendered prompts from
++                // the app bundle — clipboard transfer proved unreliable
++                // (Universal Clipboard expiry silently resurfaces stale
++                // local content)
++                HStack {
++                    Button("Load decode prompt") {
++                        loadBundledPrompt("decode-essay.rendered")
++                    }
++                    Button("Load prefill prompt") {
++                        loadBundledPrompt("prefill-summarize.rendered")
++                    }
++                }
++                .buttonStyle(.bordered)
++                .padding(.bottom)
+ 
+                 NavigationLink(destination: DrawerView(llamaState: llamaState)) {
+                     Text("View Models")
+@@ -62,6 +76,20 @@ struct ContentView: View {
+         }
+     }
+ 
++    // qwen-metal P0A-1: set the field from a bundled pinned prompt,
++    // bypassing the clipboard entirely
++    func loadBundledPrompt(_ name: String) {
++        guard
++            let url = Bundle.main.url(
++                forResource: name, withExtension: "txt", subdirectory: "models"),
++            let text = try? String(contentsOf: url, encoding: .utf8)
++        else {
++            llamaState.messageLog += "\nERROR: bundled prompt \(name).txt not found\n"
++            return
++        }
++        multiLineText = text
++    }
++
+     func bench() {
+         Task {
+             await llamaState.bench()
+-- 
+2.50.1 (Apple Git-155)
+
