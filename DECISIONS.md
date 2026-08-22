@@ -59,7 +59,8 @@ outside-voice (cross-model) findings, all accepted. Load-bearing decisions:
 - [x] mlx-community 4-bit checkpoint provenance verified against the pinned base
       (or convert from pinned fp16 via mlx_lm.convert). → Verified via HF file
       history 2026-08-21 (see PIN-1 entry below); residual runtime check at P0A-1.
-- [ ] Measured iPhone DRAM bandwidth (GB/s) — from the Phase 0 triad kernel.
+- [x] Measured iPhone DRAM bandwidth (GB/s) — from the Phase 0 triad kernel.
+      → Measured 2026-08-22: 43.84 GB/s sustained (see entry below).
 - [ ] Absolute decode target = 0.75 × MLX measured decode tok/s (canonical window).
 - [ ] Energy method validation result from the Phase 0 dry-run.
 
@@ -382,3 +383,34 @@ Decisions by James this session; agent prepared the harnesses (P0A-1 stays
   session (triad → MLX → llama.cpp → energy dry-run) with row templates and
   the close-out list that resolves the three remaining OPEN items (measured
   GB/s, 0.75×MLX target, energy method validation).
+
+## 2026-08-22 — MEASURED: iPhone DRAM bandwidth 43.84 GB/s — the roofline denominator
+
+- **Sustained 43.84 GB/s** (median of 10 measured iterations), spread
+  42.19–44.45 GB/s, dispatch overhead ~0.6–1.1 ms/iteration. Run by James on
+  the pinned device per the pinned P0B-4 protocol (1.125 GiB streamed/iter,
+  2+10 iters, GPU-timestamp basis, wall alongside): iPhone 15 Pro (A17 Pro),
+  iOS 26.5.2, battery health 85%, >50% charge, rested-to-ambient (procedural
+  check — no instrumented temp readout exists on iOS; recorded as procedure,
+  which is how all future rows record it), Release build, Xcode 26.6 (17F113),
+  scratch device shell (decision 1A). Row appended to benchmarks/results.md.
+- **Repeatability:** three prior same-session runs in Debug config gave
+  medians 43.28 / 43.67 / 43.89 (spread 42.43–44.36, overhead ~0.5–0.7 ms) —
+  within ~1% of the Release figure, as expected since GB/s derives from GPU
+  timestamps and the kernel is runtime-compiled (host build config only
+  perturbs dispatch overhead). Recorded figure = the Release run (the
+  protocol-conforming config). No downward drift across four runs ⇒ no
+  thermal throttling at this workload.
+- **Plausibility:** 43.84 = ~85.6% of A17 Pro's rated 51.2 GB/s (LPDDR5);
+  the Mac dev row achieved ~89% of rated — same achievable-fraction ballpark
+  on two chips says the working set defeats the SLC and the number is DRAM.
+- **Derived planning number (NOT a gate; Phase 3/4 gates get their own
+  pre-committed fractions):** with 4-bit weights ≈ 0.97 GB and canonical-window
+  KV/activation traffic, bytes/token ≈ 1.0 GB ⇒ decode ceiling on the order
+  of ~42–43 tok/s. Every roofline fraction from here on derives from 43.84.
+- **PLAN.md check:** v2 contains no stale assumed bandwidth/tok-s figures to
+  replace — invariant 1 already delegates to the DECISIONS.md measured figure,
+  so the PRD's "PLAN.md numbers derive from measured" criterion is satisfied
+  with no PLAN.md edit (verified by grep).
+- Remaining P0A-1 device work: MLX + llama.cpp baseline rows, absolute
+  target commit (0.75 × MLX), energy method dry-run.
