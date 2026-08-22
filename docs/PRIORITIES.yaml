@@ -193,7 +193,8 @@ tasks:
   - id: P1-1
     rank: 8
     title: "Python tools: reference/fixture dump scripts (pinned deps) + committed fixtures"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-22T00:48:10Z
     depends_on: [PIN-1]
     blocks: [P1-4, P1-5]
     deliverable:
