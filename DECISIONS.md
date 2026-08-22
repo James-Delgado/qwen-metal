@@ -61,7 +61,8 @@ outside-voice (cross-model) findings, all accepted. Load-bearing decisions:
       history 2026-08-21 (see PIN-1 entry below); residual runtime check at P0A-1.
 - [x] Measured iPhone DRAM bandwidth (GB/s) — from the Phase 0 triad kernel.
       → Measured 2026-08-22: 43.84 GB/s sustained (see entry below).
-- [ ] Absolute decode target = 0.75 × MLX measured decode tok/s (canonical window).
+- [x] Absolute decode target = 0.75 × MLX measured decode tok/s (canonical window).
+      → Committed 2026-08-22: 29.4 tok/s (0.75 × 39.2 warm-burst median; entry below).
 - [ ] Energy method validation result from the Phase 0 dry-run.
 
 ## 2026-08-20 — Backlog expanded to full-project DAG; review record archived
@@ -414,3 +415,33 @@ Decisions by James this session; agent prepared the harnesses (P0A-1 stays
   with no PLAN.md edit (verified by grep).
 - Remaining P0A-1 device work: MLX + llama.cpp baseline rows, absolute
   target commit (0.75 × MLX), energy method dry-run.
+
+## 2026-08-22 — MLX baseline measured; ABSOLUTE DECODE TARGET COMMITTED: 29.4 tok/s
+
+- **MLX warm-burst decode (median of 3): 39.2 tok/s** (39.2 / 39.4 / 38.4,
+  identical 1488-token greedy outputs — determinism confirmed). Full rows +
+  session metadata in benchmarks/results.md (PROVISIONAL). Run by James:
+  LLMEval @ mlx-swift-examples `378f2449` + 2 pinned parity edits, deps
+  mlx-swift-lm 3.31.3 / mlx-swift 0.31.4, checkpoint 3b1b1768, Release,
+  iPhone 15 Pro, iOS 26.5.2, battery health 85%. Zero <think> content.
+- **TARGET (James's basis decision: warm-burst median, canonical-window
+  proxy): 0.75 × 39.2 = 29.4 tok/s.** Caveat recorded: the app reports
+  overall generation rate, not the strict 128–512 window; Phase 6 re-measures
+  MLX same-session with windowed instrumentation. Per hard rule 6 this target
+  does not loosen; a Phase 6 MLX re-measure recomputes the comparison, not
+  this planning gate.
+- **Roofline context:** 39.2 ≈ 89% of the ~44 tok/s naive ceiling
+  (43.84 GB/s ÷ ~1.0 GB/token) — MLX is near-roofline on this device, so
+  0.75× is a demanding target, and beating MLX outright would require
+  near-perfect bandwidth utilization.
+- **Thermal finding (sustained, 5 min regenerate loop, 6 generations):**
+  38.3 → 26.7 tok/s (−30%), smooth decline, no stutter. Sustained rows and
+  the energy dry-run operate in this throttled regime; burst vs sustained
+  must never be compared across engines without matching regime.
+- **Prefill: ~370 tok/s** (862 app-side prompt tokens ÷ 2.328 s TTFT).
+- **Template-delta observation:** LLMEval's own template renders ~10 more
+  tokens than the pinned rendered form (862 vs 852) — likely a default
+  system message. Acceptable under the documented "engine applies its own
+  template" feeding mode for PROVISIONAL rows; Phase 6 should pin the system
+  prompt (or feed rendered forms everywhere) for the publishable head-to-head.
+- Remaining P0A-1: llama.cpp baseline rows, energy method dry-run.
