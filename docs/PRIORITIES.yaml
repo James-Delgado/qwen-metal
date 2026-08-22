@@ -50,7 +50,8 @@ tasks:
   - id: PIN-1
     rank: 1
     title: "Pin model repo + revision in DECISIONS.md (Qwen 2.5 vs Qwen 3 fork)"
-    status: ready
+    status: done
+    completed_at: 2026-08-22T00:40:37Z
     owner: james
     depends_on: []
     blocks: [P0A-1, P1-1]
@@ -62,6 +63,11 @@ tasks:
       Architecture fork: Qwen 2.5 = QKV biases; Qwen 3 = no biases + QK-norm.
       Fixes the Phase 1 module list. Must land before any baseline run (PRD 0a.1)
       and before fixture dumps (P1-1). Agent may prepare a comparison brief.
+      2026-08-21: James chose Qwen/Qwen3-1.7B @ 70d244cc (from agent comparison
+      brief). Module list = Qwen3 (no biases, QK-norm). Device pinned: iPhone
+      15 Pro. mlx-community/Qwen3-1.7B-4bit @ 3b1b1768 provenance verified via
+      HF file history. Full entry in DECISIONS.md (incl. thinking-mode parity
+      pin and the sharded-checkpoint conflict resolution).
 
   - id: SETUP-1
     rank: 2
@@ -164,7 +170,7 @@ tasks:
   - id: P0A-1
     rank: 7
     title: "Baseline benchmarks on the phone: MLX + llama.cpp provisional rows, energy dry-run, measured bandwidth"
-    status: blocked
+    status: ready
     owner: james
     depends_on: [PIN-1, P0B-4]
     blocks: [SPEC-P2]
@@ -187,7 +193,7 @@ tasks:
   - id: P1-1
     rank: 8
     title: "Python tools: reference/fixture dump scripts (pinned deps) + committed fixtures"
-    status: blocked
+    status: ready
     depends_on: [PIN-1]
     blocks: [P1-4, P1-5]
     deliverable:
@@ -200,6 +206,10 @@ tasks:
       top-1-vs-top-2 margins, argmax sequence, per-module activations (prompt #1),
       Python tokenizer ids for all 5 prompts. mlx-lm secondary dump. Pinned
       transformers/torch/mlx-lm versions + model revision. ~13MB budget.
+      2026-08-21 (from PIN-1): model = Qwen/Qwen3-1.7B @ 70d244cc; dumps run
+      NON-thinking template from the pinned revision. ALSO owns the one-time
+      shard-consolidation script (pinned repo ships 2 safetensors shards; the
+      engine parser stays single-file — see DECISIONS.md PIN-1 entry).
 
   - id: P1-2
     rank: 9

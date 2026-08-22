@@ -54,9 +54,11 @@ outside-voice (cross-model) findings, all accepted. Load-bearing decisions:
 
 ## OPEN — to be pinned before Phase 0a begins
 
-- [ ] Exact model repo + revision (Qwen 2.5 vs Qwen 3 family fork decides module list).
-- [ ] mlx-community 4-bit checkpoint provenance verified against the pinned base
-      (or convert from pinned fp16 via mlx_lm.convert).
+- [x] Exact model repo + revision (Qwen 2.5 vs Qwen 3 family fork decides module
+      list). → Pinned 2026-08-21: Qwen/Qwen3-1.7B (see PIN-1 entry below).
+- [x] mlx-community 4-bit checkpoint provenance verified against the pinned base
+      (or convert from pinned fp16 via mlx_lm.convert). → Verified via HF file
+      history 2026-08-21 (see PIN-1 entry below); residual runtime check at P0A-1.
 - [ ] Measured iPhone DRAM bandwidth (GB/s) — from the Phase 0 triad kernel.
 - [ ] Absolute decode target = 0.75 × MLX measured decode tok/s (canonical window).
 - [ ] Energy method validation result from the Phase 0 dry-run.
@@ -241,3 +243,48 @@ outside-voice (cross-model) findings, all accepted. Load-bearing decisions:
   TriadBandwidthKernel at the pinned protocol (agent can prepare the call
   site on request), or pulling the Phase 2 app scaffold earlier (a
   convention-setting decision that is James's to make, per AGENT_OPERATION).
+
+## 2026-08-21 — PIN-1: model pinned — Qwen/Qwen3-1.7B (decided by James)
+
+- **Pinned model: Qwen/Qwen3-1.7B, revision
+  `70d244cc86ccca08cf5af4e1e306ecf908b1ad5e`** (main as of 2026-08-21).
+  HF file history confirms the load-bearing files — model-*.safetensors,
+  config.json, tokenizer.json, vocab/merges — are unchanged since the initial
+  2025-04-28 upload; later commits touched only README (05-21), LICENSE
+  (07-26), and tokenizer_config.json (05-19). Decision made by James from the
+  comparison brief (Qwen2.5-1.5B vs Qwen3-1.7B); deciding factors: current
+  generation (stronger writeup), QK-norm architecture, and the relative
+  success metric making the extra bytes/token engine-neutral.
+- **Family fork resolved → Phase 1 module list is Qwen3:** NO attention
+  biases (config `attention_bias: false`); per-head Q/K RMSNorm (head_dim
+  128) applied before RoPE. Verified config: hidden 2048, 28 layers, GQA
+  16 Q : 8 KV heads, intermediate 6144 (SwiGLU), rope_theta 1e6, rms_norm_eps
+  1e-6, vocab 151,936, tied embeddings (lm_head = embedding^T — invariant 2's
+  quantized-lm_head requirement applies to the shared matrix).
+- **Derived planning numbers** (from config, not measured): ~1.72B params;
+  ~0.97 GB weights at 4-bit group-64; fp16 KV at 4K = 448 MiB (112 KiB/token);
+  total resident ≈ 1.5 GB — inside the iPhone 15 Pro Increased-Memory-Limit
+  envelope with headroom.
+- **Benchmark device pinned: James's iPhone 15 Pro** (A17 Pro, 8 GB RAM).
+  All official rows run there per PLAN.md protocol.
+- **MLX baseline checkpoint: mlx-community/Qwen3-1.7B-4bit, revision
+  `3b1b1768f8f8cf8351c712464f906e86c2b8269e`.** Card declares
+  `base_model: Qwen/Qwen3-1.7B`; converted 2025-04-28 — the same weight
+  revision as the pin (weights never changed after). PRD 0a.2 provenance is
+  satisfied on file-history evidence; P0A-1 keeps a residual sanity check
+  (or `mlx_lm.convert` from the pinned fp16 if anything looks off).
+- **Thinking-mode parity pin (new cross-engine pin):** Qwen3-1.7B is a hybrid
+  thinking model. ALL comparative rows run NON-thinking (`enable_thinking:
+  false` or engine equivalent) with greedy sampling; the chat template of
+  record is the one in the PINNED base revision (note: tokenizer_config.json
+  was updated 2025-05-19, i.e. the pinned template postdates the mlx
+  conversion — per-engine template application must be documented per the
+  existing parity pins, and any `<think>` tokens in output invalidate a row.
+- **Spec-vs-reality conflict, surfaced not worked around (session-discipline
+  rule):** the pinned repo ships TWO safetensors shards
+  (model-0000{1,2}-of-00002), while PLAN.md pins a single-file-only parser
+  that rejects shards loudly. Resolution: the parser scope is UNCHANGED; a
+  one-time offline consolidation step (Python, tools/, pinned deps — lands
+  with P1-1) merges the pinned shards into the single-file artifact the
+  engine consumes. The consolidated file's provenance (source revision +
+  script) gets recorded when it's produced.
