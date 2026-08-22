@@ -7,6 +7,10 @@ public enum KernelInputError: Error, CustomStringConvertible, Equatable {
     case lengthMismatch(x: Int, y: Int)
     case nonPositiveDimensions(m: Int, k: Int, n: Int)
     case elementCountMismatch(matrix: String, expected: Int, actual: Int)
+    case nonPositiveElementCount(count: Int)
+    case elementCountNotMultiple(of: Int, count: Int)
+    case invalidIterations(warmup: Int, measured: Int)
+    case sampleIndexOutOfRange(index: Int, count: Int)
 
     public var description: String {
         switch self {
@@ -18,6 +22,14 @@ public enum KernelInputError: Error, CustomStringConvertible, Equatable {
             return "Matrix dimensions must all be positive: m=\(m), k=\(k), n=\(n)"
         case .elementCountMismatch(let matrix, let expected, let actual):
             return "Matrix \(matrix) has \(actual) elements, expected \(expected)"
+        case .nonPositiveElementCount(let count):
+            return "Element count must be positive, got \(count)"
+        case .elementCountNotMultiple(let alignment, let count):
+            return "Element count must be a multiple of \(alignment), got \(count)"
+        case .invalidIterations(let warmup, let measured):
+            return "Iteration counts invalid: warmup \(warmup) must be >= 0, measured \(measured) must be >= 1"
+        case .sampleIndexOutOfRange(let index, let count):
+            return "Sample index \(index) out of range for \(count) elements"
         }
     }
 }

@@ -189,3 +189,55 @@ outside-voice (cross-model) findings, all accepted. Load-bearing decisions:
   does not depend on it in the DAG, so this toy-kernel test uses a TEST-ONLY
   naive fp32 triple loop — the same species of oracle P1-3 itself will be
   validated against. It lives in the test target and is not engine code.
+
+## 2026-08-21 — P0B-4 gate + measurement protocol pre-committed: triad bandwidth microbench
+
+- Correctness gate, set BEFORE the test was written or run (METHODOLOGY rule 2):
+  triad GPU output a[i] = b[i] + s·c[i] vs hand-rolled fp32 CPU reference,
+  max absolute element difference <= 1e-6 on sampled elements, inputs in
+  [-1, 1] from a deterministic init pattern. Same species and rationale as the
+  P0B-2 saxpy gate (elementwise, one multiply + one add; legal fma contraction
+  on the GPU vs double rounding on the CPU costs a few ulp; a real
+  indexing/stride bug costs orders of magnitude more). Never loosens.
+- Measurement protocol, pinned BEFORE any number was produced (operationalizes
+  the PRD's "report best sustained, not peak"):
+  - Kernel: STREAM triad over float4 elements; bytes moved per iteration =
+    3 × N × 4 (read b, read c, write a).
+  - Working set: N = 96 × 2^20 fp32 elements per buffer (384 MiB each,
+    1.125 GiB streamed per iteration) — satisfies the >= 1 GiB floor and
+    dwarfs any Apple SLC so the number is DRAM, not cache.
+  - Iterations: 2 warmup (discarded) + 10 measured. Per-iteration GB/s uses
+    GPU timestamps (wall recorded alongside per hard rule 7; GB is 10^9 bytes).
+  - Reported "sustained GB/s" = MEDIAN of the 10 measured iterations, with
+    min/max spread alongside. Median over max because the roofline denominator
+    must be a rate the decode loop can actually sustain, not a lucky burst.
+- Scope: the Mac row this lands is dev-loop sanity only, marked PROVISIONAL.
+  The roofline denominator for the project is the iPhone run of this same
+  kernel (P0A-1, James), recorded here when it happens.
+
+## 2026-08-21 — P0B-4 landed: triad microbench; Mac sustained 178.19 GB/s
+
+- Measured (Mac, dev-loop sanity, PROVISIONAL): Apple M2 Pro, macOS 26.5.1
+  (25F80), Xcode 26.6 (17F113), release build, pinned protocol: sustained
+  (median) 178.19 GB/s, spread 172.47–179.85 GB/s, dispatch overhead
+  ~0.2 ms/iteration. ~89% of M2 Pro's rated 200 GB/s — consistent with a
+  DRAM-bound triad, i.e. the 1.125 GiB working set defeats the SLC and the
+  protocol behaves. First row in benchmarks/results.md. This number is NOT
+  the roofline denominator (that is the iPhone run, P0A-1).
+- Correctness observation: the deterministic input pattern (values on the
+  2^-11 grid) with s = 0.75 makes b + s·c exactly representable in fp32, so
+  GPU and CPU agree bit-for-bit; the 1e-6 gate held with observed Δ = 0 on
+  the full-array small run and on the benchmark's sampled elements. The gate
+  stays as committed (headroom is for the general fma-contraction case).
+- P0B-1 "revisit at P0B-4" resolved: runtime source compilation RETAINED for
+  the triad kernel. `device.makeLibrary(source:)` is available on iOS at
+  runtime, and a microbench has no startup-latency requirement, so a
+  precompiled metallib is still not needed; the convention stands until a
+  phase has a concrete reason (recorded then).
+- Surfaced for James (P0A-1 prerequisite, noted in its backlog entry): the
+  iPhone triad run needs a thin device shell — no iOS target exists until
+  Phase 2, but P0A-1 precedes SPEC-P2 in the DAG. Options: a disposable
+  scratch Xcode app importing QwenMetalEngine and calling
+  TriadBandwidthKernel at the pinned protocol (agent can prepare the call
+  site on request), or pulling the Phase 2 app scaffold earlier (a
+  convention-setting decision that is James's to make, per AGENT_OPERATION).

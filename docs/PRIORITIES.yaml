@@ -143,8 +143,9 @@ tasks:
   - id: P0B-4
     rank: 6
     title: "Streaming triad bandwidth microbench (>=1GB working set), Mac run + iPhone-ready"
-    status: in_progress
+    status: done
     started_at: 2026-08-21T23:59:35Z
+    completed_at: 2026-08-22T00:07:33Z
     depends_on: [P0B-1]
     blocks: [P0A-1]
     deliverable:
@@ -154,6 +155,11 @@ tasks:
     notes: |
       PRD 0a.6/0b.5. Output on iPhone (run by James) is the roofline denominator
       for the whole project (PLAN.md invariant 1).
+      2026-08-21: landed as Sources/QwenMetalEngine/Metal/TriadBandwidthKernel
+      .swift + TriadBandwidthKernelTests (10 tests) + `qwen-metal-cli bandwidth`
+      subcommand. Gate (1e-6) + protocol (1.125 GiB/iter, 2+10 iters, median)
+      pre-committed in DECISIONS.md before tests. Mac row: 178.19 GB/s sustained
+      (M2 Pro, PROVISIONAL, dev-loop sanity) — first benchmarks/results.md row.
 
   - id: P0A-1
     rank: 7
@@ -171,6 +177,11 @@ tasks:
       (0.75 x MLX measured) and measured GB/s to DECISIONS.md. Rows marked
       PROVISIONAL per staleness rule. Agents prepare harnesses only.
       Phase 0 exit when this + all P0B tasks are done.
+      2026-08-21 (from P0B-4): triad kernel is iPhone-ready in the engine
+      package, but running it on-device needs a thin shell that doesn't exist
+      until Phase 2 — James decides: disposable scratch Xcode app importing
+      QwenMetalEngine (agent can prepare the call site on request), or pull
+      the Phase 2 app scaffold early. See DECISIONS.md 2026-08-21 P0B-4 entry.
 
   # ---------- Phase 1 (spec exists: docs/phases/phase-0-1.md) ----------
   - id: P1-1
