@@ -107,3 +107,54 @@ note (rough BPW math, see DECISIONS.md): 32.44 × ~1.3 GB/token ≈ 42 GB/s
 engines saturate ~triad-level bandwidth — decode is read-dominated and the
 2R+1W triad likely understates read-mostly achievable bandwidth (follow-up
 BW-1 seeded).
+
+## Phase 0a — energy dry-run + corrections (PROVISIONAL)
+
+### 2026-08-22 — sustained battery-delta cycles, iPhone 15 Pro (method VALIDATED)
+
+Conditions (both cycles + idle): DETACHED from Xcode (home-screen launch),
+airplane mode, minimum brightness, Auto-Lock Never, Background App Refresh
+off, unplugged, rested; Metal API Validation OFF; battery health 85%
+(capacity basis 12.6 Wh rated × 0.85 = 10.74 Wh ⇒ 1% SoC = 387 J); sustained
+regenerate-loop (decode-essay, fresh context per generation) via the Loop
+patches (benchmarks/patches/). Idle baseline measured once (LLMEval
+foregrounded, no generation): 1% / 15 min ≈ 0.43 W, scaled pro-rata to each
+cycle. SoC read quantization ±0.5%/reading ⇒ ~±12% on J/token.
+
+| Engine | SoC band | Wall | Gens | Tokens | Gross W | Net W (idle-corr.) | **Net J/token** | first→last t/s |
+|---|---|---|---|---|---|---|---|---|
+| MLX LLMEval | 81→71% | 1055 s | 23 | 32,840 | 3.67 | 3.24 | **0.104** | 40.43 → 36.78 (−9%) |
+| llama.cpp (llama.swiftui) | 69→59% | 1057 s | 47 | 26,132 | 3.66 | 3.23 | **0.131** | 32.81 → 18.17 (−45%) |
+
+Both cycles inside the 3–9 W plausibility window ⇒ **battery-delta energy
+method VALIDATED** (one cycle per engine; ≥3-repeat rounds are Phase 6).
+Recorded deviation: the llama.cpp cycle ran 69→59%, not the pinned 80→70%
+band (single-session sequencing); acceptable for method validation, Phase 6
+comparative rounds use the pinned band. At identical ~3.7 W draw, MLX
+delivered ~25% more tokens per joule. Thermal contrast under identical
+conditions: MLX −9% vs llama.cpp −45% over ~17.6 min — engine-level
+difference, not harness; note llama.cpp's end-state 18.17 t/s is below the
+29.4 target, so sustained-regime framing matters for Phase 6.
+
+### 2026-08-22 — validation-off MLX spot check + phys_footprint corrections
+
+- MLX warm burst, Metal API Validation OFF, attached: **39.6 t/s** (TTFT
+  319 ms, prompt 94, 1488 tokens, 37.5 s) vs 39.2 validation-on ⇒ validation
+  overhead is ENGINE-DEPENDENT (~+1% MLX vs ~17–21% llama.cpp). Committed
+  target (29.4 = 0.75 × 39.2) stands; 0.75 × 39.6 = 29.7 confirms it was not
+  materially understated. Prompt length 94 confirms the earlier ≈94 estimate;
+  1488-token determinism holds across validation settings.
+- **phys_footprint corrections (Xcode memory gauge = the pinned metric):**
+  MLX = **1.02 GB** (the earlier rows' "923 MB" was the app's own MLX
+  activeMemory meter, mislabeled — rows stand, this addendum corrects the
+  metric); llama.cpp = **307 MB**, an mmap accounting artifact: the 1.19 GB
+  GGUF is clean file-backed pages largely excluded from phys_footprint,
+  while MLX's weights are dirty/anonymous buffer memory. The 307 MB vs
+  1.02 GB comparison is NOT an efficiency claim — exactly the iOS
+  memory-accounting asymmetry PLAN.md invariant 3 anticipates (Phase 2
+  mmap-vs-wired bench will quantify it for our engine).
+- Sustained-decline reconciliation: earlier ATTACHED 5-min loops showed −30%
+  (MLX) / −34% (llama.cpp); detached, airplane-mode cycles show −9% / −45%.
+  MLX's earlier decline was substantially harness load (debugger/radio/
+  brightness); llama.cpp's is genuinely thermal. Sustained rows must be
+  measured detached.

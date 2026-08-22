@@ -63,7 +63,9 @@ outside-voice (cross-model) findings, all accepted. Load-bearing decisions:
       → Measured 2026-08-22: 43.84 GB/s sustained (see entry below).
 - [x] Absolute decode target = 0.75 × MLX measured decode tok/s (canonical window).
       → Committed 2026-08-22: 29.4 tok/s (0.75 × 39.2 warm-burst median; entry below).
-- [ ] Energy method validation result from the Phase 0 dry-run.
+- [x] Energy method validation result from the Phase 0 dry-run.
+      → VALIDATED 2026-08-22: both engines 3.2–3.7 W, MLX 0.104 /
+      llama.cpp 0.131 net J/token (see P0A-1 close-out entry).
 
 ## 2026-08-20 — Backlog expanded to full-project DAG; review record archived
 
@@ -488,3 +490,41 @@ Decisions by James this session; agent prepared the harnesses (P0A-1 stays
   auxiliary bench runs must record thermal state.
 - Remaining P0A-1: energy method dry-run (MLX, sustained); phys_footprint
   for llama.cpp not captured — grab the gauge peak during any later run.
+
+## 2026-08-22 — P0A-1 CLOSED: energy method validated; Phase 0 exit complete
+
+- **Energy dry-run (one cycle PER ENGINE, per PRD acceptance): method
+  VALIDATED.** MLX 0.104 net J/token (81→71%, 1055 s, 32,840 tokens,
+  3.67 W gross / 3.24 W net); llama.cpp 0.131 (69→59%, 1057 s, 26,132
+  tokens, 3.66/3.23 W). Idle floor 1%/15 min ≈ 0.43 W (LLMEval foregrounded,
+  scaled pro-rata — method detail pinned). SoC quantization ⇒ ~±12% error
+  bars. Both inside the 3–9 W anchor. Full table in benchmarks/results.md.
+  Recorded deviation: llama.cpp band 69→59% (not 80→70) — fine for method
+  validation; Phase 6 comparative rounds use the pinned band.
+- **Findings folded into the protocol for Phase 6:** (1) energy/sustained
+  measurements DETACHED only (attached −30% "thermal" was partly harness);
+  (2) validation overhead is engine-dependent (+1% MLX vs ~17–21%
+  llama.cpp) — setting recorded per row, default OFF; MLX validation-off
+  spot check 39.6 confirms the 29.4 target wasn't materially understated;
+  (3) phys_footprint corrections: MLX 1.02 GB (gauge; earlier 923 MB was
+  the app's activeMemory meter), llama.cpp 307 MB — an mmap accounting
+  artifact, NOT an efficiency claim (invariant 3's asymmetry, now measured);
+  (4) sustained thermal is engine-level: MLX −9% vs llama.cpp −45% at
+  identical ~3.7 W (llama.cpp ends below the 29.4 target — sustained
+  framing matters).
+- **PRD-phase-0 acceptance walk (all criteria MET):**
+  1. Model repo+revision pinned before first baseline row ✓ (PIN-1).
+  2. Baseline table, 2 engines, prefill/decode/memory, burst+sustained,
+     cold+warm, full annotations ✓; energy ≥1 validated battery-delta row
+     per engine ✓. Honest gaps (recorded, non-blocking, PROVISIONAL rows):
+     cold captured for decode only (prefill cold differs only via TTFT);
+     decode rates are app-reported overall rates, not strictly windowed;
+     llama.cpp memory subject to the mmap accounting caveat.
+  3. Measured iPhone DRAM bandwidth ✓ (43.84 GB/s; PLAN.md derives from it).
+  4. Absolute target committed ✓ (29.4 tok/s = 0.75 × 39.2).
+  5. saxpy/matmul/triad + dual-timing XCTest green on macOS ✓ (30 tests).
+  6. All Phase 0 rows marked PROVISIONAL ✓.
+- **Phase 0 is fully exited** (P0B-1..4 done earlier; P0A-1 done now).
+  SPEC-P2 remains blocked on P1-5 only. Harness provenance: local branches
+  qwen-metal-p0a1 (llama.cpp 97e552a+bceddff+…, mlx-swift-examples
+  47c36a0+992118b) archived as benchmarks/patches/*.patch.

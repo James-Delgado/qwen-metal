@@ -170,7 +170,8 @@ tasks:
   - id: P0A-1
     rank: 7
     title: "Baseline benchmarks on the phone: MLX + llama.cpp provisional rows, energy dry-run, measured bandwidth"
-    status: ready
+    status: done
+    completed_at: 2026-08-22T18:39:52Z
     owner: james
     depends_on: [PIN-1, P0B-4]
     blocks: [SPEC-P2]
@@ -195,6 +196,11 @@ tasks:
       @ ~/Projects/llama.cpp. Prompt set drafted + verified:
       benchmarks/prompts/. Full session sequence: benchmarks/phase0-runbook.md.
       Remaining work is all on-device (James).
+      2026-08-22 (close): ALL device runs complete — bandwidth 43.84 GB/s;
+      MLX 39.2 / llama.cpp 32.44 warm-burst; target 29.4 committed; energy
+      method VALIDATED (0.104 / 0.131 net J/token, one cycle per engine).
+      PRD acceptance walked in DECISIONS.md close-out entry — Phase 0 exited.
+      SPEC-P2 stays blocked on P1-5 only.
 
   # ---------- Phase 1 (spec exists: docs/phases/phase-0-1.md) ----------
   - id: P1-1
