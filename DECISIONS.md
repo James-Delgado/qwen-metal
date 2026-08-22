@@ -528,3 +528,28 @@ Decisions by James this session; agent prepared the harnesses (P0A-1 stays
   SPEC-P2 remains blocked on P1-5 only. Harness provenance: local branches
   qwen-metal-p0a1 (llama.cpp 97e552a+bceddff+…, mlx-swift-examples
   47c36a0+992118b) archived as benchmarks/patches/*.patch.
+
+## 2026-08-22 — P1-2 landed: safetensors parser + config loader (engine io module)
+
+- **Shipped:** Sources/QwenMetalEngine/IO/{SafetensorsFile,ModelConfig}.swift
+  + SafetensorsFileTests (15) + ModelConfigTests (11); full suite 56 tests,
+  0 failures. All 7 enumerated edge cases from phase-0-1.md covered in the
+  same change as the code. No numeric gate involved: both upcasts are exact
+  (bf16 = fp32 top half by bit shift; fp16→fp32 exact by construction), so
+  the tests assert with == rather than a tolerance.
+- **Parser pins honored:** hand-written (no swift-safetensors), raw mmap()
+  (PLAN invariant 5), single-file only — any `*.index.json` sibling triggers
+  a loud reject whose message names tools/consolidate_shards.py as the
+  remedy. Validation includes offset bounds, dtype/shape byte-size match,
+  overflow-checked shape products, and overlapping-range detection.
+- **Family-flag conventions (P1-4 relies on these):** `attention_bias`
+  honors an explicit config key, else defaults by family (qwen3 → false,
+  qwen2 → true, unknown family → hard error rather than a guess).
+  `usesQKNorm` is DERIVED from `model_type == "qwen3"` — HF configs carry no
+  explicit qk-norm key, so the architecture fork pinned in the PIN-1 entry
+  is encoded here. `head_dim` falls back to hidden_size / num_attention_heads
+  when absent (Qwen 2.5-style configs); the pinned Qwen3 config is explicit.
+- **Scope note:** fp32 materialization per tensor (~7 GB resident for Phase 1
+  on the Mac) is the accepted phase-0-1.md behavior; raw fp16/bf16 views for
+  GPU upload are a Phase 2 concern and deliberately not built (YAGNI +
+  just-in-time spec rule).

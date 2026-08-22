@@ -236,8 +236,9 @@ tasks:
   - id: P1-2
     rank: 9
     title: "safetensors parser + config loader + 7 edge-case tests"
-    status: in_progress
+    status: done
     started_at: 2026-08-22T20:10:05Z
+    completed_at: 2026-08-22T20:25:00Z
     depends_on: [SETUP-1]
     blocks: [P1-4]
     deliverable:
@@ -247,6 +248,12 @@ tasks:
     notes: |
       ~150 lines, mmap, single-file only, bf16->fp32 exact upcast, sharded
       checkpoints rejected loudly.
+      2026-08-22: landed as Sources/QwenMetalEngine/IO/{SafetensorsFile,
+      ModelConfig}.swift + SafetensorsFileTests (15) + ModelConfigTests (11).
+      All 7 enumerated edge cases covered; upcasts exact (== assertions, no
+      gate needed). Family flags: attention_bias honors explicit key else
+      family default; usesQKNorm derived from model_type (no HF key exists) —
+      see DECISIONS.md 2026-08-22 P1-2 entry. P1-4 stays blocked on P1-3.
 
   - id: P1-3
     rank: 10
