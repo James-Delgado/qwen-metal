@@ -333,3 +333,52 @@ outside-voice (cross-model) findings, all accepted. Load-bearing decisions:
   self-checked byte-for-byte against the source shards.
   sha256 = 8538a19cec4c28dce3b784010dfba63842546963feec21b20ef5abdd3944f5f5.
   models/ was already gitignored; artifact is local-only, never committed.
+
+## 2026-08-22 — P0A-1 prep: device shell (1A), GGUF pin (local convert), prompt set drafted
+
+Decisions by James this session; agent prepared the harnesses (P0A-1 stays
+`ready`, owner james — the on-device runs are his).
+
+- **Device shell = disposable scratch app (option 1A).** The iPhone triad run
+  uses a throwaway Xcode project OUTSIDE the repo importing QwenMetalEngine;
+  the Phase 2 app scaffold is NOT pulled early (just-in-time rule preserved).
+  Agent-prepared call site + setup/run/record instructions:
+  benchmarks/device-shell/{TriadRunnerView.swift, README.md}.
+- **llama.cpp GGUF pin = LOCAL CONVERSION (decided after investigation).**
+  Finding: the official Qwen/Qwen3-1.7B-GGUF repo uploaded Q4_K_M/Q5/Q6
+  quants 2025-05-08 and deleted them the SAME day (bare commit messages, no
+  stated reason; README quant list edited from "q4_K_M, q5_0, q5_K_M, q6_K,
+  q8_0" to "q8_0" — deliberate catalog change; official README separately
+  recommends presence_penalty 1.5 for quantized models "to suppress
+  repetitive outputs"). James chose conversion from our pinned base over the
+  official-but-withdrawn revision (7fb011e9) and community quants.
+  - Toolchain pin: llama.cpp release tag b9999 = commit 47c78692, cloned at
+    ~/Projects/llama.cpp (also the source for the Phase 0a iOS runner build).
+  - Recipe: convert_hf_to_gguf.py (llama.cpp's own pinned convert env,
+    torch 2.11.0 / transformers 4.57.6) from the pinned HF snapshot
+    @ 70d244cc, --outtype bf16 → llama-quantize Q4_K_M; intermediate bf16
+    GGUF deleted.
+  - Artifact: models/qwen3-1.7b-70d244cc-Q4_K_M.gguf, 1217.35 MiB (5.03 BPW),
+    sha256 72b1b7b9ad563f21862ae60cd884c8911105ca8a214d5149ee33115575c52db4.
+    Local-only (models/ gitignored); Phase 6 reuses the same recipe.
+  - Smoke-tested on Mac via llama-completion (raw rendered prompt, greedy):
+    coherent output, no <think> tags, ~1153 tok/s prompt / ~117 tok/s
+    generation (M2 Pro, dev sanity only — not a benchmark row).
+  - CAUTION for the device session: in this llama.cpp build, `llama-cli` is a
+    chat TUI that ignores -no-cnv and re-templates input (double templating);
+    use `llama-completion` for any completion-mode run. Cross-engine variance
+    observed and expected: llama.cpp tokenizes the rendered decode-essay
+    prompt to 92 tokens vs HF's 84.
+- **Benchmark prompt set DRAFTED (parity pin; becomes load-bearing at first
+  baseline row):** benchmarks/prompts/{decode-essay,prefill-summarize}.txt +
+  non-thinking rendered forms (tools/render_bench_prompts.py) + protocol
+  README. Verified empirically (mlx-lm 4-bit, greedy): decode-essay = 84
+  HF-rendered tokens, runs ≥600 tokens with NO EOS → safely covers the
+  canonical 128–512 window; prefill-summarize = 852 HF-rendered tokens,
+  EOSes at ~425 → pinned as PREFILL-ONLY (role separation recorded in the
+  prompts README). Sustained regenerate-loop operationalized: restart on EOS
+  or context-fill, whichever first, identical for all engines.
+- **Runbook:** benchmarks/phase0-runbook.md sequences the whole device
+  session (triad → MLX → llama.cpp → energy dry-run) with row templates and
+  the close-out list that resolves the three remaining OPEN items (measured
+  GB/s, 0.75×MLX target, energy method validation).

@@ -188,6 +188,13 @@ tasks:
       until Phase 2 — James decides: disposable scratch Xcode app importing
       QwenMetalEngine (agent can prepare the call site on request), or pull
       the Phase 2 app scaffold early. See DECISIONS.md 2026-08-21 P0B-4 entry.
+      2026-08-22: PREP COMPLETE (decisions by James, harnesses by agent —
+      see DECISIONS.md 2026-08-22 P0A-1-prep entry). Shell decision = 1A
+      (scratch app): benchmarks/device-shell/. GGUF = local conversion,
+      artifact in models/ (sha256 in DECISIONS.md), llama.cpp pinned b9999
+      @ ~/Projects/llama.cpp. Prompt set drafted + verified:
+      benchmarks/prompts/. Full session sequence: benchmarks/phase0-runbook.md.
+      Remaining work is all on-device (James).
 
   # ---------- Phase 1 (spec exists: docs/phases/phase-0-1.md) ----------
   - id: P1-1
