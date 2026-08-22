@@ -236,7 +236,8 @@ tasks:
   - id: P1-2
     rank: 9
     title: "safetensors parser + config loader + 7 edge-case tests"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-22T20:10:05Z
     depends_on: [SETUP-1]
     blocks: [P1-4]
     deliverable:
