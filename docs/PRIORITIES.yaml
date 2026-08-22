@@ -193,8 +193,9 @@ tasks:
   - id: P1-1
     rank: 8
     title: "Python tools: reference/fixture dump scripts (pinned deps) + committed fixtures"
-    status: in_progress
+    status: done
     started_at: 2026-08-22T00:48:10Z
+    completed_at: 2026-08-22T01:01:19Z
     depends_on: [PIN-1]
     blocks: [P1-4, P1-5]
     deliverable:
@@ -211,6 +212,13 @@ tasks:
       NON-thinking template from the pinned revision. ALSO owns the one-time
       shard-consolidation script (pinned repo ships 2 safetensors shards; the
       engine parser stays single-file — see DECISIONS.md PIN-1 entry).
+      2026-08-22: landed as tools/{pins,dump_reference,dump_mlx,
+      consolidate_shards}.py + requirements.txt + README + tests/fixtures/
+      qwen3-1.7b/ (36 blobs, 12.53 MB) + tests/test_fixtures.py (8 tests).
+      Reproducibility verified byte-identical across two full runs.
+      Consolidated artifact produced: models/qwen3-1.7b-70d244cc.safetensors
+      (local-only, sha256 in DECISIONS.md). P1-4/P1-5 stay blocked on
+      P1-2/P1-3. See DECISIONS.md 2026-08-22 entry.
 
   - id: P1-2
     rank: 9

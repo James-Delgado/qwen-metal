@@ -288,3 +288,48 @@ outside-voice (cross-model) findings, all accepted. Load-bearing decisions:
   with P1-1) merges the pinned shards into the single-file artifact the
   engine consumes. The consolidated file's provenance (source revision +
   script) gets recorded when it's produced.
+
+## 2026-08-22 — P1-1 landed: reference/fixture tooling + committed oracle set
+
+- **tools/ shipped** (pins.py as single source of truth, dump_reference.py,
+  dump_mlx.py, consolidate_shards.py, requirements.txt, README.md). Exact
+  version pins: Python 3.14.6, torch 2.13.0, transformers 5.15.1, tokenizers
+  0.22.2, safetensors 0.8.0, numpy 2.5.2, huggingface_hub 1.28.0, mlx 0.32.1,
+  mlx-lm 0.31.3. Regeneration commands documented in tools/README.md;
+  regenerating with unpinned versions remains a bug.
+- **Fixture protocol pins** (operationalizing phase-0-1.md; convention-
+  following, recorded for exactness): checkpoint steps = {0, 1, 24, 49}
+  0-based ("mid" = 24); greedy = torch.argmax (first-index tie-break), NO EOS
+  stop (fixtures always cover all 50 steps); primary dump uses the HF KV-cache
+  decode path and sdpa attention (both recorded in manifest.json); scalar
+  fingerprints computed in float64 over the fp32 logit vector; blobs are raw
+  little-endian with dtype/shape/sha256 per manifest entry — deliberately NOT
+  safetensors, so the oracle set has zero dependency on the engine parser
+  under test (oracle-independence, METHODOLOGY rule 1). The 5 pinned prompt
+  strings live in tools/fixture_prompts.json; the 6 activation hook points are
+  enumerated in the manifest.
+- **Committed set: 36 blobs, 12.53 MB** (budget ~13 MB, plain git) under
+  tests/fixtures/qwen3-1.7b/ + manifest.json with per-blob sha256.
+  tests/test_fixtures.py (stdlib-only, root .venv pytest) validates integrity,
+  spec-required contents, and pins ↔ requirements.txt consistency: 8 tests.
+- **Reproducibility VERIFIED:** full second run of dump_reference.py produced
+  byte-identical output — 36/36 blobs same sha256.
+- **Near-tie observation:** min top1-vs-top2 margin in the set is 0.0048
+  (short_english); exactly 1 of 250 steps has margin < 1e-2 — the tie-aware
+  argmax design (P1-5) has a real exercising case in the fixtures.
+- **Chat-template observation (for P1-5 Swift work):** enable_thinking=false
+  renders an EMPTY think block (`<think>\n\n</think>`) in the assistant
+  preamble — that is the correct non-thinking form, not thinking-mode leakage.
+  tokenizer_ids.json records the fully rendered input_text, so Swift tests can
+  tokenize the recorded string and stay independent of template re-rendering.
+- **mlx-lm secondary dump (loose, argmax-level, NOT an oracle — as designed):**
+  4/5 prompts agree with the fp32 oracle at step 0; divergence onset at steps
+  {1, 4, 1, 0, 4}. The step-0 flip (non_ascii) sits on a 0.139 step-0 margin —
+  unremarkable for a 4-bit comparator. Text is coherent on all 5. Recorded in
+  mlx_secondary.json; returns as the Phase 3 quality-gate comparator.
+- **Consolidated single-file artifact PRODUCED (provenance per PIN-1 entry):**
+  models/qwen3-1.7b-70d244cc.safetensors — 4.064 GB, 311 tensors, sorted
+  names, bf16 preserved, provenance in __metadata__ (source repo + revision),
+  self-checked byte-for-byte against the source shards.
+  sha256 = 8538a19cec4c28dce3b784010dfba63842546963feec21b20ef5abdd3944f5f5.
+  models/ was already gitignored; artifact is local-only, never committed.

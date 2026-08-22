@@ -1,0 +1,30 @@
+{
+  "_comment": "The 5 pinned fixture prompts (docs/phases/phase-0-1.md: short English; longer multi-sentence; code snippet; non-ASCII text; chat-template formatted). 'kind: raw' prompts are fed as plain completion text; 'kind: chat' is rendered through the pinned tokenizer's chat template with enable_thinking=false before tokenization. Changing any string invalidates the committed fixtures.",
+  "prompts": [
+    {
+      "id": "short_english",
+      "kind": "raw",
+      "text": "The capital of France is"
+    },
+    {
+      "id": "multi_sentence",
+      "kind": "raw",
+      "text": "The Industrial Revolution began in Britain in the late eighteenth century. It transformed manufacturing, transportation, and daily life across Europe. Historians still debate its most important cause. One influential argument holds that"
+    },
+    {
+      "id": "code_snippet",
+      "kind": "raw",
+      "text": "def fibonacci(n):\n    \"\"\"Return the n-th Fibonacci number.\"\"\"\n    if n < 2:\n        return n\n"
+    },
+    {
+      "id": "non_ascii",
+      "kind": "raw",
+      "text": "秋の京都は紅葉が美しい。Voilà — un café à Zürich coûte 5 €, naïve résumé. Ψηφιακή τεχνολογία 🚀 数学は宇宙の言語である。"
+    },
+    {
+      "id": "chat_template",
+      "kind": "chat",
+      "text": "Explain in one paragraph why the sky is blue."
+    }
+  ]
+}

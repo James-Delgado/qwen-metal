@@ -1,0 +1,349 @@
+{
+ "model": {
+  "repo": "Qwen/Qwen3-1.7B",
+  "revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e"
+ },
+ "versions": {
+  "torch": "2.13.0",
+  "transformers": "5.15.1",
+  "tokenizers": "0.22.2",
+  "safetensors": "0.8.0",
+  "numpy": "2.5.2"
+ },
+ "python": "3.14.6",
+ "protocol": {
+  "generator": "tools/dump_reference.py",
+  "command": "tools/.venv/bin/python tools/dump_reference.py",
+  "dtype": "float32 weights and activations, CPU",
+  "attn_implementation": "sdpa",
+  "sampling": "greedy (torch.argmax, first-index tie-break), no EOS stop",
+  "generation_steps": 50,
+  "checkpoint_steps": [
+   0,
+   1,
+   24,
+   49
+  ],
+  "top_k": 64,
+  "enable_thinking": false,
+  "kv_cache": "HF cache path: prefill once, then one token per forward",
+  "fingerprints": "logsumexp/mean/std computed in float64 over the fp32 logit vector",
+  "activation_prompt": "short_english",
+  "activation_slices": {
+   "embeddings_output": "output of model.model.embed_tokens",
+   "layer0_pre_attn_norm_output": "output of model.model.layers[0].input_layernorm",
+   "layer0_attn_output": "output of model.model.layers[0].self_attn (after o_proj, before residual add)",
+   "layer0_block_output": "output of model.model.layers[0] (post-MLP, residuals included)",
+   "last_layer_output": "output of model.model.layers[-1] (residuals included)",
+   "final_norm_output": "output of model.model.norm"
+  },
+  "binary_format": "raw little-endian, row-major; dtype/shape per manifest entry"
+ },
+ "generated_at": "2026-08-22T00:58:02Z",
+ "files": {
+  "activations/embeddings_output.bin": {
+   "dtype": "float32",
+   "shape": [
+    5,
+    2048
+   ],
+   "byte_len": 40960,
+   "sha256": "5c5a8de2a20406f75d2aa9772ea01ccb56a374e95bd1ae432846116d88061f56"
+  },
+  "activations/final_norm_output.bin": {
+   "dtype": "float32",
+   "shape": [
+    5,
+    2048
+   ],
+   "byte_len": 40960,
+   "sha256": "942b5f24b08586ab8a193be9611b2bf8f462c44354958c39f3b32e2aa6b5afcf"
+  },
+  "activations/last_layer_output.bin": {
+   "dtype": "float32",
+   "shape": [
+    5,
+    2048
+   ],
+   "byte_len": 40960,
+   "sha256": "33628b2c5f9d7c7b289d99075855518c5eb74a253d2ab1b8d7d11d50ee3c2030"
+  },
+  "activations/layer0_attn_output.bin": {
+   "dtype": "float32",
+   "shape": [
+    5,
+    2048
+   ],
+   "byte_len": 40960,
+   "sha256": "d798e9cc26065f1e7a50e2714f9b1a9a7babc42a9d9d97a792071812d0490fe9"
+  },
+  "activations/layer0_block_output.bin": {
+   "dtype": "float32",
+   "shape": [
+    5,
+    2048
+   ],
+   "byte_len": 40960,
+   "sha256": "59bcc739d5218b1c32a9644c7c092a86931650599691446cc70b24c2cbcdc4a3"
+  },
+  "activations/layer0_pre_attn_norm_output.bin": {
+   "dtype": "float32",
+   "shape": [
+    5,
+    2048
+   ],
+   "byte_len": 40960,
+   "sha256": "ab3d6531812ff6e1a550a6e7eddd7c025a8706c058de800bf4aa206f65baf3dc"
+  },
+  "prompts/chat_template/logits_step0000.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "252878820b0110ecccf6a18930035ab0f777997ed6f6f319043af1d164b3e558"
+  },
+  "prompts/chat_template/logits_step0001.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "6b52640c6a2168e437ce4b04ff4b1bac3dfa3c5251faae2b19e8c47375fb95db"
+  },
+  "prompts/chat_template/logits_step0024.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "d019719d44670d0df10ff5310c423ba2cd719b7903b2fe1d64d1e6450a13cc9d"
+  },
+  "prompts/chat_template/logits_step0049.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "6f8fbfc5a8aba7b1d12e59c5ef9859c3fb024ee899ce7a16ab34bcb7f4e1b72c"
+  },
+  "prompts/chat_template/top64_indices.bin": {
+   "dtype": "int32",
+   "shape": [
+    50,
+    64
+   ],
+   "byte_len": 12800,
+   "sha256": "9a31b7f1131c7675d58dd9a35f5b2b6cbb38e603dde658a62199f6fe14e665c5"
+  },
+  "prompts/chat_template/top64_values.bin": {
+   "dtype": "float32",
+   "shape": [
+    50,
+    64
+   ],
+   "byte_len": 12800,
+   "sha256": "29648e0f0e28fa6b3826f53002c6654840a1ba21ede80a835be83f4db563b401"
+  },
+  "prompts/code_snippet/logits_step0000.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "7eb24e4d97365a94d98b8eef195801722293f80ade4810029f016e9d37287d77"
+  },
+  "prompts/code_snippet/logits_step0001.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "a83a56a1c4b2d44cc07e0c312ce179b67fe0cdda7a3f5c61f23be2991968badb"
+  },
+  "prompts/code_snippet/logits_step0024.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "d23dc42f0a03604828ff827b6021f479f3a98278254caa75d790b6f006770dc3"
+  },
+  "prompts/code_snippet/logits_step0049.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "5005568efa6f73ab2d3ffb7b69f8c43c7448110c6d7687d4d4f8600a32e586ef"
+  },
+  "prompts/code_snippet/top64_indices.bin": {
+   "dtype": "int32",
+   "shape": [
+    50,
+    64
+   ],
+   "byte_len": 12800,
+   "sha256": "4706e41eb676e04c96de23b72bea14376a9429e6a691f9d557b866a9ce53b917"
+  },
+  "prompts/code_snippet/top64_values.bin": {
+   "dtype": "float32",
+   "shape": [
+    50,
+    64
+   ],
+   "byte_len": 12800,
+   "sha256": "00b7639bdabe20ce2a1ca9ae8bef0e52fb167f66fec28bf369d298e72687c0c5"
+  },
+  "prompts/multi_sentence/logits_step0000.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "cb48c00037e1ce968403b5b7ec0fca326f57652c0963fe7741697cd899758bab"
+  },
+  "prompts/multi_sentence/logits_step0001.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "85b4b99280c7fb6bbca44bc59b65239e29603afd0ee08bb7ddef8e65f6aff2da"
+  },
+  "prompts/multi_sentence/logits_step0024.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "9aa89ea204ec2042c4590a2e8d43ee10503f01557a782abb56c264ae745371bc"
+  },
+  "prompts/multi_sentence/logits_step0049.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "678cf2a41bf9f9df3165bf6e06915bb54fc07c7c8c0249c437b121f21e259e74"
+  },
+  "prompts/multi_sentence/top64_indices.bin": {
+   "dtype": "int32",
+   "shape": [
+    50,
+    64
+   ],
+   "byte_len": 12800,
+   "sha256": "6629b796eb5aebfc90981e57a488f6d92618ee9bb4d98393df35ba0f79f00251"
+  },
+  "prompts/multi_sentence/top64_values.bin": {
+   "dtype": "float32",
+   "shape": [
+    50,
+    64
+   ],
+   "byte_len": 12800,
+   "sha256": "927c2b36570d9a07283f448975d24b488db2c2f84e2412fc295537810d395214"
+  },
+  "prompts/non_ascii/logits_step0000.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "bf3d8adcde2fe426e7ebf18c1a8a4f4adc66a6bf1f4dc1e14a5a008b699ecba1"
+  },
+  "prompts/non_ascii/logits_step0001.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "6188feb5b74a1a9276b9910a5d8c03b3f2d6cf2e9a38327ec0b5753d57f138fd"
+  },
+  "prompts/non_ascii/logits_step0024.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "e98f984145c5244eb4a108625aca3f5cfafe90af3e005f093fe63864726242d6"
+  },
+  "prompts/non_ascii/logits_step0049.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "4dc8899e7a30b996201a2bb779dd4542cc03869213774ad854048aff0941a0ab"
+  },
+  "prompts/non_ascii/top64_indices.bin": {
+   "dtype": "int32",
+   "shape": [
+    50,
+    64
+   ],
+   "byte_len": 12800,
+   "sha256": "d68bd107e4907dabcc49ed0050ece3b3c9002dad69ddf37c37799a3fe4c5164f"
+  },
+  "prompts/non_ascii/top64_values.bin": {
+   "dtype": "float32",
+   "shape": [
+    50,
+    64
+   ],
+   "byte_len": 12800,
+   "sha256": "6d3e6e0ac8c692df0071786a1212b071069ccc3936aa53dc7b1684697c249612"
+  },
+  "prompts/short_english/logits_step0000.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "f6f033b5c9bc928fe9add21459d92015da98664206225815568848316cd013f9"
+  },
+  "prompts/short_english/logits_step0001.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "823a546fa4e3876044e163cb645207b3d4b115d0c20b737f14a2d05c2c2238fb"
+  },
+  "prompts/short_english/logits_step0024.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "96852bee316848c801c8947884dc3fab00b386d26560fac843c562951bcc25e6"
+  },
+  "prompts/short_english/logits_step0049.bin": {
+   "dtype": "float32",
+   "shape": [
+    151936
+   ],
+   "byte_len": 607744,
+   "sha256": "2283234f64dff117099c2588605ee9a5db842b93414c10873aca166247fcfb90"
+  },
+  "prompts/short_english/top64_indices.bin": {
+   "dtype": "int32",
+   "shape": [
+    50,
+    64
+   ],
+   "byte_len": 12800,
+   "sha256": "b723d11863e8535932134d556e100778196851ebd218a2a57037a8ca06abd2e2"
+  },
+  "prompts/short_english/top64_values.bin": {
+   "dtype": "float32",
+   "shape": [
+    50,
+    64
+   ],
+   "byte_len": 12800,
+   "sha256": "864a1aedf01182ed087006f7eda5bde0d5705ff37c040eaec06c7a851bcfbedf"
+  }
+ }
+}

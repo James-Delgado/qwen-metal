@@ -1,0 +1,11 @@
+# Pinned tool dependencies (regenerating fixtures with unpinned versions is a
+# bug — docs/phases/phase-0-1.md). Python: 3.14.6 (Homebrew, arm64 macOS).
+# Setup:  python3 -m venv tools/.venv && tools/.venv/bin/pip install -r tools/requirements.txt
+torch==2.13.0
+transformers==5.15.1
+tokenizers==0.22.2
+safetensors==0.8.0
+numpy==2.5.2
+huggingface_hub==1.28.0
+mlx==0.32.1
+mlx-lm==0.31.3
