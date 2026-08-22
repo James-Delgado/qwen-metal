@@ -16,9 +16,12 @@ Outputs: sustained GB/s + spread → results.md row + DECISIONS.md OPEN item.
 ## 2. MLX baseline (LLMEval)
 
 - Cloned 2026-08-22: `~/Projects/mlx-swift-examples` @ `378f2449` (record
-  this sha in each MLX row). LLM libraries come from the `mlx-swift-lm`
-  SPM dependency, resolved at 3.31.3 (`1c05248b`) per Package.resolved —
-  record that too.
+  this sha in each MLX row). LLM libraries come from the `mlx-swift-lm` SPM
+  dependency — record the `mlx-swift-lm` AND `mlx-swift` versions from
+  Package.resolved AS BUILT (Xcode may re-resolve minors on open; the fresh
+  clone resolved mlx-swift-lm 3.31.3/`1c05248b`, and a later resolution moved
+  mlx-swift 0.31.3→0.31.6 — whatever is in Package.resolved at build time is
+  the truth for the row).
 - **Exact overrides (verified against the source, 2026-08-22), both in
   `Applications/LLMEval/ViewModels/LLMEvaluator.swift`:**
   1. Line 50 — replace the registry default with the PIN-1 revision-pinned
