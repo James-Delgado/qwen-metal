@@ -15,16 +15,23 @@ Outputs: sustained GB/s + spread → results.md row + DECISIONS.md OPEN item.
 
 ## 2. MLX baseline (LLMEval)
 
-- Clone `ml-explore/mlx-swift-examples`; note the commit sha in the row.
-- Point LLMEval's model registry at the pinned checkpoint:
-  `mlx-community/Qwen3-1.7B-4bit` revision `3b1b1768` (PIN-1). Residual
-  provenance sanity check: confirm the app-downloaded config matches the
-  pinned revision (file hashes or config field spot-check).
-- **Overrides (parity pins):** temperature 0 / greedy (LLMEval defaults are
-  NOT greedy — change generation parameters); non-thinking mode (LLMEval's
-  Qwen3 template exposes a thinking toggle in recent revisions — if absent,
-  feed the rendered prompt form instead and note it); max tokens ≥ 600 for
-  decode rows.
+- Cloned 2026-08-22: `~/Projects/mlx-swift-examples` @ `378f2449` (record
+  this sha in each MLX row). LLM libraries come from the `mlx-swift-lm`
+  SPM dependency, resolved at 3.31.3 (`1c05248b`) per Package.resolved —
+  record that too.
+- **Exact overrides (verified against the source, 2026-08-22), both in
+  `Applications/LLMEval/ViewModels/LLMEvaluator.swift`:**
+  1. Line 50 — replace the registry default with the PIN-1 revision-pinned
+     checkpoint (`ModelConfiguration(id:revision:)` supports this;
+     `LLMRegistry.qwen3_1_7b_4bit` exists but tracks `main`):
+     `var modelConfiguration = ModelConfiguration(id: "mlx-community/Qwen3-1.7B-4bit", revision: "3b1b1768f8f8cf8351c712464f906e86c2b8269e")`
+  2. Line 54 — greedy: `temperature: 0.6` → `temperature: 0.0`.
+  No thinking edit needed: `enableThinking = false` is already the default
+  (line 20) and is passed via `additionalContext["enable_thinking"]`
+  (line 239) — still verify zero `<think>` content in outputs.
+  `maxTokens = 2048` default is fine (≥ 600 needed for decode rows).
+- Residual provenance sanity check: confirm the app-downloaded config matches
+  the pinned revision (file hashes or config field spot-check).
 - Rows: burst decode (canonical window 128–512, `decode-essay`), prefill
   (`prefill-summarize`), sustained (regenerate-loop ≥5 min, `decode-essay`),
   cold + warm variants, phys_footprint from the Xcode memory gauge.
