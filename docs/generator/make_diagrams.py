@@ -247,20 +247,30 @@ plt.savefig(f"{OUT}/d4_fused.png", dpi=200, bbox_inches="tight"); plt.close()
 # ----------------------------------------------------------------------------
 fig, ax = plt.subplots(figsize=(8.8, 4.6))
 bpt = np.linspace(0.4, 3.4, 300)  # GB per token
-for bw, c, ls in [(50, "#93c5fd", "--"), (60, BLUE, "-"), (70, "#1e40af", "--")]:
-    ax.plot(bpt, bw / bpt, color=c, ls=ls, lw=1.8, label=f"{bw} GB/s bandwidth")
-# markers
-ax.scatter([1.25], [60/1.25], s=70, color=ORANGE, zorder=5)
-ax.annotate("~2B @ 4-bit (this project)\nceiling ≈ 48–56 tok/s", (1.25, 48),
-            xytext=(1.5, 62), fontsize=8.5, color=ORANGE,
-            arrowprops=dict(arrowstyle="->", color=ORANGE))
-ax.scatter([3.1], [60/3.1], s=70, color=GRAY, zorder=5)
-ax.annotate("same model @ fp16\n≈ 19 tok/s ceiling", (3.1, 19.4), xytext=(2.45, 33),
+# Phase 0 (2026-08-22): planning curves replaced by MEASURED bandwidth —
+# 43.84 GB/s sustained triad (iPhone 15 Pro, DECISIONS.md); 51.2 = A17 Pro
+# rated, shown as context. Both engines measure at ~96-102% of the triad
+# figure (read-mostly traffic exceeds 2R+1W triad — BW-1 will bound it).
+for bw, c, ls, lab in [
+    (43.84, BLUE, "-", "43.84 GB/s (MEASURED triad, iPhone 15 Pro)"),
+    (51.2, "#93c5fd", "--", "51.2 GB/s (A17 Pro rated)"),
+]:
+    ax.plot(bpt, bw / bpt, color=c, ls=ls, lw=1.8, label=lab)
+ax.axhline(29.4, color=ORANGE, ls=":", lw=1.6)
+ax.text(2.6, 30.4, "committed target: 29.4 tok/s (= 0.75 × MLX measured)",
+        fontsize=8, color=ORANGE)
+# markers — measured Phase 0 rows (PROVISIONAL)
+ax.scatter([3.1], [43.84/3.1], s=70, color=GRAY, zorder=5)
+ax.annotate("same model @ fp16\n≈ 14 tok/s ceiling", (3.1, 14.1), xytext=(2.45, 44),
             fontsize=8.5, color=GRAY, arrowprops=dict(arrowstyle="->", color=GRAY))
-ax.scatter([1.1], [61], s=90, color=GREEN, marker="*", zorder=6)
-ax.annotate("MLX (published): ~61 tok/s\n(iPhone 17 Pro; provisional until\nPhase 0 rows land)", (1.1, 61),
-            xytext=(1.45, 84), fontsize=8.5, color=GREEN,
+ax.scatter([1.14], [39.2], s=90, color=GREEN, marker="*", zorder=6)
+ax.annotate("MLX (MEASURED, P0): 39.2 tok/s\nwarm burst @ ~1.14 GB/token —\nessentially on the roofline", (1.14, 39.2),
+            xytext=(1.5, 84), fontsize=8.5, color=GREEN,
             arrowprops=dict(arrowstyle="->", color=GREEN))
+ax.scatter([1.3], [32.44], s=70, color=ORANGE, zorder=6)
+ax.annotate("llama.cpp (MEASURED, P0): 32.4\n(Q4_K_M, 5.03 BPW → more bytes/token)", (1.3, 32.44),
+            xytext=(1.85, 60), fontsize=8.5, color=ORANGE,
+            arrowprops=dict(arrowstyle="->", color=ORANGE))
 ax.set_xlabel("Bytes read per generated token (GB)  ≈  packed weights + scales + KV reads", fontsize=9)
 ax.set_ylabel("Decode tokens / second (ceiling)", fontsize=9)
 ax.set_ylim(0, 130); ax.set_xlim(0.4, 3.4)
@@ -323,8 +333,8 @@ plt.savefig(f"{OUT}/d6_oracle.png", dpi=200, bbox_inches="tight"); plt.close()
 # ----------------------------------------------------------------------------
 fig, ax = plt.subplots(figsize=(9.4, 4.9))
 phases = [
-    ("0", "Baselines + toy kernels", "MLX & llama.cpp measured on-phone; saxpy + naive matmul; profiling workflow", 0, 1.5, GRAY, GRAYF),
-    ("1", "CPU fp32 reference (macOS)", "full Qwen forward pass; ≤1e-3 vs HF fp32 oracle; Accelerate matmuls", 1.0, 2.5, GREEN, GREENF),
+    ("0", "Baselines + toy kernels — DONE 2026-08-22", "measured: 43.84 GB/s; MLX 39.2 / llama.cpp 32.4 tok/s; target 29.4; energy 0.104/0.131 J/tok", 0, 1.5, GREEN, GREENF),
+    ("1", "CPU fp32 reference (macOS) — IN PROGRESS", "fixtures + tools landed (P1-1); parser, sgemm wrapper, modules, decode loop next", 1.0, 2.5, GREEN, GREENF),
     ("2", "Naive Metal port + minimal KV cache", "incremental decode on-device; cached ≡ uncached logits; 'before' row", 3.0, 2.0, BLUE, BLUEF),
     ("3", "4-bit quant + fused dequant-matvec", "CPU-quant oracle; tile test exact; matvec GB/s microbench; quality gate; roofline check", 4.5, 2.5, ORANGE, ORANGEF),
     ("4", "Fused attention + kernel fusion", "GQA SDPA kernel; fold norm/RoPE; dispatches/token down", 6.5, 2.5, ORANGE, ORANGEF),

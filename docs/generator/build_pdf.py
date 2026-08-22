@@ -65,7 +65,7 @@ def footer(canvas, doc):
     canvas.setFont("Helvetica", 7.5)
     canvas.setFillColor(GRAY)
     canvas.drawString(0.75 * inch, 0.45 * inch,
-                      "qwen-metal — Architecture & System Design  ·  v1.2  ·  2026-08-21")
+                      "qwen-metal — Architecture & System Design  ·  v1.3  ·  2026-08-22")
     canvas.drawRightString(letter[0] - 0.75 * inch, 0.45 * inch, f"Page {doc.page}")
     canvas.setStrokeColor(colors.HexColor("#e2e8f0"))
     canvas.line(0.75 * inch, 0.62 * inch, letter[0] - 0.75 * inch, 0.62 * inch)
@@ -86,7 +86,7 @@ S.append(Paragraph("Architecture &amp; System Design Document", ParagraphStyle(
 S.append(Paragraph("A from-scratch, single-model LLM inference engine in Swift + Metal for iPhone — "
                    "Qwen ~1.5–2B, 4-bit quantized — benchmarked head-to-head against MLX Swift and "
                    "llama.cpp on the same physical device.", SUB))
-S.append(Paragraph("Version 1.2 · August 21, 2026 · Companion to PLAN.md, CLAUDE.md, DECISIONS.md, and the phase specs. "
+S.append(Paragraph("Version 1.3 · August 22, 2026 (Phase 0 exit) · Companion to PLAN.md, CLAUDE.md, DECISIONS.md, and the phase specs. "
                    "Where this document and DECISIONS.md disagree, DECISIONS.md (the append-only log) wins.", CAP))
 S.append(HRFlowable(width="100%", color=INK, thickness=1.2, spaceAfter=10))
 
@@ -101,12 +101,12 @@ S.append(Paragraph(
     "writeup comparing it against the two incumbent runtimes, MLX Swift and llama.cpp, on identical hardware with a "
     "roofline analysis explaining every gap.", BODY))
 S.append(Paragraph(
-    "The performance goal is calibrated by physics rather than ambition: MLX already decodes a ~2B 4-bit model at "
-    "roughly 61 tok/s on an iPhone 17 Pro (published figure — provisional until Phase 0's local rows), which sits "
-    "essentially at the memory-bandwidth roofline (§5). Matching it is therefore not required for success. The committed "
-    "target is absolute: decode ≥ 0.75 × MLX's decode tok/s as measured on our device in the same session, at the "
-    "canonical measurement window (generated tokens 128–512); the concrete number is pinned in DECISIONS.md at Phase 0 "
-    "exit. Being able to account for the remaining gap is the point.", BODY))
+    "The performance goal is calibrated by physics rather than ambition: MLX decodes the pinned Qwen3-1.7B 4-bit "
+    "checkpoint at a <b>measured 39.2 tok/s</b> warm-burst on the project's iPhone 15 Pro (Phase 0 row, PROVISIONAL), "
+    "which sits essentially at the measured memory-bandwidth roofline (§5). Matching it is therefore not required for "
+    "success. The committed target is absolute and now pinned (DECISIONS.md, Phase 0 exit): decode ≥ 0.75 × MLX's "
+    "measured decode tok/s = <b>29.4 tok/s</b>, both sides measured in the same session at the canonical measurement "
+    "window (generated tokens 128–512). Being able to account for the remaining gap is the point.", BODY))
 S.append(Paragraph("1.1 · Non-goals (scope is a feature)", H2))
 S.append(Paragraph(
     "Breadth is where mature engines spend most of their engineering, and it teaches little per hour invested. Each "
@@ -175,7 +175,8 @@ S.append(Paragraph("4 · Memory Architecture", H1))
 S.append(Paragraph(
     "iPhone inference runs inside two unusual memory constraints. Unified memory means CPU and GPU share one physical "
     "DRAM pool — there are no host-device copies, and an MTLBuffer in shared storage is directly visible to both sides — "
-    "but also one shared bandwidth budget on the order of 50–70 GB/s. And iOS enforces a per-app ceiling well below the "
+    "but also one shared bandwidth budget — measured at 43.84 GB/s sustained on the pinned iPhone 15 Pro (Phase 0 "
+    "triad; A17 Pro rated 51.2). And iOS enforces a per-app ceiling well below the "
     "device's 8 GB: exceed it and the OS terminates the process (\"jetsam\") without ceremony. The engine therefore "
     "treats memory as a budgeted resource with a static plan, shown in Figure 3: every allocation is accounted before "
     "it is written, weights are memory-mapped so their pages are clean and file-backed (which iOS's memory accounting "
@@ -210,17 +211,20 @@ S += fig(f"{D}/d4_fused.png", CW,
          "units; both paths do fp16/fp32 math — the difference is whether dequantized values live in registers or DRAM.")
 S.append(Paragraph("5.2 · Roofline: what the numbers must mean", H2))
 S.append(Paragraph(
-    "Figure 5 plots the ceiling. A ~2B model at 4-bit reads ≈1.1–1.3 GB per token (packed weights + scales + cache), "
-    "putting the ceiling near 50–60 tok/s at iPhone-class bandwidth — exactly where MLX's published ~61 tok/s lands, "
-    "which is the evidence that MLX is already near the physical limit and that our target must be framed relative to "
-    "its measured speed, not beating physics. Phase 0 replaces both numbers: the bandwidth curves with the on-device "
-    "triad measurement, the MLX point with our own local rows. The same chart shows why quantization is worth ~3× by itself (fp16 weights triple the "
+    "Figure 5 plots the ceiling with Phase 0's measured numbers (DECISIONS.md 2026-08-22). A ~2B model at 4-bit reads "
+    "≈1.1–1.3 GB per token (packed weights + scales + cache), putting the ceiling near 34–44 tok/s at the measured "
+    "43.84 GB/s — and the measured engine rows land essentially on it: MLX 39.2 tok/s (~1.14 GB/token) and llama.cpp "
+    "32.4 tok/s (Q4_K_M's 5.03 bits/weight costs more bytes/token). Both operate at ~96–102% of the triad figure, "
+    "which is itself a finding: decode traffic is read-dominated and a 2-read+1-write triad slightly understates "
+    "read-mostly achievable bandwidth (backlog task BW-1 bounds this with a read-only variant). MLX being on the "
+    "physical limit is the evidence that the target must be framed relative to its measured speed, not beating "
+    "physics. The same chart shows why quantization is worth ~3× by itself (fp16 weights triple the "
     "denominator), and it gives every future benchmark number a place to stand: a result is explained when its distance "
     "from the roofline is attributed to identified causes (dispatch overhead, unfused ops, cache traffic), and suspect "
     "when it exceeds it.", BODY))
 S += fig(f"{D}/d5_roofline.png", CW * 0.92,
-         "Figure 5 — Decode roofline. Curves are ceilings at three plausible bandwidths; markers show this project's "
-         "operating point, the fp16 counterfactual, and MLX's published measurement.")
+         "Figure 5 — Decode roofline with measured Phase 0 values: the 43.84 GB/s sustained triad curve, the measured "
+         "MLX and llama.cpp rows, the committed 29.4 tok/s target, and the fp16 counterfactual.")
 S.append(Paragraph(
     "Prefill obeys different physics: processing the whole prompt at once is matrix-matrix work in which each weight "
     "read is reused across all prompt positions, so it is compute-bound and rewards classical GEMM engineering — "
@@ -377,8 +381,8 @@ S.append(Paragraph(
     "first-contact point where it gets measured rather than assumed.", BODY))
 S.append(table([
     ["Risk", "Exposure", "First contact / mitigation"],
-    ["Actual device bandwidth and jetsam ceiling differ from planning estimates", "Roofline targets and memory budget shift", "Phase 0 baselines + Phase 2 on-device runs replace all estimates with measurements; PLAN.md figures are explicitly provisional"],
-    ["MLX/llama.cpp baseline numbers off published figures (different device, model rev, thermal state)", "Gap-closing target mis-calibrated", "Phase 0 measures both on our device; published numbers are discarded once local rows exist"],
+    ["Actual device bandwidth and jetsam ceiling differ from planning estimates", "Roofline targets and memory budget shift", "CLOSED for bandwidth: Phase 0 measured 43.84 GB/s (2026-08-22). Memory ceiling: Phase 2 on-device runs; phys_footprint's mmap accounting asymmetry is recorded"],
+    ["MLX/llama.cpp baseline numbers off published figures (different device, model rev, thermal state)", "Gap-closing target mis-calibrated", "CLOSED: Phase 0 measured both on-device (39.2 / 32.4 tok/s warm-burst, PROVISIONAL); target 29.4 committed from local rows"],
     ["Tokenizer or chat-template mismatch vs HF reference", "Phase 1 logit test fails for non-engine reasons", "Spec mandates matching the Python tokenizer on fixtures and logging discrepancies before touching engine code"],
     ["swift-transformers / mlx-swift API drift by build time", "Integration friction", "Agent instructed to log and surface conflicts (CLAUDE.md), never silently work around"],
     ["Thermal throttling makes sustained numbers device-state-sensitive", "Noisy benchmark rows", "Protocol pins starting temperature and reports burst/sustained separately; spread published, not hidden"],
@@ -388,7 +392,7 @@ S.append(Spacer(1, 10))
 S.append(HRFlowable(width="100%", color=colors.HexColor("#e2e8f0"), thickness=0.8, spaceAfter=6))
 S.append(Paragraph(
     "Document lineage: this PDF renders the state of PLAN.md, CLAUDE.md, docs/phases/phase-0-1.md, and "
-    "DECISIONS.md as of 2026-08-21 into one navigable artifact. It is a snapshot: when the build produces new "
+    "DECISIONS.md as of 2026-08-22 (Phase 0 exit) into one navigable artifact. It is a snapshot: when the build produces new "
     "measurements or decisions, DECISIONS.md is updated first and this document is regenerated from it, not edited "
     "independently.", CAP))
 
