@@ -1,7 +1,7 @@
 From 97e552a3eefbd1c1692e4bd100d38a3635a7b7cc Mon Sep 17 00:00:00 2001
 From: James-Delgado <jado650@berkeley.edu>
 Date: Sat, 22 Aug 2026 13:00:32 -0400
-Subject: [PATCH] qwen-metal P0A-1: measurement-grade + parity patches for
+Subject: [PATCH 1/2] qwen-metal P0A-1: measurement-grade + parity patches for
  llama.swiftui
 
 Greedy sampler (parity pin); parse_special tokenization for rendered
@@ -340,6 +340,113 @@ index 1c3cd9d..6504783 100644
      func bench() {
          Task {
              await llamaState.bench()
+-- 
+2.50.1 (Apple Git-155)
+
+
+From bceddff315a41aec79a59ddc54f88c0de9a9df05 Mon Sep 17 00:00:00 2001
+From: James-Delgado <jado650@berkeley.edu>
+Date: Sat, 22 Aug 2026 13:09:37 -0400
+Subject: [PATCH 2/2] qwen-metal P0A-1: sustained regenerate-loop for the
+ energy protocol
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Loop/Stop button repeating greedy generation with cumulative counters;
+no per-token UI updates — only one status-line refresh per generation.
+---
+ .../llama.swiftui/Models/LlamaState.swift     | 41 +++++++++++++++++++
+ .../llama.swiftui/UI/ContentView.swift        | 15 ++++++-
+ 2 files changed, 55 insertions(+), 1 deletion(-)
+
+diff --git a/examples/llama.swiftui/llama.swiftui/Models/LlamaState.swift b/examples/llama.swiftui/llama.swiftui/Models/LlamaState.swift
+index b2bafd9..9a2685f 100644
+--- a/examples/llama.swiftui/llama.swiftui/Models/LlamaState.swift
++++ b/examples/llama.swiftui/llama.swiftui/Models/LlamaState.swift
+@@ -11,6 +11,9 @@ struct Model: Identifiable {
+ @MainActor
+ class LlamaState: ObservableObject {
+     @Published var messageLog = ""
++    // qwen-metal P0A-1 energy protocol: sustained regenerate-loop state
++    @Published var looping = false
++    @Published var loopStatus = ""
+     @Published var cacheCleared = false
+     @Published var downloadedModels: [Model] = []
+     @Published var undownloadedModels: [Model] = []
+@@ -184,6 +187,44 @@ class LlamaState: ObservableObject {
+         }
+     }
+ 
++    // qwen-metal P0A-1 energy protocol: repeat greedy generation with the
++    // same prompt until stopped. NO per-token UI updates — only the
++    // cumulative counter line refreshes once per generation, so the loop
++    // measures the engine, not SwiftUI.
++    func startLoop(text: String) {
++        guard !looping, let llamaContext else { return }
++        looping = true
++        loopStatus = "LOOP starting..."
++        Task {
++            var generations = 0
++            var cumulativeTokens: Int32 = 0
++            var firstTps = 0.0
++            let wallStart = Date()
++            while looping {
++                let t0 = DispatchTime.now().uptimeNanoseconds
++                await llamaContext.completion_init(text: text)
++                while await !llamaContext.is_done {
++                    _ = await llamaContext.completion_loop()
++                }
++                let seconds = Double(DispatchTime.now().uptimeNanoseconds - t0) / NS_PER_S
++                let n = await llamaContext.n_decode
++                await llamaContext.clear()
++                let tps = seconds > 0 ? Double(n) / seconds : 0
++                generations += 1
++                cumulativeTokens += n
++                if generations == 1 { firstTps = tps }
++                let wall = Date().timeIntervalSince(wallStart)
++                loopStatus = String(
++                    format: "LOOP %d gens | %d tokens | %.0fs wall | first %.2f t/s | last %.2f t/s",
++                    generations, cumulativeTokens, wall, firstTps, tps)
++            }
++        }
++    }
++
++    func stopLoop() {
++        looping = false
++    }
++
+     func bench() async {
+         guard let llamaContext else {
+             return
+diff --git a/examples/llama.swiftui/llama.swiftui/UI/ContentView.swift b/examples/llama.swiftui/llama.swiftui/UI/ContentView.swift
+index 6504783..03a9347 100644
+--- a/examples/llama.swiftui/llama.swiftui/UI/ContentView.swift
++++ b/examples/llama.swiftui/llama.swiftui/UI/ContentView.swift
+@@ -53,9 +53,22 @@ struct ContentView: View {
+                     Button("Load prefill prompt") {
+                         loadBundledPrompt("prefill-summarize.rendered")
+                     }
++                    // qwen-metal P0A-1: sustained regenerate-loop toggle
++                    // (energy protocol) — uses the current field content
++                    Button(llamaState.looping ? "Stop" : "Loop") {
++                        if llamaState.looping {
++                            llamaState.stopLoop()
++                        } else {
++                            llamaState.startLoop(text: multiLineText)
++                        }
++                    }
+                 }
+                 .buttonStyle(.bordered)
+-                .padding(.bottom)
++
++                if !llamaState.loopStatus.isEmpty {
++                    Text(llamaState.loopStatus)
++                        .font(.footnote.monospaced())
++                }
+ 
+                 NavigationLink(destination: DrawerView(llamaState: llamaState)) {
+                     Text("View Models")
 -- 
 2.50.1 (Apple Git-155)
 
