@@ -1,7 +1,8 @@
 From 47c36a0f044b14428202d41f90d297d7332868d4 Mon Sep 17 00:00:00 2001
 From: James-Delgado <jado650@berkeley.edu>
 Date: Sat, 22 Aug 2026 13:03:29 -0400
-Subject: [PATCH] qwen-metal P0A-1: parity pins + sustained loop for LLMEval
+Subject: [PATCH 1/2] qwen-metal P0A-1: parity pins + sustained loop for
+ LLMEval
 
 Revision-pinned mlx-community/Qwen3-1.7B-4bit@3b1b1768; greedy (temp 0);
 sustained regenerate-loop toggle with cumulative token counters (energy
@@ -142,6 +143,86 @@ index 30b3e81..96b9fa1 100644
        }
      },
      {
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 992118bfc8c8aedf5343e59c0fe1734b7bf6b028 Mon Sep 17 00:00:00 2001
+From: James-Delgado <jado650@berkeley.edu>
+Date: Sat, 22 Aug 2026 13:21:09 -0400
+Subject: [PATCH 2/2] =?UTF-8?q?qwen-metal=20P0A-1:=20Loop=20control=20inli?=
+ =?UTF-8?q?ne=20=E2=80=94=20no=20NavigationStack,=20toolbar=20items=20neve?=
+ =?UTF-8?q?r=20render?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ Applications/LLMEval/Views/ContentView.swift | 43 ++++++++++----------
+ 1 file changed, 22 insertions(+), 21 deletions(-)
+
+diff --git a/Applications/LLMEval/Views/ContentView.swift b/Applications/LLMEval/Views/ContentView.swift
+index 59dcea9..b0978e6 100644
+--- a/Applications/LLMEval/Views/ContentView.swift
++++ b/Applications/LLMEval/Views/ContentView.swift
+@@ -60,13 +60,29 @@ struct ContentView: View {
+                 peakMemory: deviceStat.gpuUsage.peakMemory
+             )
+ 
+-            // qwen-metal P0A-1: sustained-loop cumulative counters
+-            // (energy protocol — total tokens over the burn window)
+-            if !llm.loopStatus.isEmpty {
+-                Text(llm.loopStatus)
+-                    .font(.footnote.monospaced())
+-                    .padding(.top, 4)
++            // qwen-metal P0A-1: sustained regenerate-loop control + cumulative
++            // counters (energy protocol). Inline, NOT a toolbar item — this
++            // view has no NavigationStack, so toolbar items never render.
++            HStack {
++                Button {
++                    if llm.looping {
++                        llm.stopSustainedLoop()
++                    } else {
++                        llm.startSustainedLoop()
++                    }
++                } label: {
++                    Label(
++                        llm.looping ? "Stop Loop" : "Loop",
++                        systemImage: llm.looping ? "stop.circle" : "repeat.circle")
++                }
++                .buttonStyle(.bordered)
++
++                if !llm.loopStatus.isEmpty {
++                    Text(llm.loopStatus)
++                        .font(.footnote.monospaced())
++                }
+             }
++            .padding(.top, 4)
+         }
+         #if os(visionOS)
+             .padding(40)
+@@ -86,21 +102,6 @@ struct ContentView: View {
+                 .labelStyle(.titleAndIcon)
+             }
+ 
+-            // qwen-metal P0A-1: sustained regenerate-loop toggle
+-            ToolbarItem(placement: .primaryAction) {
+-                Button {
+-                    if llm.looping {
+-                        llm.stopSustainedLoop()
+-                    } else {
+-                        llm.startSustainedLoop()
+-                    }
+-                } label: {
+-                    Label(
+-                        llm.looping ? "Stop Loop" : "Loop",
+-                        systemImage: llm.looping ? "stop.circle" : "repeat.circle")
+-                }
+-                .labelStyle(.titleAndIcon)
+-            }
+         }
+         .task {
+             do {
 -- 
 2.50.1 (Apple Git-155)
 
