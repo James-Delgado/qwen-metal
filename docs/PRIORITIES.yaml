@@ -386,8 +386,9 @@ tasks:
   - id: CFG-1
     rank: 13.1
     title: "Harden ModelConfig numeric validation (positiveInt 2^63 boundary, intList bound, double() finiteness)"
-    status: in_progress
+    status: done
     started_at: 2026-08-23T21:05:00Z
+    completed_at: 2026-08-23T21:20:00Z
     depends_on: []
     blocks: []
     deliverable:
@@ -408,6 +409,13 @@ tasks:
       RANK BUMPED 26 -> 13.1 on 2026-08-23 (decided by James): all three
       audit tasks land before any Phase 2 decode work; fractional ranks slot
       them after AUDIT-1 (13) without renumbering the chain (IO-1 precedent).
+      2026-08-23 (done): landed as one validation-layer diff — integer
+      fields via Int(exactly:) (rejects 2^63/out-of-range, still accepts
+      Int.max), rms_norm_eps/rope_theta via positiveFiniteDouble
+      (isFinite && > 0), intList same Int(exactly:) bound. 6 new
+      ModelConfigTests (red-first: 9 failures reproduced the audit claims).
+      Suite minus logit gate: 119 tests, 0 failures. See DECISIONS.md
+      2026-08-23 CFG-1 entry.
 
   - id: EOS-1
     rank: 13.2

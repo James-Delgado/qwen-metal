@@ -165,6 +165,102 @@ final class ModelConfigTests: XCTestCase {
         }
     }
 
+    // MARK: - CFG-1: numeric bounds/finiteness (docs/AUDIT.md F1/F3/F4)
+
+    /// Serializes `qwen3Dict()` minus `key`, then splices `"key": <literal>`
+    /// back in as raw JSON text — for number literals a Swift dictionary
+    /// cannot carry losslessly (2^63, 10^20, 1e999).
+    private func jsonData(overriding key: String, withRawLiteral literal: String) throws -> Data {
+        var dict = qwen3Dict()
+        dict.removeValue(forKey: key)
+        var text = String(decoding: try JSONSerialization.data(withJSONObject: dict), as: UTF8.self)
+        precondition(text.hasSuffix("}"))
+        text.removeLast()
+        text += ",\"\(key)\":\(literal)}"
+        return Data(text.utf8)
+    }
+
+    private func assertThrowsInvalidValue(
+        _ data: Data, key expectedKey: String,
+        _ message: @autoclosure () -> String = "",
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        XCTAssertThrowsError(
+            try ModelConfig(jsonData: data), message(), file: file, line: line
+        ) { error in
+            guard case ModelConfigError.invalidValue(let key, _) = error else {
+                return XCTFail(
+                    "Expected .invalidValue(\(expectedKey)), got \(error) \(message())",
+                    file: file, line: line)
+            }
+            XCTAssertEqual(key, expectedKey, message(), file: file, line: line)
+        }
+    }
+
+    func testPositiveIntRejectsExactlyTwoToThe63() throws {
+        // AUDIT F1: Double(Int.max) rounds UP to 2^63, so the old inclusive
+        // `<= Double(Int.max)` admitted exactly 2^63; NSNumber.intValue then
+        // wrapped it to Int.min, trapping later in QwenModel.init.
+        for key in ["num_hidden_layers", "num_attention_heads"] {
+            assertThrowsInvalidValue(
+                try jsonData(overriding: key, withRawLiteral: "9223372036854775808"),
+                key: key, "for \(key) = 2^63")
+        }
+    }
+
+    func testPositiveIntRejectsValuesBeyondIntRange() throws {
+        for literal in ["100000000000000000000", "1e20"] {
+            assertThrowsInvalidValue(
+                try jsonData(overriding: "num_attention_heads", withRawLiteral: literal),
+                key: "num_attention_heads", "for literal \(literal)")
+        }
+    }
+
+    func testPositiveIntStillAcceptsIntMax() throws {
+        // Int.max is a representable positive integer and must stay accepted:
+        // a strict `< Double(2^63)` comparison would wrongly reject it, since
+        // Double cannot distinguish Int.max from 2^63.
+        let data = try jsonData(
+            overriding: "max_position_embeddings", withRawLiteral: "9223372036854775807")
+        XCTAssertEqual(try ModelConfig(jsonData: data).maxPositionEmbeddings, Int.max)
+    }
+
+    func testDoubleFieldsRejectZeroAndNegative() throws {
+        // AUDIT F3: negative rms_norm_eps -> NaN via sqrt(negative) in
+        // RMSNorm; negative rope_theta -> NaN via powf(negative, fractional)
+        // in RoPE. NaN logits then decode as silent garbage.
+        for (key, literal) in [
+            ("rms_norm_eps", "-1e-06"), ("rms_norm_eps", "0"),
+            ("rope_theta", "-1000000"), ("rope_theta", "0"),
+        ] {
+            assertThrowsInvalidValue(
+                try jsonData(overriding: key, withRawLiteral: literal),
+                key: key, "for \(key) = \(literal)")
+        }
+    }
+
+    func testDoubleFieldsRejectOverflowingLiterals() throws {
+        // 1e999 overflows Double. Whether the JSON parser surfaces +inf or
+        // rejects the literal, ModelConfig must throw a ModelConfigError
+        // rather than carry a non-finite value into RMSNorm/RoPE.
+        for key in ["rms_norm_eps", "rope_theta"] {
+            let data = try jsonData(overriding: key, withRawLiteral: "1e999")
+            XCTAssertThrowsError(try ModelConfig(jsonData: data), key) { error in
+                XCTAssertTrue(error is ModelConfigError, "for \(key): got \(error)")
+            }
+        }
+    }
+
+    func testEOSTokenIdRejectsOutOfRangeIds() throws {
+        // AUDIT F4: intList lacked the range check its sibling positiveInt
+        // performs — 1e20 silently became Int.max, 10^20 wraparound garbage.
+        for literal in ["1e20", "100000000000000000000", "[151645, 9223372036854775808]"] {
+            assertThrowsInvalidValue(
+                try jsonData(overriding: "eos_token_id", withRawLiteral: literal),
+                key: "eos_token_id", "for literal \(literal)")
+        }
+    }
+
     // MARK: - Malformed input / file loading
 
     func testMalformedJSONThrows() throws {

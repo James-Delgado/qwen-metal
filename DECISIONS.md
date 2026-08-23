@@ -849,3 +849,32 @@ bug signal, never a tolerance-adjustment signal.
   tokenizer lineage the Phase 2 diffs depend on. Fractional ranks after
   AUDIT-1 (13), IO-1 precedent — phase chain unrenumbered; SPEC-P2 stays
   ready at rank 14 and simply picks up after the three fixes.
+
+## 2026-08-23 — CFG-1: ModelConfig numeric validation hardened (audit F1+F3+F4)
+
+- **What landed:** one diff in the config validation layer
+  (Sources/QwenMetalEngine/IO/ModelConfig.swift) + 6 new edge-case tests
+  (ModelConfigTests, red-first). No public API signature changed; the init
+  strictly narrows what it accepts — configs that previously crashed
+  (SIGTRAP in QwenModel.init) or silently produced NaN logits now throw
+  ModelConfigError.invalidValue naming the key.
+- **Validation semantics chosen:** integer fields validate via
+  `Int(exactly: NSNumber)` — no Double round-trip. This closes the F1
+  boundary (2^63 no longer admitted; NSNumber.intValue wrap to Int.min is
+  unreachable) while still accepting Int.max itself, which the audit's
+  alternative (strict `< Double(2^63)` compare) would wrongly reject
+  because Double cannot distinguish Int.max from 2^63 — a test pins this
+  (testPositiveIntStillAcceptsIntMax). intList (eos_token_id) uses the
+  same Int(exactly:) bound (F4). rms_norm_eps/rope_theta go through a new
+  `positiveFiniteDouble` (`isFinite && > 0`), so negative/zero/inf values
+  throw instead of NaN-ing RMSNorm/RoPE (F3).
+- **Observation:** literal `1e999` never reaches the finiteness guard on
+  this platform — JSONSerialization rejects it as malformed JSON. The test
+  (testDoubleFieldsRejectOverflowingLiterals) asserts only "throws a
+  ModelConfigError", so the invariant (no non-finite value passes) holds
+  under either parser behavior.
+- **No gates touched:** these are exact throw-behavior tests, not numeric
+  tolerances; no fixtures or pinned invariants involved.
+- **Verification:** ModelConfigTests 20/20 green (9 red before the fix,
+  matching the audit's claims exactly); full suite minus the ~32-min logit
+  phase-exit gate (untouched layer): 119 tests, 0 failures, 21s.

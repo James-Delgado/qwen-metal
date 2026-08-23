@@ -79,8 +79,8 @@ public struct ModelConfig: Equatable {
         numAttentionHeads = try Self.positiveInt(dict, "num_attention_heads")
         numKeyValueHeads = try Self.positiveInt(dict, "num_key_value_heads")
         intermediateSize = try Self.positiveInt(dict, "intermediate_size")
-        rmsNormEps = try Self.double(dict, "rms_norm_eps")
-        ropeTheta = try Self.double(dict, "rope_theta")
+        rmsNormEps = try Self.positiveFiniteDouble(dict, "rms_norm_eps")
+        ropeTheta = try Self.positiveFiniteDouble(dict, "rope_theta")
         vocabSize = try Self.positiveInt(dict, "vocab_size")
         tieWordEmbeddings = try Self.bool(dict, "tie_word_embeddings")
         maxPositionEmbeddings = try Self.positiveInt(dict, "max_position_embeddings")
@@ -146,11 +146,18 @@ public struct ModelConfig: Equatable {
         return value
     }
 
-    private static func double(_ dict: [String: Any], _ key: String) throws -> Double {
+    /// Both callers (`rms_norm_eps`, `rope_theta`) feed sqrt/pow radicands;
+    /// zero, negative, or non-finite values reach the logits as silent NaN.
+    private static func positiveFiniteDouble(_ dict: [String: Any], _ key: String) throws -> Double {
         guard let value = try present(dict, key) as? NSNumber else {
             throw ModelConfigError.invalidValue(key: key, detail: "expected a number")
         }
-        return value.doubleValue
+        let double = value.doubleValue
+        guard double.isFinite, double > 0 else {
+            throw ModelConfigError.invalidValue(
+                key: key, detail: "expected a positive finite number, got \(value)")
+        }
+        return double
     }
 
     /// `eos_token_id` arrives as a single id or a list of ids in HF configs;
@@ -159,12 +166,12 @@ public struct ModelConfig: Equatable {
         let values: [Any] = (raw as? [Any]) ?? [raw]
         return try values.map { value in
             guard let number = value as? NSNumber,
-                  number.doubleValue.rounded() == number.doubleValue,
-                  number.doubleValue >= 0 else {
+                  let id = Int(exactly: number),
+                  id >= 0 else {
                 throw ModelConfigError.invalidValue(
                     key: key, detail: "expected a token id or list of token ids")
             }
-            return number.intValue
+            return id
         }
     }
 
@@ -172,11 +179,13 @@ public struct ModelConfig: Equatable {
         guard let value = try present(dict, key) as? NSNumber else {
             throw ModelConfigError.invalidValue(key: key, detail: "expected a number")
         }
-        let asDouble = value.doubleValue
-        guard asDouble.rounded() == asDouble, asDouble >= 1, asDouble <= Double(Int.max) else {
+        // Int(exactly:) checks integrality and Int range without the Double
+        // round-trip whose inclusive Int.max bound admitted exactly 2^63
+        // (Double(Int.max) rounds up to it, and intValue wraps to Int.min).
+        guard let int = Int(exactly: value), int >= 1 else {
             throw ModelConfigError.invalidValue(
                 key: key, detail: "expected a positive integer, got \(value)")
         }
-        return value.intValue
+        return int
     }
 }
