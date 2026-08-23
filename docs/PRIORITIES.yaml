@@ -609,8 +609,10 @@ tasks:
     est_complexity: medium
     notes: |
       Spec D8: generate + benchmark screens, mmap/wired toggle, Increased
-      Memory Limit entitlement, row-field export. Agents never deploy/run
-      on device.
+      Memory Limit entitlement, row-field export. Tester-friction controls
+      (James, 2026-08-23): quick-load buttons for the two pinned prompts
+      (bundled in-app) + Regenerate button (re-runs last generation; manual
+      form of the sustained loop). Agents never deploy/run on device.
 
   - id: P2-7
     rank: 14.7
@@ -643,6 +645,10 @@ tasks:
       2026-08-23: concrete tasks P2-1..P2-7 seeded by SPEC-P2; this became
       the exit-criteria walk + DECISIONS close-out (was: milestone
       placeholder). Includes on-device work by James (P2-7).
+      2026-08-23 (James): the close-out ALSO regenerates docs/architecture
+      .pdf per the CLAUDE.md upkeep rule — folded into the phase-exit
+      milestone so it can't slip again (Phase 1 slipped; DOC-1 is that
+      catch-up). Pattern carries to future *-EXEC milestones.
 
   - id: SPEC-P3
     rank: 16

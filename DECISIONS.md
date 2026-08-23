@@ -1034,3 +1034,19 @@ loosen).
   was last regenerated at Phase 0 exit (v1.3) — Phase 1 exit, the audit
   fixes, and this spec are not reflected. Not silently ignored: follow-up
   DOC-1 seeded to regenerate it.
+
+## 2026-08-23 — SPEC-P2 review refinements (decided by James)
+
+Two refinements from James's review of the Phase 2 spec; folded into
+docs/phases/phase-2.md (D8) and docs/PRIORITIES.yaml (P2-6, P2-EXEC):
+
+- **Architecture PDF regeneration rides the phase-exit milestone.** The
+  CLAUDE.md upkeep rule already mandates regeneration at each phase end, but
+  Phase 1 slipped (DOC-1 is the catch-up). Enforcement placement fixed:
+  P2-EXEC's close-out — and future *-EXEC milestones — explicitly include
+  the PDF regen, so it cannot silently slip again.
+- **QwenMetalApp tester-friction controls:** one-tap quick-load buttons for
+  the two pinned benchmark prompts (bundled in-app — the P0A-1 clipboard
+  lesson) and a Regenerate button re-running the last generation from the
+  same prompt (the manual form of the pinned sustained regenerate-loop
+  protocol). Reduces friction for the on-device runs James performs.

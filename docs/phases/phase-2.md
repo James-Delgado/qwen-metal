@@ -138,8 +138,12 @@ the package — none in the app). Screens: generate (prompt → text, backend
 fixed to GPU) and benchmark (runs the pinned protocol: burst decode-essay,
 sustained 5-min regenerate loop, residency-mode toggle mmap/wired; displays and
 exports the row fields incl. per-token timing summary and dispatch count).
-Increased Memory Limit entitlement. Agents build it; James signs, deploys, and
-runs — never agents (standing rule).
+Tester-friction controls (decided by James, 2026-08-23): one-tap quick-load
+buttons for the two pinned prompts (decode-essay, prefill-summarize — bundled
+in-app, the P0A-1 clipboard lesson) and a **Regenerate** button that re-runs
+the last generation from the same prompt (also the manual form of the
+sustained regenerate-loop protocol). Increased Memory Limit entitlement.
+Agents build it; James signs, deploys, and runs — never agents (standing rule).
 
 ## Memory budget (Phase 2 is the project's high-water mark)
 
