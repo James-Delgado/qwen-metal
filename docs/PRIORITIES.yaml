@@ -281,7 +281,8 @@ tasks:
   - id: P1-4
     rank: 11
     title: "CPU modules (family-correct) + per-module activation tests"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-23T01:28:45Z
     depends_on: [P1-1, P1-2, P1-3]
     blocks: [P1-5]
     deliverable:
