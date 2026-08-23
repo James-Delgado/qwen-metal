@@ -420,7 +420,8 @@ tasks:
   - id: EOS-1
     rank: 13.2
     title: "Union generation_config.json eos_token_id into the decode stop set (missing 151643)"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-23T21:35:00Z
     depends_on: []
     blocks: []
     deliverable:
