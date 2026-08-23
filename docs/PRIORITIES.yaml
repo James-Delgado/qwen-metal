@@ -337,8 +337,9 @@ tasks:
   - id: P1-5
     rank: 12
     title: "Decode loop + CLI + full logit-match suite + tokenizer equivalence (Phase 1 exit)"
-    status: in_progress
+    status: done
     started_at: 2026-08-23T16:05:00Z
+    completed_at: 2026-08-23T20:15:00Z
     depends_on: [P1-4]
     blocks: [AUDIT-1, SPEC-P2]
     deliverable:
@@ -348,12 +349,23 @@ tasks:
     notes: |
       Phase 1 exit criteria per phase-0-1.md. Closes with a DECISIONS.md entry
       (tokenizer observations, family notes).
+      2026-08-23: landed as Sources/QwenMetalEngine/{Decode/DecodeLoop,
+      Decode/QwenModel+Decode,Tokenizer/TextTokenizer,IO/ModelDirectory}.swift
+      + CLI `generate` + LogitMatchSuiteTests (5 prompts x 50 teacher-forced
+      steps: full-vocab checkpoints, per-step fingerprints/top-64/tie-aware
+      argmax) + TokenizerEquivalenceTests + DecodeLoop/ModelDirectory edge
+      tests. Gates pre-committed in DECISIONS.md before tests; ALL held
+      unmodified first run. swift-transformers pinned exact 1.3.3; tokenizer
+      ids identical to Python on all 5 prompts. Full suite 118 tests, 0
+      failures (32 min debug — logit suite dominates; see DEV-1). CLI verified:
+      coherent text, empty-prompt usage error, >4K-context clear error.
+      Phase 1 EXITED. See DECISIONS.md 2026-08-23 P1-5 entries.
 
   # ---------- Cross-cutting ----------
   - id: AUDIT-1
     rank: 13
     title: "Run /code-audit to populate the backlog with verified findings"
-    status: blocked
+    status: ready
     depends_on: [P1-5]
     blocks: []
     deliverable:
@@ -368,7 +380,7 @@ tasks:
   - id: SPEC-P2
     rank: 14
     title: "Write Phase 2 PRD/spec (Metal port + minimal KV cache) with pre-committed gates"
-    status: blocked
+    status: ready
     depends_on: [P1-5, P0A-1]
     blocks: [P2-EXEC]
     deliverable:
@@ -502,6 +514,25 @@ tasks:
       three engines on one OS build; full energy rounds (budget real days).
 
   # ---------- Follow-ups (seeded from measurements) ----------
+  - id: DEV-1
+    rank: 25
+    title: "Cut oracle-suite wall time (logit suite is ~32 min in a debug build)"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: "tests / docs (whatever the chosen lever touches)"
+      tests: "oracle suites still pass byte-identically; no gate touched"
+    est_complexity: small
+    notes: |
+      Seeded 2026-08-23 from P1-5: the 5-prompt x 50-step logit suite costs
+      ~32 min under `swift test` (debug -Onone; 250 full re-forwards, no KV
+      cache by design). Fine as a phase-exit gate, heavy for the Phase 2 dev
+      loop, which diffs cached attention against the SAME fixtures.
+      Candidate levers (measure first, IO-1 precedent): run oracle suites via
+      `swift test -c release`; document a --filter fast-path; or hoist the
+      per-step Double conversions in the test helper. MUST NOT touch gates,
+      fixtures, or model code readability. Filler: never blocks the chain.
   - id: BW-1
     rank: 24
     title: "Read-only streaming bandwidth microbench variant (complements triad)"

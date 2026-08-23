@@ -47,6 +47,10 @@ public struct ModelConfig: Equatable {
     /// carry no key for this — it follows from model_type (the architecture
     /// fork recorded in the PIN-1 DECISIONS.md entry).
     public let usesQKNorm: Bool
+    /// Decode stop tokens from the optional `eos_token_id` key (an id or a
+    /// list of ids in HF configs; the pinned checkpoint carries 151645).
+    /// Empty when absent — the decode loop then only stops on max tokens.
+    public let eosTokenIds: [Int]
 
     public static func load(path: String) throws -> ModelConfig {
         let data: Data
@@ -111,6 +115,12 @@ public struct ModelConfig: Equatable {
             throw ModelConfigError.missingKey("attention_bias")
         }
         usesQKNorm = (modelType == "qwen3")
+
+        if let raw = dict["eos_token_id"], !(raw is NSNull) {
+            eosTokenIds = try Self.intList(raw, key: "eos_token_id")
+        } else {
+            eosTokenIds = []
+        }
     }
 
     // MARK: - Typed key access (missing keys name themselves, edge case 6)
@@ -141,6 +151,21 @@ public struct ModelConfig: Equatable {
             throw ModelConfigError.invalidValue(key: key, detail: "expected a number")
         }
         return value.doubleValue
+    }
+
+    /// `eos_token_id` arrives as a single id or a list of ids in HF configs;
+    /// normalize both to a list of non-negative integers.
+    private static func intList(_ raw: Any, key: String) throws -> [Int] {
+        let values: [Any] = (raw as? [Any]) ?? [raw]
+        return try values.map { value in
+            guard let number = value as? NSNumber,
+                  number.doubleValue.rounded() == number.doubleValue,
+                  number.doubleValue >= 0 else {
+                throw ModelConfigError.invalidValue(
+                    key: key, detail: "expected a token id or list of token ids")
+            }
+            return number.intValue
+        }
     }
 
     private static func positiveInt(_ dict: [String: Any], _ key: String) throws -> Int {

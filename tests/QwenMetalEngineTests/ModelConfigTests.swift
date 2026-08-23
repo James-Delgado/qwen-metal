@@ -52,6 +52,32 @@ final class ModelConfigTests: XCTestCase {
         XCTAssertTrue(c.usesQKNorm)
     }
 
+    // MARK: - eos_token_id (P1-5: decode stop tokens; optional key)
+
+    func testEOSTokenIdAbsentDefaultsToEmpty() throws {
+        XCTAssertEqual(try config(from: qwen3Dict()).eosTokenIds, [])
+    }
+
+    func testEOSTokenIdParsesScalarAndList() throws {
+        var dict = qwen3Dict()
+        dict["eos_token_id"] = 151645
+        XCTAssertEqual(try config(from: dict).eosTokenIds, [151645])
+        dict["eos_token_id"] = [151645, 151643]
+        XCTAssertEqual(try config(from: dict).eosTokenIds, [151645, 151643])
+    }
+
+    func testEOSTokenIdRejectsNonIntegerValues() throws {
+        var dict = qwen3Dict()
+        dict["eos_token_id"] = "<|im_end|>"
+        XCTAssertThrowsError(try config(from: dict)) { error in
+            XCTAssertEqual(
+                error as? ModelConfigError,
+                .invalidValue(
+                    key: "eos_token_id",
+                    detail: "expected a token id or list of token ids"))
+        }
+    }
+
     // MARK: - (6) missing required key -> clear error naming the key
 
     func testEveryMissingRequiredKeyIsNamedInTheError() throws {

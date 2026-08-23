@@ -11,10 +11,22 @@ let package = Package(
         .library(name: "QwenMetalEngine", targets: ["QwenMetalEngine"]),
         .executable(name: "qwen-metal-cli", targets: ["QwenMetalCLI"]),
     ],
+    dependencies: [
+        // Tokenizer only (PLAN.md dependencies list; non-goals forbid growing
+        // our own). Pinned exact — tokenization drifting under an unpinned
+        // version is the same bug as unpinned Python fixture deps.
+        .package(
+            url: "https://github.com/huggingface/swift-transformers.git",
+            exact: "1.3.3"),
+    ],
     targets: [
         // Engine core — shared by the CLI and (Phase 2) the iOS app.
         // No engine logic ever lives in app/CLI targets (CLAUDE.md project shape).
-        .target(name: "QwenMetalEngine"),
+        .target(
+            name: "QwenMetalEngine",
+            dependencies: [
+                .product(name: "Tokenizers", package: "swift-transformers")
+            ]),
         .executableTarget(
             name: "QwenMetalCLI",
             dependencies: ["QwenMetalEngine"]

@@ -14,88 +14,22 @@ import QwenMetalEngine
 /// with a clear message when it is absent.
 final class ActivationFixtureTests: XCTestCase {
 
-    // MARK: - Pins
-
-    private static let pinnedRevision = "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e"
-
-    /// Mirror of the pinned checkpoint's config.json (Qwen/Qwen3-1.7B
-    /// @ 70d244cc; values also recorded in the DECISIONS.md PIN-1 entry).
-    private static let pinnedConfigJSON = """
-    {
-      "attention_bias": false,
-      "head_dim": 128,
-      "hidden_size": 2048,
-      "intermediate_size": 6144,
-      "max_position_embeddings": 40960,
-      "model_type": "qwen3",
-      "num_attention_heads": 16,
-      "num_hidden_layers": 28,
-      "num_key_value_heads": 8,
-      "rms_norm_eps": 1e-06,
-      "rope_theta": 1000000,
-      "tie_word_embeddings": true,
-      "vocab_size": 151936
-    }
-    """
-
-    private static let repoRoot = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent() // ActivationFixtureTests.swift
-        .deletingLastPathComponent() // QwenMetalEngineTests/
-        .deletingLastPathComponent() // tests/ → repo root
-    private static let fixturesDir =
-        repoRoot.appendingPathComponent("tests/fixtures/qwen3-1.7b")
-    private static let checkpointURL =
-        repoRoot.appendingPathComponent("models/qwen3-1.7b-70d244cc.safetensors")
-
-    private struct ProvenanceError: Error, CustomStringConvertible {
-        let description: String
-    }
-
-    /// The model loads once per test-run (fp32 materialization of a 1.7B
-    /// checkpoint); every test shares it. RoPE table sized 64 ≥ seq 5.
-    private static var sharedModel: Result<QwenModel, Error>?
+    // Checkpoint pins, model loading, and blob decoding live in
+    // SharedCheckpoint — one 7 GB fp32 model shared with the P1-5 logit
+    // suite instead of one per test class.
 
     private func loadedModel() throws -> QwenModel {
-        if Self.sharedModel == nil {
-            Self.sharedModel = Result {
-                let checkpoint = try SafetensorsFile(path: Self.checkpointURL.path)
-                guard checkpoint.metadata["source_revision"] == Self.pinnedRevision else {
-                    throw ProvenanceError(description:
-                        "checkpoint at \(Self.checkpointURL.path) has source_revision "
-                        + "'\(checkpoint.metadata["source_revision"] ?? "<missing>")', "
-                        + "expected the pinned \(Self.pinnedRevision) — regenerate with "
-                        + "tools/consolidate_shards.py")
-                }
-                let config = try ModelConfig(
-                    jsonData: Self.pinnedConfigJSON.data(using: .utf8)!)
-                return try QwenModel(
-                    checkpoint: checkpoint, config: config, maxSequenceLength: 64)
-            }
-        }
-        return try Self.sharedModel!.get()
+        try SharedCheckpoint.model()
     }
 
     override func setUpWithError() throws {
-        guard FileManager.default.fileExists(atPath: Self.checkpointURL.path) else {
-            throw XCTSkip(
-                "consolidated checkpoint not present at \(Self.checkpointURL.path) "
-                + "(local-only artifact — produce it with tools/consolidate_shards.py)")
-        }
+        try SharedCheckpoint.skipUnlessCheckpointPresent()
     }
 
     // MARK: - Fixture loading
 
     private func floats(at relativePath: String, expectedCount: Int) throws -> [Float] {
-        let url = Self.fixturesDir.appendingPathComponent(relativePath)
-        let data = try Data(contentsOf: url)
-        XCTAssertEqual(
-            data.count, expectedCount * 4,
-            "\(relativePath): byte length disagrees with the manifest shape")
-        return data.withUnsafeBytes { raw in
-            raw.bindMemory(to: UInt32.self).map {
-                Float(bitPattern: UInt32(littleEndian: $0))
-            }
-        }
+        try SharedCheckpoint.floats(at: relativePath, expectedCount: expectedCount)
     }
 
     private func activation(_ name: String) throws -> [Float] {
@@ -104,14 +38,7 @@ final class ActivationFixtureTests: XCTestCase {
 
     /// Prompt #1 (short_english) token ids from the committed tokenizer dump.
     private func promptIDs() throws -> [Int] {
-        let url = Self.fixturesDir.appendingPathComponent("tokenizer_ids.json")
-        let json = try JSONSerialization.jsonObject(with: Data(contentsOf: url))
-        guard let dict = json as? [String: Any],
-              let prompt = dict["short_english"] as? [String: Any],
-              let ids = prompt["input_ids"] as? [Int] else {
-            throw ProvenanceError(description: "tokenizer_ids.json missing short_english.input_ids")
-        }
-        return ids
+        try SharedCheckpoint.promptFixture("short_english").inputIds
     }
 
     // MARK: - Gates (pre-committed, DECISIONS.md 2026-08-23 P1-4 entry)

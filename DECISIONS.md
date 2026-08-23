@@ -748,3 +748,58 @@ asserted separately, and the CLI decode loop self-feeds.)
 
 Per the standing rule (hard rule 6), none of these loosen — a failure is a
 bug signal, never a tolerance-adjustment signal.
+
+## 2026-08-23 — P1-5 landed: decode loop + CLI + logit suite + tokenizer equivalence — Phase 1 EXITED
+
+- **Shipped:** Sources/QwenMetalEngine/Decode/{DecodeLoop,QwenModel+Decode}
+  .swift (greedy first-index-tie-break argmax; EOS/max-token/context stops;
+  full re-forward per step — KV cache stays Phase 2; temperature NOT built,
+  spec-optional), Tokenizer/TextTokenizer.swift (swift-transformers adapter,
+  local-folder load only), IO/ModelDirectory.swift (--model-dir resolution
+  with named-what's-missing errors), ModelConfig gains optional
+  eos_token_id parsing, CLI `generate` subcommand. Tests: LogitMatchSuiteTests
+  (5 prompts), TokenizerEquivalenceTests, DecodeLoopTests,
+  ModelDirectoryTests, +3 ModelConfig eos tests, TieAwareArgmaxRuleTests
+  (synthetic exemption-path pin). ActivationFixtureTests' checkpoint plumbing
+  extracted to a SharedCheckpoint helper so both oracle classes share ONE
+  ~7 GB fp32 model (RoPE table 64 → 256; gates untouched).
+- **Full logit-match suite PASSED, first run, all gates unmodified**
+  (the pre-committed P1-5 gates entry above): all 5 prompts x 50
+  teacher-forced steps — full-vocab |Δ| <= 1e-3 at steps {0,1,24,49},
+  per-step float64 fingerprints (lse/mean <= 1e-3, std <= 2e-3), per-step
+  top-64 at reference indices <= 1e-3, argmax exact top-1 at every one of
+  250 steps (no step was tie-exempt at epsilon 2e-3, as predicted from the
+  recorded margins). Full suite: **118 tests, 0 failures** in 1936s
+  (debug; logit suite dominates — follow-up DEV-1 seeded).
+- **Tokenizer observations (spec-required):** swift-transformers pinned
+  **exact 1.3.3** (Package.swift; latest release, 2026-05-16). Encoding is
+  id-identical to the pinned Python tokenizers 0.22.2 dump on all 5 fixture
+  prompts, including the fully rendered chat_template string with the empty
+  think block — zero disagreements, so the "log and match Python" clause was
+  never exercised. eosTokenId resolves to 151645 (<|im_end|>) from
+  tokenizer_config.json, matching config.json's eos_token_id; byte-level
+  BPE decode round-trips the raw prompt exactly. Chat templating stays
+  Python-side (fixtures record rendered strings); Swift renders none.
+- **Local model-dir convention:** the CLI consumes a directory holding
+  exactly one .safetensors + config.json + tokenizer.json +
+  tokenizer_config.json. models/ now carries the three JSONs downloaded at
+  the pinned revision 70d244cc (local-only, never committed, like the
+  checkpoint): config.json sha256 1ddb5b89…, tokenizer.json aeb13307…,
+  tokenizer_config.json d5d09f07… (full hashes reproducible via
+  `shasum -a 256 models/*.json`).
+- **CLI verified (exit criterion):** `generate --prompt "The capital of
+  France is" --max-tokens 24` → " Paris. The capital of Italy is Rome. The
+  capital of Spain is Madrid. …" — coherent and consistent with the fixture
+  argmax continuation. Load 10.8s; decode 0.33 tok/s (debug CPU reference,
+  no KV cache — expected-slow by design). Edge cases: empty prompt → usage
+  error exit 2; nonexistent dir → clear error exit 1; 5001-token prompt →
+  "context limit is 4096" error exit 1, no crash. Phase 1 CLI context cap =
+  min(4096, max_position_embeddings), enforced in DecodeLoop.
+- **Family note:** nothing new beyond P1-4 — the decode layer is
+  family-agnostic; Qwen3-specific logic stays in the module stack.
+- **Phase 1 exit criteria walked:** CLI coherent text ✓; logit suite <=1e-3
+  all 5 prompts ✓; per-module activation tests ✓ (P1-4, re-green);
+  enumerated edge-case tests ✓ (parser/config from P1-2, decode 8-9 + CLI
+  edge inputs + tokenizer equivalence 11 this task; temperature case 10
+  n/a — not built); DECISIONS.md updated ✓ (this entry). AUDIT-1 and
+  SPEC-P2 flipped to ready.
