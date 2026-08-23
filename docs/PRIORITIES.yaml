@@ -258,7 +258,8 @@ tasks:
   - id: P1-3
     rank: 10
     title: "Accelerate sgemm wrapper + triple-loop validation test"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-23T00:45:51Z
     depends_on: [SETUP-1]
     blocks: [P1-4]
     deliverable:
