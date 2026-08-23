@@ -456,7 +456,8 @@ tasks:
   - id: TOK-1
     rank: 13.3
     title: "Pin local tokenizer artifacts programmatically (sha256 check in TokenizerEquivalenceTests)"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-23T20:25:38Z
     depends_on: []
     blocks: []
     deliverable:
