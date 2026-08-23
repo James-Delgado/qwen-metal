@@ -545,7 +545,8 @@ tasks:
   - id: P2-2
     rank: 14.2
     title: "Naive decode kernel set (matvec, rmsnorm, rope, swiglu, residual, embedding) + Tier-K tests"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-23T23:30:21Z
     depends_on: [SPEC-P2]
     blocks: [P2-3]
     deliverable:
