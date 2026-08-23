@@ -779,7 +779,8 @@ tasks:
   - id: DOC-1
     rank: 26
     title: "Regenerate architecture PDF (stale since Phase 0 exit v1.3)"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-23T22:22:20Z
     depends_on: []
     blocks: []
     deliverable:
