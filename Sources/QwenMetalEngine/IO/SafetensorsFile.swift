@@ -1,3 +1,4 @@
+import Accelerate
 import Foundation
 
 /// Errors thrown by `SafetensorsFile`. Each case carries enough context to
@@ -143,28 +144,116 @@ public final class SafetensorsFile {
     /// Both upcasts are exact, so tests may compare results with == and the
     /// engine's only legitimate divergence from the oracle stays summation
     /// order (phase-0-1.md correctness harness).
+    ///
+    /// The conversion runs through Accelerate (IO-1): the debug-config dev
+    /// loop pays this materialization on every test run, and a scalar Swift
+    /// loop at -Onone cost ~190s for the 1.7B checkpoint. Accelerate is
+    /// prebuilt, so its speed does not depend on this package's build config.
+    /// data_offsets carry no alignment guarantee, so a source that is not
+    /// 2-byte aligned takes the scalar path instead (exactness identical).
     public func fp32Values(for name: String) throws -> [Float] {
         let info = try self.info(for: name)
         let src = base + dataSectionOffset + info.dataOffset
-        var out = [Float](repeating: 0, count: info.elementCount)
+        let count = info.elementCount
+        var out = [Float](repeating: 0, count: count)
+        guard count > 0 else { return out }
         out.withUnsafeMutableBufferPointer { dst in
-            switch info.dtype {
-            case .bfloat16:
-                for i in 0..<info.elementCount {
-                    let bits = UInt16(littleEndian:
-                        src.loadUnaligned(fromByteOffset: 2 * i, as: UInt16.self))
-                    // bf16 is the top half of the fp32 bit pattern: exact.
-                    dst[i] = Float(bitPattern: UInt32(bits) << 16)
-                }
-            case .float16:
-                for i in 0..<info.elementCount {
-                    let bits = UInt16(littleEndian:
-                        src.loadUnaligned(fromByteOffset: 2 * i, as: UInt16.self))
-                    dst[i] = Float(Float16(bitPattern: bits))
-                }
+            if Int(bitPattern: src) % MemoryLayout<UInt16>.alignment == 0 {
+                Self.vectorUpcast(src: src, dtype: info.dtype, into: dst)
+            } else {
+                Self.scalarUpcast(src: src, dtype: info.dtype, into: dst)
             }
         }
         return out
+    }
+
+    /// Elements converted per Accelerate call; bounds the bf16 temp buffer
+    /// (4 MiB of fp32 at this size) independent of tensor size.
+    private static let upcastChunkElements = 1 << 20
+
+    private static func vectorUpcast(
+        src: UnsafeMutableRawPointer, dtype: TensorDType, into dst: UnsafeMutableBufferPointer<Float>
+    ) {
+        switch dtype {
+        case .float16: vectorUpcastF16(src: src, into: dst)
+        case .bfloat16: vectorUpcastBF16(src: src, into: dst)
+        }
+    }
+
+    /// Hardware widening conversion; exact for every fp16 pattern.
+    private static func vectorUpcastF16(
+        src: UnsafeMutableRawPointer, into dst: UnsafeMutableBufferPointer<Float>
+    ) {
+        let count = dst.count
+        var chunkStart = 0
+        while chunkStart < count {
+            let n = min(upcastChunkElements, count - chunkStart)
+            var srcBuf = vImage_Buffer(
+                data: src + 2 * chunkStart,
+                height: 1, width: vImagePixelCount(n), rowBytes: 2 * n)
+            var dstBuf = vImage_Buffer(
+                data: dst.baseAddress! + chunkStart,
+                height: 1, width: vImagePixelCount(n), rowBytes: 4 * n)
+            guard vImageConvert_Planar16FtoPlanarF(&srcBuf, &dstBuf, vImage_Flags(kvImageNoFlags))
+                == kvImageNoError else {
+                // Cannot happen with well-formed buffers; keep correctness
+                // over speed rather than trusting that.
+                scalarUpcast(src: src, dtype: .float16, into: dst)
+                return
+            }
+            chunkStart += n
+        }
+    }
+
+    /// bf16's fp32 bit pattern is bits << 16. vDSP has no integer shift, but
+    /// the chain below is exact at every step: u16 -> fp32 value (all u16 are
+    /// representable), * 2^16 (power-of-two scale of a <=16-significant-bit
+    /// integer), truncate back to u32 (the value is already integral) —
+    /// yielding exactly bits << 16, written into the fp32 destination
+    /// reinterpreted as u32.
+    private static func vectorUpcastBF16(
+        src: UnsafeMutableRawPointer, into dst: UnsafeMutableBufferPointer<Float>
+    ) {
+        let count = dst.count
+        let srcU16 = src.bindMemory(to: UInt16.self, capacity: count)
+        var scale = Float(65536)
+        var tmp = [Float](repeating: 0, count: min(upcastChunkElements, count))
+        tmp.withUnsafeMutableBufferPointer { tmpBuf in
+            // Scoped rebind: the destination's Float memory is viewed as
+            // UInt32 only while the bit patterns are written.
+            dst.withMemoryRebound(to: UInt32.self) { dstU32 in
+                let tmpPtr = tmpBuf.baseAddress!
+                let dstPtr = dstU32.baseAddress!
+                var chunkStart = 0
+                while chunkStart < count {
+                    let n = vDSP_Length(min(upcastChunkElements, count - chunkStart))
+                    vDSP_vfltu16(srcU16 + chunkStart, 1, tmpPtr, 1, n)
+                    vDSP_vsmul(tmpPtr, 1, &scale, tmpPtr, 1, n)
+                    vDSP_vfixu32(tmpPtr, 1, dstPtr + chunkStart, 1, n)
+                    chunkStart += Int(n)
+                }
+            }
+        }
+    }
+
+    private static func scalarUpcast(
+        src: UnsafeMutableRawPointer, dtype: TensorDType, into dst: UnsafeMutableBufferPointer<Float>
+    ) {
+        switch dtype {
+        case .bfloat16:
+            for i in 0..<dst.count {
+                let bits = UInt16(littleEndian:
+                    src.loadUnaligned(fromByteOffset: 2 * i, as: UInt16.self))
+                // bf16 is the top half of the fp32 bit pattern: exact.
+                dst[i] = Float(bitPattern: UInt32(bits) << 16)
+            }
+        case .float16:
+            for i in 0..<dst.count {
+                let bits = UInt16(littleEndian:
+                    src.loadUnaligned(fromByteOffset: 2 * i, as: UInt16.self))
+                dst[i] = Float(Float16(bitPattern: bits))
+            }
+        }
     }
 
     // MARK: - Parsing

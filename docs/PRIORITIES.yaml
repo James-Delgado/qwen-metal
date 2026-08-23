@@ -307,8 +307,9 @@ tasks:
   - id: IO-1
     rank: 11.5
     title: "Vectorize the fp16/bf16→fp32 upcast in SafetensorsFile (dev-loop wall time)"
-    status: in_progress
+    status: done
     started_at: 2026-08-23T15:29:05Z
+    completed_at: 2026-08-23T15:35:17Z
     depends_on: []
     blocks: []
     deliverable:
@@ -327,6 +328,11 @@ tasks:
       of P1-5 test runs, so it goes first. Fractional rank slots it between
       the completed P1-4 (11) and P1-5 (12) without renumbering the chain.
       Still never blocks the phase chain: if it stalls, skip and start P1-5.
+      2026-08-23 (done): Accelerate path landed (vImage for fp16, exact vDSP
+      chain for bf16, scalar fallback for misaligned offsets). Exactness
+      pinned by an exhaustive all-65536-patterns bit-for-bit test per dtype.
+      Checkpoint materialization 190s -> 11.0s; full suite 21s cold / 16s
+      warm. See DECISIONS.md 2026-08-23 IO-1 entry.
 
   - id: P1-5
     rank: 12

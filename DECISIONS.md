@@ -683,3 +683,25 @@ phase gate: Phase 1's exit criteria are unchanged, and if IO-1 stalls it is
 skipped, not fought. Constraint reaffirmed for whoever picks it up: the
 upcast must stay exact (the P1-2 == tests are the gate) and weights stay
 mmap-only (PLAN.md invariant 5).
+
+## 2026-08-23 — IO-1: upcast vectorized via Accelerate (measured)
+
+- **Change:** `SafetensorsFile.fp32Values` now converts through Accelerate
+  instead of a scalar Swift loop: fp16 via `vImageConvert_Planar16FtoPlanarF`
+  (hardware widening, exact), bf16 via an all-exact vDSP chain
+  (`vDSP_vfltu16` → ×2^16 `vDSP_vsmul` → `vDSP_vfixu32`, i.e. bits<<16
+  materialized through exact fp32 arithmetic), chunked at 1M elements.
+  Accelerate is prebuilt, so debug (-Onone) test runs no longer pay the
+  unoptimized-loop tax. Sources with a 2-byte-misaligned data offset (legal
+  per the format) take the retained scalar path.
+- **Exactness gate held:** the P1-2 `==` tests pass unmodified, and a new
+  exhaustive sweep (all 65,536 bit patterns per dtype, bit-for-bit vs the
+  scalar reference — NaN payloads, infs, subnormals included) plus an
+  odd-offset fallback test landed with the change. No tolerance introduced.
+- **Invariants intact:** weights still load via mmap only (PLAN.md inv. 5);
+  conversion reads straight from the mapping; no dequant/layout change.
+- **Measured (dev-loop, Mac M2 Pro, debug build):** checkpoint-loading
+  oracle suite (ActivationFixtureTests, 7 tests incl. full 1.7B fp32
+  materialization) 190s → **11.0s**; full 89-test suite now 21.0s cold /
+  16.1s warm. The P1-5 edit-test iteration tax this rank bump targeted is
+  gone (~17× on the materialization).

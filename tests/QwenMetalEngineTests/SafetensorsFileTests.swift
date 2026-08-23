@@ -73,6 +73,63 @@ final class SafetensorsFileTests: XCTestCase {
         XCTAssertEqual(try file.fp32Values(for: "w"), expected)
     }
 
+    // MARK: - (1b) exhaustive upcast sweep + alignment fallback (IO-1)
+
+    /// Every possible 16-bit pattern, compared bit-for-bit (so NaN payloads,
+    /// infinities, and subnormals are all covered) against the definitionally
+    /// exact scalar reference. Pins the vectorized upcast to the scalar
+    /// semantics over the entire input domain.
+    func testBF16UpcastIsBitExactForAll65536Patterns() throws {
+        let bits = (0...0xFFFF).map { UInt16($0) }
+        let json = #"{"w":{"dtype":"BF16","shape":[65536],"data_offsets":[0,131072]}}"#
+        let path = try write(blob(headerJSON: json, payload: halfwordBytes(bits)))
+
+        let got = try SafetensorsFile(path: path).fp32Values(for: "w")
+        XCTAssertEqual(got.count, bits.count)
+        let mismatch = zip(got, bits).enumerated().first { _, pair in
+            pair.0.bitPattern != UInt32(pair.1) << 16
+        }
+        XCTAssertNil(
+            mismatch,
+            "bf16 upcast diverges first at input bits "
+                + String(format: "0x%04X", mismatch.map { Int($0.element.1) } ?? 0))
+    }
+
+    func testFP16UpcastIsBitExactForAll65536Patterns() throws {
+        let bits = (0...0xFFFF).map { UInt16($0) }
+        let json = #"{"w":{"dtype":"F16","shape":[65536],"data_offsets":[0,131072]}}"#
+        let path = try write(blob(headerJSON: json, payload: halfwordBytes(bits)))
+
+        let got = try SafetensorsFile(path: path).fp32Values(for: "w")
+        XCTAssertEqual(got.count, bits.count)
+        let mismatch = zip(got, bits).enumerated().first { _, pair in
+            pair.0.bitPattern != Float(Float16(bitPattern: pair.1)).bitPattern
+        }
+        XCTAssertNil(
+            mismatch,
+            "fp16 upcast diverges first at input bits "
+                + String(format: "0x%04X", mismatch.map { Int($0.element.1) } ?? 0))
+    }
+
+    /// data_offsets are byte offsets with no alignment guarantee in the
+    /// format; an odd offset must still upcast exactly (scalar fallback).
+    func testUpcastAtOddByteOffsetStaysExact() throws {
+        // One padding byte, then bf16 [1.0, -1.0] and fp16 [1.0, -2.0]
+        // at odd offsets 1 and 5.
+        let json = #"""
+        {"b":{"dtype":"BF16","shape":[2],"data_offsets":[1,5]},
+         "h":{"dtype":"F16","shape":[2],"data_offsets":[5,9]}}
+        """#
+        let payload: [UInt8] = [0xEE]
+            + halfwordBytes([0x3F80, 0xBF80])
+            + halfwordBytes([0x3C00, 0xC000])
+        let path = try write(blob(headerJSON: json, payload: payload))
+
+        let file = try SafetensorsFile(path: path)
+        XCTAssertEqual(try file.fp32Values(for: "b"), [1.0, -1.0])
+        XCTAssertEqual(try file.fp32Values(for: "h"), [1.0, -2.0])
+    }
+
     // MARK: - (2) truncated file -> clear error
 
     func testFileShorterThanLengthPrefixThrowsTruncated() throws {
