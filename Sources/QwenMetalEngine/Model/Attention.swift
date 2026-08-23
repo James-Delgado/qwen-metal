@@ -29,16 +29,11 @@ public struct Attention {
             throw ModelError.badInput(
                 detail: "GQA requires numKVHeads \(numKVHeads) to divide numHeads \(numHeads)")
         }
-        guard qProjWeight.count == numHeads * headDim * hiddenSize,
-              kProjWeight.count == numKVHeads * headDim * hiddenSize,
-              vProjWeight.count == numKVHeads * headDim * hiddenSize,
-              oProjWeight.count == hiddenSize * numHeads * headDim else {
-            throw ModelError.badWeightShape(
-                tensor: "attention projections",
-                expected: [numHeads * headDim, hiddenSize],
-                actual: [qProjWeight.count, kProjWeight.count,
-                         vProjWeight.count, oProjWeight.count])
-        }
+        // Validated per tensor so a mismatch names the offending projection.
+        try Self.validate("q_proj", qProjWeight, shape: [numHeads * headDim, hiddenSize])
+        try Self.validate("k_proj", kProjWeight, shape: [numKVHeads * headDim, hiddenSize])
+        try Self.validate("v_proj", vProjWeight, shape: [numKVHeads * headDim, hiddenSize])
+        try Self.validate("o_proj", oProjWeight, shape: [hiddenSize, numHeads * headDim])
         guard qNorm.dim == headDim, kNorm.dim == headDim else {
             throw ModelError.badWeightShape(
                 tensor: "q_norm/k_norm", expected: [headDim],
@@ -55,6 +50,15 @@ public struct Attention {
         self.qNorm = qNorm
         self.kNorm = kNorm
         self.rope = rope
+    }
+
+    private static func validate(
+        _ name: String, _ weight: [Float], shape: [Int]
+    ) throws {
+        guard weight.count == shape[0] * shape[1] else {
+            throw ModelError.badWeightShape(
+                tensor: name, expected: shape, actual: [weight.count])
+        }
     }
 
     /// x is [seqLen, hiddenSize]; returns the same shape (o_proj output,

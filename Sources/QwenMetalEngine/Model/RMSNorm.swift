@@ -16,7 +16,7 @@ public struct RMSNorm {
 
     /// Normalizes each consecutive `dim`-length row of `x` independently.
     public func callAsFunction(_ x: [Float]) throws -> [Float] {
-        guard !x.isEmpty, x.count % dim == 0 else {
+        guard dim > 0, !x.isEmpty, x.count % dim == 0 else {
             throw ModelError.badInput(
                 detail: "RMSNorm input count \(x.count) is not a positive multiple of dim \(dim)")
         }

@@ -80,6 +80,16 @@ final class ModelModuleUnitTests: XCTestCase {
         }
     }
 
+    func testRMSNormRejectsEmptyWeightInsteadOfTrapping() {
+        // dim == 0 must throw, not crash on division by zero.
+        let norm = RMSNorm(weight: [], eps: 1e-6)
+        XCTAssertThrowsError(try norm([1, 2])) { error in
+            guard case ModelError.badInput = error else {
+                return XCTFail("expected badInput, got \(error)")
+            }
+        }
+    }
+
     // MARK: - RoPE
 
     func testRoPEPositionZeroIsUnchanged() throws {
@@ -161,6 +171,97 @@ final class ModelModuleUnitTests: XCTestCase {
         XCTAssertEqual(
             Array(outA[0..<hidden]), Array(outB[0..<hidden]),
             "row 0 changed when only the future token differed — causal mask broken")
+    }
+
+    func testAttentionGQAMapsQueryHeadGroupsToDistinctKVHeads() throws {
+        // 4 Q heads over 2 KV heads: heads 0/1 must read KV head 0, heads
+        // 2/3 KV head 1. With seqLen 1 the softmax weight is exactly 1, so
+        // each head's context IS its KV head's V row — a wrong mapping
+        // (e.g. head % groupSize) reorders the output exactly.
+        let numHeads = 4, numKVHeads = 2, headDim = 2
+        let hidden = numHeads * headDim // 8
+        var rng = SplitMix64(seed: 0x69A5)
+
+        // V = x·Wv^T with x = e0 picks column 0 of v_proj: make KV head 0's
+        // V row [1, 2] and KV head 1's [3, 4].
+        var vProj = [Float](repeating: 0, count: numKVHeads * headDim * hidden)
+        for row in 0..<(numKVHeads * headDim) {
+            vProj[row * hidden] = Float(row + 1)
+        }
+        var oProjIdentity = [Float](repeating: 0, count: hidden * hidden)
+        for i in 0..<hidden {
+            oProjIdentity[i * hidden + i] = 1
+        }
+        let attention = try Attention(
+            numHeads: numHeads, numKVHeads: numKVHeads,
+            headDim: headDim, hiddenSize: hidden,
+            qProjWeight: randomFloats(count: numHeads * headDim * hidden, rng: &rng),
+            kProjWeight: randomFloats(count: numKVHeads * headDim * hidden, rng: &rng),
+            vProjWeight: vProj,
+            oProjWeight: oProjIdentity,
+            qNorm: RMSNorm(weight: [1, 1], eps: 1e-6),
+            kNorm: RMSNorm(weight: [1, 1], eps: 1e-6),
+            rope: try RoPE(headDim: headDim, theta: 10000, positions: 2))
+
+        var x = [Float](repeating: 0, count: hidden)
+        x[0] = 1 // e0
+        let out = try attention(x, seqLen: 1)
+        // Every step is exact at seqLen 1 (softmax of one element is 1.0).
+        XCTAssertEqual(out, [1, 2, 1, 2, 3, 4, 3, 4])
+    }
+
+    func testAttentionMatchesHandComputedTwoTokenCase() throws {
+        // 1 head, headDim 2, hidden 2, seq 2 — the full pipeline (projection,
+        // QK-norm, RoPE, scaled causal softmax, PV, o_proj) against a
+        // Double-precision oracle computed right here.
+        let wq: [Float] = [0.6, -0.3, 0.2, 0.9] // [out, in]
+        let wk: [Float] = [0.5, 0.1, -0.4, 0.7]
+        let wv: [Float] = [1.0, 0.5, -0.25, 0.75]
+        let wo: [Float] = [0.8, -0.2, 0.3, 0.4]
+        let eps: Float = 1e-6
+        let attention = try Attention(
+            numHeads: 1, numKVHeads: 1, headDim: 2, hiddenSize: 2,
+            qProjWeight: wq, kProjWeight: wk, vProjWeight: wv, oProjWeight: wo,
+            qNorm: RMSNorm(weight: [1, 1], eps: eps),
+            kNorm: RMSNorm(weight: [1, 1], eps: eps),
+            rope: try RoPE(headDim: 2, theta: 10000, positions: 4))
+        let x: [Float] = [0.3, -0.2, 0.5, 0.4]
+        let out = try attention(x, seqLen: 2)
+
+        func matvec(_ w: [Float], _ v: [Double]) -> [Double] {
+            [Double(w[0]) * v[0] + Double(w[1]) * v[1],
+             Double(w[2]) * v[0] + Double(w[3]) * v[1]]
+        }
+        func rmsNormed(_ v: [Double]) -> [Double] {
+            let inverse = 1 / ((v[0] * v[0] + v[1] * v[1]) / 2 + Double(eps)).squareRoot()
+            return [v[0] * inverse, v[1] * inverse]
+        }
+        func rotated(_ v: [Double], by angle: Double) -> [Double] {
+            [v[0] * cos(angle) - v[1] * sin(angle),
+             v[1] * cos(angle) + v[0] * sin(angle)]
+        }
+        let rows: [[Double]] = [[0.3, -0.2], [0.5, 0.4]]
+        // headDim 2 → single frequency 1: position s rotates by s radians.
+        let q = rows.enumerated().map {
+            rotated(rmsNormed(matvec(wq, $0.element)), by: Double($0.offset))
+        }
+        let k = rows.enumerated().map {
+            rotated(rmsNormed(matvec(wk, $0.element)), by: Double($0.offset))
+        }
+        let v = rows.map { matvec(wv, $0) }
+
+        let context0 = v[0] // row 0 attends only to itself
+        let scale = 1 / Double(2).squareRoot()
+        let score0 = (q[1][0] * k[0][0] + q[1][1] * k[0][1]) * scale
+        let score1 = (q[1][0] * k[1][0] + q[1][1] * k[1][1]) * scale
+        let rowMax = max(score0, score1)
+        let e0 = exp(score0 - rowMax), e1 = exp(score1 - rowMax)
+        let p0 = e0 / (e0 + e1), p1 = e1 / (e0 + e1)
+        let context1 = [p0 * v[0][0] + p1 * v[1][0], p0 * v[0][1] + p1 * v[1][1]]
+        let expected = matvec(wo, context0) + matvec(wo, context1)
+        for i in 0..<4 {
+            XCTAssertEqual(Double(out[i]), expected[i], accuracy: 1e-5, "element \(i)")
+        }
     }
 
     func testAttentionRejectsMismatchedInputLength() throws {

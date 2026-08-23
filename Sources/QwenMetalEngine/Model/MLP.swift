@@ -16,12 +16,16 @@ public struct SwiGLUMLP {
         gateWeight: [Float], upWeight: [Float], downWeight: [Float],
         hiddenSize: Int, intermediateSize: Int
     ) throws {
-        guard gateWeight.count == intermediateSize * hiddenSize,
-              upWeight.count == intermediateSize * hiddenSize,
-              downWeight.count == hiddenSize * intermediateSize else {
-            throw ModelError.badWeightShape(
-                tensor: "mlp", expected: [intermediateSize, hiddenSize],
-                actual: [gateWeight.count, upWeight.count, downWeight.count])
+        // Validated per tensor so a mismatch names the offending projection.
+        for (name, weight, shape) in [
+            ("gate_proj", gateWeight, [intermediateSize, hiddenSize]),
+            ("up_proj", upWeight, [intermediateSize, hiddenSize]),
+            ("down_proj", downWeight, [hiddenSize, intermediateSize]),
+        ] {
+            guard weight.count == shape[0] * shape[1] else {
+                throw ModelError.badWeightShape(
+                    tensor: name, expected: shape, actual: [weight.count])
+            }
         }
         self.gateWeight = gateWeight
         self.upWeight = upWeight
