@@ -32,6 +32,10 @@ public struct ModelDirectory {
     public let directoryURL: URL
     public let checkpointURL: URL
     public let configURL: URL
+    /// generation_config.json is optional in HF checkpoints — nil when
+    /// absent. When present, its eos_token_id ids join the decode stop set
+    /// (HF `generate()` consults this file; docs/AUDIT.md F2).
+    public let generationConfigURL: URL?
 
     public init(validating url: URL) throws {
         var isDirectory: ObjCBool = false
@@ -60,5 +64,10 @@ public struct ModelDirectory {
         directoryURL = url
         checkpointURL = url.appendingPathComponent(checkpoints[0])
         configURL = url.appendingPathComponent("config.json")
+
+        let generationConfig = url.appendingPathComponent("generation_config.json")
+        generationConfigURL =
+            FileManager.default.fileExists(atPath: generationConfig.path)
+                ? generationConfig : nil
     }
 }

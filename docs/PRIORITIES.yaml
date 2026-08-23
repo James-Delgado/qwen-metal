@@ -420,8 +420,9 @@ tasks:
   - id: EOS-1
     rank: 13.2
     title: "Union generation_config.json eos_token_id into the decode stop set (missing 151643)"
-    status: in_progress
+    status: done
     started_at: 2026-08-23T21:35:00Z
+    completed_at: 2026-08-23T22:20:00Z
     depends_on: []
     blocks: []
     deliverable:
@@ -442,6 +443,15 @@ tasks:
       RANK BUMPED 27 -> 13.2 on 2026-08-23 (decided by James): before Phase 2
       decode work — free-running stop behavior feeds SPEC-P2's
       top-1-agreement gate design, so parity should be clean first.
+      2026-08-23 (done): fixed, not scoped out. ModelDirectory
+      .generationConfigURL (optional file) + new IO GenerationConfig
+      (eos_token_id via the CFG-1-bounded intList; malformed fails loudly)
+      + CLI stop set = config.json ∪ tokenizer ∪ generation_config.json —
+      effective stop set now {151645, 151643}. +10 tests (DecodeLoop
+      real-pair regression, ModelDirectory optional-file, GenerationConfig
+      parse edges); suite minus logit gate 129 tests, 0 failures. CLI
+      verified end-to-end. See DECISIONS.md 2026-08-23 EOS-1 entry (incl.
+      a SPEC-P2 note: stop-set assembly's final home in the engine).
 
   - id: TOK-1
     rank: 13.3
@@ -480,6 +490,10 @@ tasks:
       per-module fp16 tolerances vs activation fixtures + top-1-agreement-over-N
       gate (OV#5/#11); include mmap-vs-wired sustained-stability bench (OV#9);
       "before" row per parity pins (OV#12). Spec seeds P2 build tasks here.
+      2026-08-23 (from EOS-1): stop-set assembly (config.json ∪ tokenizer ∪
+      generation_config.json) lives in the CLI today; the Phase 2 decode
+      redesign should decide its final home in the engine — see DECISIONS.md
+      EOS-1 entry.
 
   - id: P2-EXEC
     rank: 15

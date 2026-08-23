@@ -878,3 +878,38 @@ bug signal, never a tolerance-adjustment signal.
 - **Verification:** ModelConfigTests 20/20 green (9 red before the fix,
   matching the audit's claims exactly); full suite minus the ~32-min logit
   phase-exit gate (untouched layer): 119 tests, 0 failures, 21s.
+
+## 2026-08-23 — EOS-1: generation_config.json eos ids join the decode stop set (audit F2)
+
+- **Context (audit F2, HIGH, upheld 3-0):** the pinned checkpoint's
+  generation_config.json — the file HF generate() itself consults for
+  stopping — lists eos_token_id [151645, 151643], but the engine stop set
+  was built from config.json ∪ tokenizer only = {151645}. <|endoftext|>
+  (151643) never stopped decode: silent post-EOS garbage on
+  completion-style prompts, invisible to the teacher-forced logit suite
+  (it structurally cannot see free-running stop behavior) and hidden in
+  CLI output by skipSpecialTokens.
+- **Decision: fix, not scope-out** — unioning the file's ids restores
+  oracle parity with HF generate(). Landed as:
+  ModelDirectory.generationConfigURL (optional file — absence is not an
+  error); new GenerationConfig (IO module) parsing exactly the one field
+  decode consumes, eos_token_id, through the same Int(exactly:)-validated
+  intList as config.json (CFG-1 bounds), present-but-malformed failing
+  loudly via ModelConfigError, sampling keys ignored (greedy is a
+  protocol pin); CLI stop set = config.json ∪ tokenizer ∪
+  generation_config.json.
+- **Stop-set observation (continues the P1-5 tokenizer entry):** effective
+  stop set for the pinned checkpoint is now {151645, 151643}. Verified
+  end-to-end: CLI loads models/generation_config.json and generates
+  normally. Note for SPEC-P2: stop-set assembly currently lives in the
+  CLI (thin, ~5 lines); Phase 2's decode redesign should decide its final
+  home in the engine, since free-running stop behavior feeds the
+  top-1-agreement gate design.
+- **No gates touched:** throw/stop-behavior tests only; no numeric
+  tolerances, fixtures, or pinned invariants involved.
+- **Verification:** red first (build fails on the missing API), then +10
+  tests green: DecodeLoopTests regression with the real [151645, 151643]
+  pair (stops right after 151643) plus a test documenting the pre-fix
+  miss; 2 ModelDirectory optional-file cases; 6 GenerationConfig parse
+  edge cases. Full suite minus the logit phase-exit gate: 129 tests,
+  0 failures, 21s.

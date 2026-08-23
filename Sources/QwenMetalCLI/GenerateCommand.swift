@@ -74,8 +74,16 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
             format: "loaded in %.1fs", Date().timeIntervalSince(loadStart)))
 
         let promptIds = tokenizer.encode(prompt)
+        // Stop set = config.json ∪ tokenizer ∪ generation_config.json — the
+        // last is what HF generate() itself consults, and on the pinned
+        // checkpoint it alone carries <|endoftext|> 151643 (docs/AUDIT.md F2).
         var eosTokenIds = Set(config.eosTokenIds)
         if let eos = tokenizer.eosTokenId { eosTokenIds.insert(eos) }
+        if let generationConfigURL = directory.generationConfigURL {
+            let generationConfig = try GenerationConfig.load(
+                path: generationConfigURL.path)
+            eosTokenIds.formUnion(generationConfig.eosTokenIds)
+        }
 
         let decodeStart = Date()
         let generated = try DecodeLoop(model: model, maxContext: contextLimit)

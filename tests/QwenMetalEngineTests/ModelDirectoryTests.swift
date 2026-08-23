@@ -53,6 +53,24 @@ final class ModelDirectoryTests: XCTestCase {
         }
     }
 
+    // MARK: - (EOS-1) optional generation_config.json
+
+    func testGenerationConfigURLNilWhenAbsent() throws {
+        try touch(Self.supportFiles + ["model.safetensors"])
+        let directory = try ModelDirectory(validating: tempDir)
+        XCTAssertNil(
+            directory.generationConfigURL,
+            "generation_config.json is optional — absence must not be an error")
+    }
+
+    func testGenerationConfigURLResolvedWhenPresent() throws {
+        try touch(Self.supportFiles + ["model.safetensors", "generation_config.json"])
+        let directory = try ModelDirectory(validating: tempDir)
+        XCTAssertEqual(
+            directory.generationConfigURL?.lastPathComponent,
+            "generation_config.json")
+    }
+
     func testNoCheckpointThrows() throws {
         try touch(Self.supportFiles)
         XCTAssertThrowsError(try ModelDirectory(validating: tempDir)) { error in

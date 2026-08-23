@@ -161,8 +161,9 @@ public struct ModelConfig: Equatable {
     }
 
     /// `eos_token_id` arrives as a single id or a list of ids in HF configs;
-    /// normalize both to a list of non-negative integers.
-    private static func intList(_ raw: Any, key: String) throws -> [Int] {
+    /// normalize both to a list of non-negative integers. Internal (not
+    /// private): `GenerationConfig` parses the same key with the same rules.
+    static func intList(_ raw: Any, key: String) throws -> [Int] {
         let values: [Any] = (raw as? [Any]) ?? [raw]
         return try values.map { value in
             guard let number = value as? NSNumber,

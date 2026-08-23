@@ -57,6 +57,37 @@ final class DecodeLoopTests: XCTestCase {
         XCTAssertEqual(generated, [1, 1])
     }
 
+    // MARK: - (EOS-1) generation_config.json stop-pair regression
+
+    /// The pinned checkpoint's real stop pair from generation_config.json
+    /// (docs/AUDIT.md F2): decode must stop on the SECOND id too —
+    /// <|endoftext|> 151643 — not just <|im_end|> 151645.
+    func testStopsOnEndOfTextWithPinnedStopPair() throws {
+        let imEnd = 151645, endOfText = 151643, vocab = 151_646
+        // First step emits an ordinary token, second emits <|endoftext|>.
+        let source = ScriptedSource(vocabSize: vocab) { ids in
+            self.peaked(ids.count == 1 ? 42 : endOfText, vocab: vocab)
+        }
+        let generated = try DecodeLoop(model: source, maxContext: 64).generate(
+            promptIds: [0], maxNewTokens: 8, eosTokenIds: [imEnd, endOfText])
+        XCTAssertEqual(
+            generated, [42, endOfText],
+            "decode must stop on <|endoftext|> when the stop set carries the pair")
+    }
+
+    /// Documents the audit-verified failure mode: a stop set of {151645}
+    /// only (config.json ∪ tokenizer, no generation_config.json union) never
+    /// stops on 151643, so decode runs to max-tokens appending garbage.
+    func testEndOfTextMissedWhenStopSetLacksIt() throws {
+        let imEnd = 151645, endOfText = 151643, vocab = 151_646
+        let source = ScriptedSource(vocabSize: vocab) { _ in
+            self.peaked(endOfText, vocab: vocab)
+        }
+        let generated = try DecodeLoop(model: source, maxContext: 64).generate(
+            promptIds: [0], maxNewTokens: 4, eosTokenIds: [imEnd])
+        XCTAssertEqual(generated, Array(repeating: endOfText, count: 4))
+    }
+
     // MARK: - Input validation (CLI edge cases)
 
     func testEmptyPromptThrows() {
