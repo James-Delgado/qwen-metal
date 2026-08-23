@@ -281,8 +281,9 @@ tasks:
   - id: P1-4
     rank: 11
     title: "CPU modules (family-correct) + per-module activation tests"
-    status: in_progress
+    status: done
     started_at: 2026-08-23T01:28:45Z
+    completed_at: 2026-08-23T01:46:36Z
     depends_on: [P1-1, P1-2, P1-3]
     blocks: [P1-5]
     deliverable:
@@ -292,11 +293,21 @@ tasks:
     notes: |
       Embedding, RMSNorm, RoPE, GQA attention (+QKV bias OR QK-norm per pinned
       family), SwiGLU, final norm/lm_head. fp32 accumulation. Readable over fast.
+      2026-08-23: landed as Sources/QwenMetalEngine/Model/{ModelError,Embedding,
+      RMSNorm,RoPE,Attention,MLP,TransformerBlock,QwenModel}.swift +
+      ActivationFixtureTests (7 oracle tests vs dumped HF slices; skip cleanly
+      if the local-only consolidated checkpoint is absent) +
+      ModelModuleUnitTests (13 synthetic/error-path tests, no checkpoint
+      needed). Qwen3-only per PIN-1 (QK-norm before RoPE, no biases; loader
+      rejects other families). Gates pre-committed in DECISIONS.md before
+      tests; held unmodified first run (embedding exact, hidden slices
+      5e-5·max|ref|, lm_head 1e-3). Full suite 83 tests, 0 failures.
+      Unblocks P1-5. See DECISIONS.md 2026-08-23 P1-4 entries.
 
   - id: P1-5
     rank: 12
     title: "Decode loop + CLI + full logit-match suite + tokenizer equivalence (Phase 1 exit)"
-    status: blocked
+    status: ready
     depends_on: [P1-4]
     blocks: [AUDIT-1, SPEC-P2]
     deliverable:
@@ -478,3 +489,21 @@ tasks:
       checksum-reduce) variant bounds the true roofline denominator for
       decode-shaped traffic. iPhone run is owner-james when it lands.
       Deliberately ranked last: filler task, never blocks the phase chain.
+
+  - id: IO-1
+    rank: 25
+    title: "Vectorize the fp16/bf16→fp32 upcast in SafetensorsFile (dev-loop wall time)"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: "engine package (io module)"
+      tests: "existing exactness tests must stay == (upcast remains exact)"
+    est_complexity: small
+    notes: |
+      Seeded 2026-08-23 from P1-4: the one-time fp32 materialization of the
+      1.7B checkpoint costs ~190s per debug `swift test` run (scalar
+      per-element loop). P1-5 dev iterates the suite constantly, so this is
+      real friction. Candidate: vDSP/BNNS conversion or a release-mode-only
+      loop; MUST preserve exactness (== tests) and the mmap-only invariant.
+      Filler task: never blocks the phase chain; pick up when the wait hurts.

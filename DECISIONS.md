@@ -598,3 +598,77 @@ Decisions by James this session; agent prepared the harnesses (P0A-1 stays
   The test-side triple loop also accumulates Σ|a||b| per element as the
   gate's error-bound basis, so the oracle is ~20 lines rather than the
   spec's ~15 — the extra lines are the bound computation, not model logic.
+
+## 2026-08-23 — P1-4 gate pre-committed: per-module activation tolerances
+
+Set BEFORE any P1-4 test was written or run (METHODOLOGY rule 2), following
+the P0B-2/P0B-3/P0B-4/P1-3 precedent of agent-committed derived gates.
+Each Swift module is fed its reference input slice from
+tests/fixtures/qwen3-1.7b/activations/ (prompt short_english, seq 5) and
+diffed against its reference output slice — modules are isolated, so a
+failure names the module, not the pipeline.
+
+- **Hidden-state slices** (layer0_pre_attn_norm_output, layer0_attn_output,
+  layer0_block_output, last_layer_output, final_norm_output): per element,
+  |Δ| <= max(5e-5 · M, 1e-6), where M = max|ref| over that slice.
+  Derivation, not a new number: the phase's already-committed logit gate is
+  1e-3 absolute at logits whose typical magnitude is ~20 (phase-0-1.md
+  correctness harness) — a relative resolution of 5e-5. These modules sit
+  strictly earlier in the network than the logits, where legitimate
+  reduction-order divergence has compounded less, so granting them the
+  end-to-end relative resolution is conservative in the right direction.
+  Scaling by slice max-abs (not per-element |ref|) is the same species as
+  the P0B-3 gate's |ref| term: dot-product error scales with the magnitude
+  of the accumulated terms, and near-zero outputs legitimately carry
+  absolute error inherited from large terms in the same reduction. The
+  1e-6 floor covers a hypothetical all-near-zero slice; it is orders of
+  magnitude above fp32 noise at these magnitudes either way. Bug-scale
+  errors (wrong rotation half, transposed projection, bad GQA head map,
+  missing causal mask) are O(1) relative — 3-4 orders above the gate.
+- **Embedding lookup: exact ==, no tolerance** (same species as the P1-2
+  upcast and P1-3 small-integer carve-outs). It is a row copy of
+  exactly-upcast bf16 weights; HF's fp32 load performs the identical exact
+  upcast, so any difference is a bug.
+- **Isolated lm_head check** (final_norm_output fixture in, full-vocab
+  logits out, vs logits_step0000): the committed phase gate applies
+  unchanged — |Δ| <= 1e-3 absolute. No new number is introduced for
+  logit-shaped output, and the single-matmul divergence in this isolated
+  check is far below the end-to-end budget.
+
+Per the standing rule (hard rule 6), none of these loosen — a failure is
+a bug signal, never a tolerance-adjustment signal.
+
+## 2026-08-23 — P1-4 landed: CPU reference modules (Qwen3 family) + activation oracle tests
+
+- **Shipped:** Sources/QwenMetalEngine/Model/{ModelError, Embedding, RMSNorm,
+  RoPE, Attention, MLP, TransformerBlock, QwenModel}.swift +
+  ActivationFixtureTests (7 per-module oracle tests vs the dumped HF fp32
+  slices, isolated: each module is fed its reference INPUT slice) +
+  ModelModuleUnitTests (13 synthetic/error-path tests needing no checkpoint).
+  Full suite 83 tests, 0 failures. **All pre-committed gates (previous entry)
+  held unmodified on the first run** — embedding matched exactly; every
+  hidden-state slice passed 5e-5·max|ref|; the isolated lm_head check passed
+  the committed 1e-3 logit gate.
+- **Family encoding:** Qwen3 only, per PIN-1 — per-head Q/K RMSNorm applied
+  BEFORE RoPE (HF order), half-split rotation with fp32 angle tables
+  mimicking HF's fp32 path, no QKV biases. QwenModel refuses any config that
+  is not Qwen3-shaped (unsupportedFamily) instead of growing an architecture
+  registry (PLAN.md non-goals). Tied embeddings honored: lm_head shares the
+  embedding table storage.
+- **Hard rule 8 honored:** QKV/o/MLP/lm_head projections AND per-head
+  QK^T / PV all route through BLAS.sgemm; HF's [out, in] weight storage is
+  consumed via transposeB so no transpose is ever materialized. Elementwise
+  logic (RMSNorm, RoPE, softmax max-subtracted, SiLU, embedding lookup) is
+  hand-rolled fp32 Swift.
+- **Checkpoint handling in tests:** ActivationFixtureTests uses the
+  local-only consolidated artifact (models/qwen3-1.7b-70d244cc.safetensors),
+  verifies its __metadata__.source_revision equals the PIN-1 revision before
+  trusting it, and XCTSkips with a regeneration hint when the file is absent.
+  The pinned config.json values are mirrored inline in the test (the
+  from-disk config path gets exercised by P1-5's CLI).
+- **Measured (dev-loop, Mac, debug build):** one-time fp32 materialization of
+  the checkpoint dominates the suite at ~190s; everything after loads in
+  milliseconds-to-seconds (28-layer seq-5 forward ≈ 3.2s, lm_head ≈ 1.7s).
+  Seeded follow-up IO-1 (vectorized upcast) rather than optimizing in-diff.
+- P1-5 flipped to ready (last Phase 1 task: decode loop + CLI + full
+  logit-match suite + tokenizer equivalence).
