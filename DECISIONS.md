@@ -838,3 +838,14 @@ bug signal, never a tolerance-adjustment signal.
   them without new evidence (notably: fixture-write atomicity is covered
   by manifest sha256 verification; the 4-of-50 full-vocab checkpoint
   structure is the pre-committed gate design, not a coverage gap).
+
+## 2026-08-23 — Audit tasks re-ranked ahead of Phase 2 (decided by James)
+
+- CFG-1/EOS-1/TOK-1 bumped 26/27/28 -> 13.1/13.2/13.3: all three audit
+  fixes land before any Phase 2 decode work. Rationale: CFG-1 and EOS-1 are
+  HIGH-severity correctness/robustness gaps in the exact load/decode paths
+  Phase 2 builds on; EOS-1 in particular affects free-running stop behavior
+  that SPEC-P2's top-1-agreement gate will measure, and TOK-1 pins the
+  tokenizer lineage the Phase 2 diffs depend on. Fractional ranks after
+  AUDIT-1 (13), IO-1 precedent — phase chain unrenumbered; SPEC-P2 stays
+  ready at rank 14 and simply picks up after the three fixes.
