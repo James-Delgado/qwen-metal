@@ -365,8 +365,9 @@ tasks:
   - id: AUDIT-1
     rank: 13
     title: "Run /code-audit to populate the backlog with verified findings"
-    status: in_progress
+    status: done
     started_at: 2026-08-23T19:22:24Z
+    completed_at: 2026-08-23T19:48:59Z
     depends_on: [P1-5]
     blocks: []
     deliverable:
@@ -376,6 +377,10 @@ tasks:
     notes: |
       Bootstrap task from /project-init, retargeted 2026-08-20: audit runs once a
       real codebase exists (after Phase 1). Do not hand-infer analysis tasks.
+      2026-08-23: full-depth MLE-lens audit run (4 specialist reviewers +
+      adversarial verify, 3 votes on HIGH). 12 candidates -> 5 confirmed
+      (2 HIGH, 2 MEDIUM, 1 LOW), 7 refuted. Report: docs/AUDIT.md (fresh
+      snapshot incl. refuted-candidates appendix). Seeded CFG-1, EOS-1, TOK-1.
 
   # ---------- Phases 2-6: spec tasks + exec milestones (just-in-time rule) ----------
   - id: SPEC-P2
@@ -534,6 +539,69 @@ tasks:
       `swift test -c release`; document a --filter fast-path; or hoist the
       per-step Double conversions in the test helper. MUST NOT touch gates,
       fixtures, or model code readability. Filler: never blocks the chain.
+  # ---------- Audit findings (seeded 2026-08-23 by AUDIT-1; see docs/AUDIT.md) ----------
+  - id: CFG-1
+    rank: 26
+    title: "Harden ModelConfig numeric validation (positiveInt 2^63 boundary, intList bound, double() finiteness)"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: "engine package (io module)"
+      tests: "ModelConfigTests bounds/overflow/finiteness edge cases (2^63, 1e20, negative eps/theta)"
+    est_complexity: small
+    notes: |
+      docs/AUDIT.md F1 (HIGH, upheld 3-0) + F3 + F4 (MEDIUM, upheld 1-0) —
+      one coherent diff in the same validation layer. F1: `asDouble <=
+      Double(Int.max)` admits 2^63 (Double(Int.max) rounds UP to 2^63);
+      NSNumber.intValue wraps to Int.min; reproduced traps at QwenModel.swift:53
+      (0..<Int.min range) and :60 (numHeads*headDim overflow) from a doctored
+      config.json — crash instead of ModelConfigError. F3: double() lacks
+      >0 && isFinite for rms_norm_eps/rope_theta -> silent NaN logits
+      (RMSNorm.swift:30, RoPE.swift:29). F4: intList (eos_token_id) lacks the
+      upper-bound check positiveInt has ("1e20" -> garbage id, no throw).
+      Surfaced by AUDIT-1 workflow (swift + silent-failure reviewers).
+
+  - id: EOS-1
+    rank: 27
+    title: "Union generation_config.json eos_token_id into the decode stop set (missing 151643)"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: "engine package (io module + CLI stop-set wiring)"
+      tests: "DecodeLoopTests regression with [151645, 151643] via scripted source; ModelDirectory optional-file handling"
+    est_complexity: small
+    notes: |
+      docs/AUDIT.md F2 (HIGH, upheld 3-0). Pinned checkpoint's
+      generation_config.json lists eos_token_id [151645, 151643]; engine stop
+      set is {151645} only (config.json ∪ tokenizer_config.json), so
+      <|endoftext|> never stops decode — silent post-EOS garbage on
+      completion-style prompts (3 of 5 pinned prompts). HF generate() consults
+      generation_config.json, so this is oracle-parity skew invisible to the
+      teacher-forced logit suite. If instead scoped OUT, that needs a
+      DECISIONS.md entry per METHODOLOGY (surfaced 2026-08-23 by AUDIT-1,
+      mle reviewer). Touches decode-stop behavior: note in DECISIONS.md when
+      fixed (tokenizer/stop observations continue the P1-5 entry).
+
+  - id: TOK-1
+    rank: 28
+    title: "Pin local tokenizer artifacts programmatically (sha256 check in TokenizerEquivalenceTests)"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: "tests (TokenizerEquivalenceTests setUp)"
+      tests: "setUp fails loudly on tokenizer.json/tokenizer_config.json hash mismatch vs recorded pins"
+    est_complexity: small
+    notes: |
+      docs/AUDIT.md F5 (LOW, upheld 1-0). SharedCheckpoint verifies the
+      checkpoint's source_revision, but tokenizer.json/tokenizer_config.json
+      hashes exist only as DECISIONS.md prose (aeb13307…/d5d09f07…) — never
+      checked programmatically; a drifted models/ tokenizer passes if the 5
+      short prompts happen to tokenize identically. Mirror the
+      source_revision pattern. Surfaced 2026-08-23 by AUDIT-1 (mle reviewer).
+
   - id: BW-1
     rank: 24
     title: "Read-only streaming bandwidth microbench variant (complements triad)"

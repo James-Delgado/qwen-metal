@@ -803,3 +803,38 @@ bug signal, never a tolerance-adjustment signal.
   edge inputs + tokenizer equivalence 11 this task; temperature case 10
   n/a — not built); DECISIONS.md updated ✓ (this entry). AUDIT-1 and
   SPEC-P2 flipped to ready.
+
+## 2026-08-23 — AUDIT-1: full-depth code audit run — 5 verified findings, 3 tasks seeded
+
+- **Method:** /code-audit at full depth, MLE lens auto-enabled (transformers/
+  mlx oracle toolchain). Architecture map (read-only explorer) fed to 4
+  parallel specialist reviewers (swift, silent-failure, mle, python), then
+  cross-reviewer dedup and adversarial verification: independent skeptics
+  prompted to refute, default-refuted-if-uncertain, 3 votes on
+  CRITICAL/HIGH and 1 on MEDIUM/LOW. All reviewers landed; 22/22 agents
+  completed.
+- **Result:** 12 candidates → 5 confirmed (2 HIGH, 2 MEDIUM, 1 LOW), 7
+  refuted. Full report incl. refuted-candidates appendix: docs/AUDIT.md
+  (fresh snapshot; overwritten on each audit rerun by design).
+- **Confirmed, in brief:** (F1, HIGH) ModelConfig.positiveInt boundary bug —
+  `asDouble <= Double(Int.max)` admits 2^63 since Double(Int.max) rounds UP
+  to 2^63; NSNumber.intValue wraps to Int.min; reproduced end-to-end traps
+  at QwenModel.swift:53/:60 from a doctored config.json (crash instead of
+  thrown ModelConfigError). (F2, HIGH) decode stop set is {151645} only;
+  the pinned checkpoint's generation_config.json lists [151645, 151643] and
+  is read nowhere — HF generate() consults it, so this is oracle-parity
+  skew the teacher-forced logit suite structurally cannot see. (F3, MED)
+  double() lacks finiteness/sign checks for rms_norm_eps/rope_theta →
+  silent NaN logits. (F4, MED) intList lacks positiveInt's upper bound →
+  garbage eos ids pass. (F5, LOW) tokenizer.json/tokenizer_config.json
+  hashes exist only as prose in this ledger, never checked programmatically.
+- **Decision:** seeded CFG-1 (F1+F3+F4, one validation-layer diff), EOS-1
+  (F2), TOK-1 (F5) into docs/PRIORITIES.yaml at ranks 26-28 — after the
+  phase chain per the audit SOP (rank after current max); James may re-rank
+  (e.g. EOS-1 before Phase 2 decode work) as with IO-1's bump. No gates,
+  fixtures, or pinned invariants touched by the audit; no code changed.
+- **Note on refuted candidates:** 7 plausible-but-wrong findings are
+  recorded in docs/AUDIT.md's appendix so audit reruns don't resurface
+  them without new evidence (notably: fixture-write atomicity is covered
+  by manifest sha256 verification; the 4-of-50 full-vocab checkpoint
+  structure is the pre-committed gate design, not a coverage gap).
