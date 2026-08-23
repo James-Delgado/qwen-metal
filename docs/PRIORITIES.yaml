@@ -307,7 +307,8 @@ tasks:
   - id: IO-1
     rank: 11.5
     title: "Vectorize the fp16/bf16→fp32 upcast in SafetensorsFile (dev-loop wall time)"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-23T15:29:05Z
     depends_on: []
     blocks: []
     deliverable:
