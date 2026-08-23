@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 import QwenMetalEngine
 
@@ -18,6 +19,18 @@ final class TokenizerEquivalenceTests: XCTestCase {
     /// `<|im_end|>` in the pinned tokenizer_config.json.
     private static let pinnedEOSTokenId = 151645
 
+    /// TOK-1 (docs/AUDIT.md F5): sha256 pins for the local-only tokenizer
+    /// artifacts, mirroring SharedCheckpoint's source_revision pin. Recorded
+    /// in the DECISIONS.md P1-5/TOK-1 entries; a drifted models/ file must
+    /// fail loudly here, not pass because the 5 short prompts happen to
+    /// tokenize identically.
+    private static let pinnedArtifactSHA256 = [
+        "tokenizer.json":
+            "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+        "tokenizer_config.json":
+            "d5d09f07b48c3086c508b30d1c9114bd1189145b74e982a265350c923acd8101",
+    ]
+
     private static var shared: Result<TextTokenizer, Error>?
 
     override func setUpWithError() throws {
@@ -28,6 +41,20 @@ final class TokenizerEquivalenceTests: XCTestCase {
                     "models/\(name) not present (local-only — download it at the "
                     + "pinned revision \(SharedCheckpoint.pinnedRevision); see the "
                     + "DECISIONS.md P1-5 entry)")
+            }
+        }
+        // Present but drifted is an error, never a skip: a wrong tokenizer
+        // silently weakens the equivalence oracle.
+        for (name, pinnedHash) in Self.pinnedArtifactSHA256 {
+            let url = SharedCheckpoint.modelsDir.appendingPathComponent(name)
+            let hash = SHA256.hash(data: try Data(contentsOf: url))
+                .map { String(format: "%02x", $0) }.joined()
+            guard hash == pinnedHash else {
+                throw SharedCheckpoint.HelperError(description:
+                    "models/\(name) sha256 \(hash) does not match the pinned "
+                    + "\(pinnedHash) — the local artifact drifted from revision "
+                    + "\(SharedCheckpoint.pinnedRevision); re-download it "
+                    + "(see the DECISIONS.md P1-5 entry)")
             }
         }
     }

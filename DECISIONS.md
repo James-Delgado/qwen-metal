@@ -913,3 +913,24 @@ bug signal, never a tolerance-adjustment signal.
   miss; 2 ModelDirectory optional-file cases; 6 GenerationConfig parse
   edge cases. Full suite minus the logit phase-exit gate: 129 tests,
   0 failures, 21s.
+
+## 2026-08-23 — TOK-1: tokenizer artifacts pinned programmatically (audit F5)
+
+- **What:** TokenizerEquivalenceTests.setUpWithError now sha256-verifies the
+  local-only models/ tokenizer artifacts against pinned constants, mirroring
+  SharedCheckpoint's source_revision check. Present-but-drifted is a thrown
+  error (loud failure), never a skip; absence still skips cleanly as before.
+- **Full pins recorded** (previously prefix-only prose in the P1-5 entry;
+  both recomputed this session from models/ and matching those prefixes):
+  tokenizer.json
+  aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4,
+  tokenizer_config.json
+  d5d09f07b48c3086c508b30d1c9114bd1189145b74e982a265350c923acd8101.
+- **Scope note:** models/config.json (1ddb5b89…) intentionally NOT pinned —
+  the test oracle chain never reads it (SharedCheckpoint inlines the pinned
+  config values; the file only feeds manual CLI runs), and audit F5 names
+  only the two tokenizer files.
+- **Verification:** red first — an all-zeros placeholder pin failed all 3
+  tokenizer tests with the full mismatch message; real pins green (3 tests).
+  Full suite minus the logit phase-exit gate: 129 tests, 0 failures, 17.5s.
+  No gates, fixtures, or engine code touched.

@@ -456,8 +456,9 @@ tasks:
   - id: TOK-1
     rank: 13.3
     title: "Pin local tokenizer artifacts programmatically (sha256 check in TokenizerEquivalenceTests)"
-    status: in_progress
+    status: done
     started_at: 2026-08-23T20:25:38Z
+    completed_at: 2026-08-23T20:30:00Z
     depends_on: []
     blocks: []
     deliverable:
@@ -474,6 +475,12 @@ tasks:
       RANK BUMPED 28 -> 13.3 on 2026-08-23 (decided by James): rides with
       CFG-1/EOS-1 ahead of Phase 2 so the oracle chain is lineage-pinned
       before Phase 2 diffs against it.
+      2026-08-23 (done): setUpWithError sha256-verifies tokenizer.json +
+      tokenizer_config.json vs pinned constants (full hashes now in
+      DECISIONS.md TOK-1 entry); drifted file throws loudly, absent file
+      still skips. Red-first (zeroed pin -> 3 loud failures), green with
+      real pins. models/config.json deliberately not pinned (oracle chain
+      never reads it). Suite minus logit gate: 129 tests, 0 failures.
 
   # ---------- Phases 2-6: spec tasks + exec milestones (just-in-time rule) ----------
   - id: SPEC-P2
