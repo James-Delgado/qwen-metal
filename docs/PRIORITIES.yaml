@@ -365,7 +365,8 @@ tasks:
   - id: AUDIT-1
     rank: 13
     title: "Run /code-audit to populate the backlog with verified findings"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-23T19:22:24Z
     depends_on: [P1-5]
     blocks: []
     deliverable:
