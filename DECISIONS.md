@@ -672,3 +672,14 @@ a bug signal, never a tolerance-adjustment signal.
   Seeded follow-up IO-1 (vectorized upcast) rather than optimizing in-diff.
 - P1-5 flipped to ready (last Phase 1 task: decode loop + CLI + full
   logit-match suite + tokenizer equivalence).
+
+## 2026-08-23 — IO-1 rank bumped 25 → 11.5 (decided by James)
+
+The upcast-vectorization follow-up runs BEFORE P1-5 rather than as filler:
+P1-5's dev loop re-pays the ~190s debug-mode checkpoint materialization on
+every `swift test` iteration, while IO-1 is a <~1h fix that amortizes within
+a handful of runs. It is pulled forward as pure dev-loop economics, NOT as a
+phase gate: Phase 1's exit criteria are unchanged, and if IO-1 stalls it is
+skipped, not fought. Constraint reaffirmed for whoever picks it up: the
+upcast must stay exact (the P1-2 == tests are the gate) and weights stay
+mmap-only (PLAN.md invariant 5).

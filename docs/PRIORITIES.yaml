@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-08-20
+last_updated: 2026-08-23
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -304,6 +304,29 @@ tasks:
       5e-5·max|ref|, lm_head 1e-3). Full suite 83 tests, 0 failures.
       Unblocks P1-5. See DECISIONS.md 2026-08-23 P1-4 entries.
 
+  - id: IO-1
+    rank: 11.5
+    title: "Vectorize the fp16/bf16→fp32 upcast in SafetensorsFile (dev-loop wall time)"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: "engine package (io module)"
+      tests: "existing exactness tests must stay == (upcast remains exact)"
+    est_complexity: small
+    notes: |
+      Seeded 2026-08-23 from P1-4: the one-time fp32 materialization of the
+      1.7B checkpoint costs ~190s per debug `swift test` run (scalar
+      per-element loop). Candidate: vDSP/BNNS conversion or a release-mode-only
+      loop; MUST preserve exactness (== tests) and the mmap-only invariant.
+      RANK BUMPED 25 -> 11.5 on 2026-08-23 (decided by James): originally a
+      when-the-wait-hurts filler, but P1-5 (decode loop + full logit-match
+      suite) is exactly the task that pays the 190s tax on every edit-test
+      iteration, while this fix is small (<~1h). Amortizes within a handful
+      of P1-5 test runs, so it goes first. Fractional rank slots it between
+      the completed P1-4 (11) and P1-5 (12) without renumbering the chain.
+      Still never blocks the phase chain: if it stalls, skip and start P1-5.
+
   - id: P1-5
     rank: 12
     title: "Decode loop + CLI + full logit-match suite + tokenizer equivalence (Phase 1 exit)"
@@ -489,21 +512,3 @@ tasks:
       checksum-reduce) variant bounds the true roofline denominator for
       decode-shaped traffic. iPhone run is owner-james when it lands.
       Deliberately ranked last: filler task, never blocks the phase chain.
-
-  - id: IO-1
-    rank: 25
-    title: "Vectorize the fp16/bf16→fp32 upcast in SafetensorsFile (dev-loop wall time)"
-    status: ready
-    depends_on: []
-    blocks: []
-    deliverable:
-      file: "engine package (io module)"
-      tests: "existing exactness tests must stay == (upcast remains exact)"
-    est_complexity: small
-    notes: |
-      Seeded 2026-08-23 from P1-4: the one-time fp32 materialization of the
-      1.7B checkpoint costs ~190s per debug `swift test` run (scalar
-      per-element loop). P1-5 dev iterates the suite constantly, so this is
-      real friction. Candidate: vDSP/BNNS conversion or a release-mode-only
-      loop; MUST preserve exactness (== tests) and the mmap-only invariant.
-      Filler task: never blocks the phase chain; pick up when the wait hurts.
