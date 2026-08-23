@@ -1104,3 +1104,43 @@ docs/phases/phase-2.md (D8) and docs/PRIORITIES.yaml (P2-6, P2-EXEC):
 - Test-only upcast kernels live in the test file, not the engine (P2-2 owns
   production kernels — YAGNI). Suite minus logit gate: 137 tests, 0
   failures (was 129).
+
+## 2026-08-23 — P2-2: naive decode kernel set landed (Tier-K gates held first run)
+
+- **Landed: Sources/QwenMetalEngine/Metal/DecodeKernels.swift** — the six
+  non-attention decode kernels of spec D4 (embedding-lookup, rmsnorm, matvec
+  fp16- and fp32-store, rope, swiglu, residual-add), all naive
+  one-thread-per-output, runtime-compiled from one source string (P0B
+  convention). + tests/QwenMetalEngineTests/DecodeKernelTests.swift (17
+  tests). Suite minus logit gate: 154 tests, 0 failures (was 137).
+- **API shape (reversible, anticipates D5):** kernels expose
+  `encode(into encoder:)` methods rather than self-dispatching — P2-4 packs
+  ~500 dispatches into ONE command buffer per token on a default (serial)
+  compute encoder, and the Tier-K tests drive the same methods through
+  `MetalContext.timedDispatch` (hard rule 7). Sequential-dispatch ordering
+  is the serial encoder's guarantee; no barriers needed until Phase 4
+  touches encoder strategy.
+- **Weight addressing:** whole-checkpoint buffer + per-tensor ELEMENT
+  offsets (never `setBuffer` offsets), typed `ushort` loads per the P2-1
+  alignment pin; host wrappers throw on odd byte offsets. bf16→fp32 is the
+  same registered bit-shift as P2-1's exact-gated form.
+- **RoPE table sharing:** the GPU kernel consumes the CPU `RoPE`'s fp32
+  cos/sin tables verbatim — `RoPE` gained read-only `cosValues`/`sinValues`
+  accessors (no behavior change to the frozen oracle; its stored tables were
+  already computed). Angle drift is therefore structurally impossible; the
+  position-p unit test oracles against CPU full-recompute (spec edge case 3
+  in its targeted unit form).
+- **Fast-math default retained** (P0B convention, options: nil): fp32
+  `exp`/`sqrt` few-ulp error is ~2^-20 relative, orders below the Tier-K
+  gate's 2^-9; if a Tier-M/E suite later implicates it, `precise::`
+  variants are the fix lever — the gates do not move (hard rule 6).
+- **Gate outcomes:** every Tier-K diff (matvec vs BLAS.sgemm incl. odd
+  shapes/near-zero floor/nonzero offset, rmsnorm single-row + per-head
+  rows, rope p=0 and p=9, swiglu, residual-add, swiglu→residual one-buffer
+  chain) passed at max(2^-9·M, 2^-11) unmodified first run;
+  embedding-lookup passed the EXACT bitwise gate including fp16-boundary
+  patterns (±0, bf16 subnormal→0, overflow→±inf, min-normal, subnormal
+  result, +inf). Nothing loosened.
+- lm_head needs no transposed kernel: the tied [vocab, hidden] embedding
+  table IS [out, in] for logits = E·x, so the standard matvec consumes it
+  directly (nothing materialized, hard rule 1).

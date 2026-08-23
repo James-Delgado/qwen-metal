@@ -12,6 +12,12 @@ public struct RoPE {
     private let cosTable: [Float]
     private let sinTable: [Float]
 
+    /// Read-only table access for the GPU decode path (Phase 2): the Metal
+    /// RoPE kernel consumes THESE fp32 tables, so GPU angles are bit-identical
+    /// to the oracle's — table drift can never be a divergence source.
+    public var cosValues: [Float] { cosTable }
+    public var sinValues: [Float] { sinTable }
+
     public init(headDim: Int, theta: Double, positions: Int) throws {
         guard headDim > 0, headDim % 2 == 0 else {
             throw ModelError.badInput(detail: "RoPE headDim \(headDim) must be positive and even")

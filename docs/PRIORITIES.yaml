@@ -545,8 +545,9 @@ tasks:
   - id: P2-2
     rank: 14.2
     title: "Naive decode kernel set (matvec, rmsnorm, rope, swiglu, residual, embedding) + Tier-K tests"
-    status: in_progress
+    status: done
     started_at: 2026-08-23T23:30:21Z
+    completed_at: 2026-08-23T23:41:56Z
     depends_on: [SPEC-P2]
     blocks: [P2-3]
     deliverable:
@@ -558,11 +559,21 @@ tasks:
       accumulation, runtime-compiled source strings (P0B pattern). Hard rule
       3: correctness test before ANY optimization. lm_head matvec consumes
       the tied embedding matrix transposed without materializing a transpose.
+      2026-08-23 (done): landed as Sources/QwenMetalEngine/Metal/
+      DecodeKernels.swift (6 kernels, encoder-based API anticipating D5's
+      one-command-buffer-per-token) + DecodeKernelTests (17 tests). All
+      Tier-K gates held unmodified first run; embedding exact-bitwise incl.
+      fp16 boundary patterns; matvec ref via BLAS.sgemm (hard rule 8);
+      RoPE kernel consumes the CPU RoPE's fp32 tables (new read-only
+      accessors — no oracle behavior change). lm_head confirmed: tied
+      [vocab,hidden] table IS [out,in], standard matvec, no transpose.
+      Suite minus logit gate: 154 tests, 0 failures. Unblocks P2-3.
+      See DECISIONS.md 2026-08-23 P2-2 entry.
 
   - id: P2-3
     rank: 14.3
     title: "KV cache (preallocated 448 MiB) + kv-append + naive attention kernels + edge tests"
-    status: blocked
+    status: ready
     depends_on: [P2-2]
     blocks: [P2-4]
     deliverable:
