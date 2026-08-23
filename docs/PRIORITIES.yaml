@@ -386,7 +386,8 @@ tasks:
   - id: CFG-1
     rank: 13.1
     title: "Harden ModelConfig numeric validation (positiveInt 2^63 boundary, intList bound, double() finiteness)"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-23T21:05:00Z
     depends_on: []
     blocks: []
     deliverable:
