@@ -337,7 +337,8 @@ tasks:
   - id: P1-5
     rank: 12
     title: "Decode loop + CLI + full logit-match suite + tokenizer equivalence (Phase 1 exit)"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-23T16:05:00Z
     depends_on: [P1-4]
     blocks: [AUDIT-1, SPEC-P2]
     deliverable:
