@@ -131,6 +131,18 @@ public final class SafetensorsFile {
         munmap(base, fileSize)
     }
 
+    // MARK: - Raw mapping access (same-module only)
+
+    /// The live mmap, exposed for `GPUWeights` (P2-1): the no-copy MTLBuffer
+    /// aliases these pages directly. The mapping stays valid for this
+    /// object's lifetime — holders must retain the file (invariant 5: the
+    /// bytes are never copied onto the heap on the mmap path).
+    var mappedBaseAddress: UnsafeMutableRawPointer { base }
+    var mappedFileSize: Int { fileSize }
+    /// Absolute file offset where the tensor data section begins; a tensor's
+    /// absolute offset is this plus its `TensorInfo.dataOffset`.
+    var dataSectionStart: Int { dataSectionOffset }
+
     // MARK: - Tensor access
 
     public func info(for name: String) throws -> TensorInfo {

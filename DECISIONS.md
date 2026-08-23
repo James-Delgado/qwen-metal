@@ -1072,3 +1072,35 @@ docs/phases/phase-2.md (D8) and docs/PRIORITIES.yaml (P2-6, P2-EXEC):
   confirms all v1.4 content markers present and no stale v1.3/planning-
   estimate strings remain (pypdf added to .venv as a verification-only
   dev dependency).
+
+## 2026-08-23 — P2-1: GPU weight residency landed (no-copy mmap buffer + wired-copy variant)
+
+- **Landed: Sources/QwenMetalEngine/Metal/GPUWeights.swift** + 3 internal
+  raw-mapping accessors on SafetensorsFile + GPUWeightsTests (8 tests).
+  Spec D1 as written: ONE `makeBuffer(bytesNoCopy:)` over the whole mmapped
+  file (base page-aligned by mmap; length rounded up to a page multiple —
+  safe because mmap maps whole pages), per-tensor ABSOLUTE byte offsets
+  (data-section start + header `data_offsets`) handed to kernels as
+  arguments, never as `setBuffer` offsets (whose alignment rules the
+  format's 2-byte packing can violate). Wired-copy = same bytes memcpy'd
+  into a heap `MTLBuffer` (the copy dirties the pages — that is the
+  residency delta OV#9 measures).
+- **Lifetime decision:** the no-copy buffer's deallocator closure retains
+  the SafetensorsFile, so the munmap cannot run while ANY holder of the
+  buffer is alive — not just holders of GPUWeights. (Surfaced by the
+  pre-commit review; a caller keeping `buffer` alone would otherwise alias
+  unmapped pages.) Test pins the GPUWeights-outlives-file-reference case.
+- **All P2-1 gates were the pre-committed EXACT (==) surfaces** — bf16
+  bit-shift upcast (NaN payloads included, asserted bitwise), fp16 widening
+  (finite + inf patterns), wired-vs-mmap byte identity AND same-kernel
+  output identity, odd data-section-offset path (spec edge case 7, via
+  byte-assembled 16-bit loads in the test kernels). Held unmodified first
+  run; nothing loosened, no new gate needed.
+- **Measured/pinned for P2-2:** the real consolidated checkpoint's tensor
+  offsets are 2-byte aligned (spot-check test asserts it, plus exact
+  readback of model.norm.weight through the no-copy buffer). Production
+  kernels may therefore use typed `ushort` loads; the byte-assembled form
+  stays test-only.
+- Test-only upcast kernels live in the test file, not the engine (P2-2 owns
+  production kernels — YAGNI). Suite minus logit gate: 137 tests, 0
+  failures (was 129).

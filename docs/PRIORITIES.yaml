@@ -517,8 +517,9 @@ tasks:
   - id: P2-1
     rank: 14.1
     title: "GPU weight residency: mmap no-copy MTLBuffer + tensor offsets + wired-copy variant"
-    status: in_progress
+    status: done
     started_at: 2026-08-23T22:55:00Z
+    completed_at: 2026-08-23T23:40:00Z
     depends_on: [SPEC-P2]
     blocks: [P2-4]
     deliverable:
@@ -531,6 +532,15 @@ tasks:
       bf16 read as ushort, upcast via as_type<float>(uint(w)<<16) in
       registers. Wired-copy = same bytes memcpy'd (residency-only delta,
       exact == harness). Invariant 5 (mmap) intact.
+      2026-08-23 (done): landed as Sources/QwenMetalEngine/Metal/GPUWeights
+      .swift (+3 internal mapping accessors on SafetensorsFile) +
+      GPUWeightsTests (8 tests, all exact/bitwise: bf16 incl. NaN payloads,
+      f16, odd data-section offset, wired==mmap bytes AND kernel outputs,
+      page-rounding, buffer-outlives-file lifetime, real-checkpoint spot
+      check pinning 2-byte-aligned offsets for P2-2). mmap buffer's
+      deallocator retains the file so the mapping outlives any buffer
+      holder. Suite minus logit gate: 137 tests, 0 failures. P2-4 stays
+      blocked on P2-3. See DECISIONS.md 2026-08-23 P2-1 entry.
 
   - id: P2-2
     rank: 14.2
