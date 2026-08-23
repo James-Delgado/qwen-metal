@@ -65,7 +65,7 @@ def footer(canvas, doc):
     canvas.setFont("Helvetica", 7.5)
     canvas.setFillColor(GRAY)
     canvas.drawString(0.75 * inch, 0.45 * inch,
-                      "qwen-metal — Architecture & System Design  ·  v1.3  ·  2026-08-22")
+                      "qwen-metal — Architecture & System Design  ·  v1.4  ·  2026-08-23")
     canvas.drawRightString(letter[0] - 0.75 * inch, 0.45 * inch, f"Page {doc.page}")
     canvas.setStrokeColor(colors.HexColor("#e2e8f0"))
     canvas.line(0.75 * inch, 0.62 * inch, letter[0] - 0.75 * inch, 0.62 * inch)
@@ -86,7 +86,7 @@ S.append(Paragraph("Architecture &amp; System Design Document", ParagraphStyle(
 S.append(Paragraph("A from-scratch, single-model LLM inference engine in Swift + Metal for iPhone — "
                    "Qwen ~1.5–2B, 4-bit quantized — benchmarked head-to-head against MLX Swift and "
                    "llama.cpp on the same physical device.", SUB))
-S.append(Paragraph("Version 1.3 · August 22, 2026 (Phase 0 exit) · Companion to PLAN.md, CLAUDE.md, DECISIONS.md, and the phase specs. "
+S.append(Paragraph("Version 1.4 · August 23, 2026 (Phase 1 exit; Phase 2 spec + gates committed) · Companion to PLAN.md, CLAUDE.md, DECISIONS.md, and the phase specs. "
                    "Where this document and DECISIONS.md disagree, DECISIONS.md (the append-only log) wins.", CAP))
 S.append(HRFlowable(width="100%", color=INK, thickness=1.2, spaceAfter=10))
 
@@ -184,8 +184,9 @@ S.append(Paragraph(
     "carved out in full at model load.", BODY))
 S += fig(f"{D}/d3_memory.png", CW,
          "Figure 3 — Static memory budget against the practical iOS ceiling (with the Increased Memory Limit "
-         "entitlement). Figures are planning estimates for a ~1.5–2B model at 4-bit; Phase 2 replaces them with "
-         "measured values.")
+         "entitlement). Figures derive from the pinned Qwen3-1.7B config (DECISIONS.md PIN-1): ~0.97 GB packed "
+         "4-bit weights incl. scales, 448 MiB fp16 GQA KV at 4K. Derived, not yet measured — Phase 2/3 on-device "
+         "phys_footprint rows replace them. The Phase 2 interim (bf16 weights) peaks near ~4.0 GB.")
 
 S.append(PageBreak())
 
@@ -287,6 +288,18 @@ S.append(Paragraph(
     "independent HF oracle catches any transpose/leading-dimension misuse since it shares none of our BLAS calls. All "
     "model logic — norms, RoPE, softmax, gating — remains plain hand-rolled Swift: sgemm contains no model logic, so "
     "the auditability argument survives the substitution.", BODY))
+S.append(Paragraph(
+    "<b>Phase 1 outcome (2026-08-23) — the chain held.</b> The CPU reference passed the full logit-match suite on the "
+    "first run with every pre-committed gate unmodified: all 5 prompts × 50 teacher-forced steps, full-vocab "
+    "checkpoints ≤ 1e-3, per-step fingerprints and top-64, and exact argmax at all 250 steps (no step needed the "
+    "tie exemption). swift-transformers (pinned exact 1.3.3) produced token ids identical to the Python dump on all "
+    "fixtures. A post-phase adversarial audit (AUDIT-1, 12 candidates → 5 confirmed) then hardened the load path: "
+    "config numeric validation closed a 2^63 overflow crash and silent-NaN eps/theta acceptance; the decode stop set "
+    "now unions generation_config.json's eos ids (restoring parity with HF generate(), which the teacher-forced suite "
+    "structurally cannot see); and the tokenizer artifacts are sha256-pinned in the test harness. The Phase 2 fp16 "
+    "gate is already pre-committed (DECISIONS.md 2026-08-23): tiered kernel/module/end-to-end tolerances derived from "
+    "fp16 rounding — made clean by keeping GPU weights as the raw bf16 checkpoint bits — plus a tie-aware top-1 "
+    "agreement gate over the same 250 teacher-forced steps; free-running divergence is reported, not gated.", BODY))
 
 S.append(PageBreak())
 
@@ -338,8 +351,8 @@ S += fig(f"{D}/d7_roadmap.png", CW,
 S.append(table([
     ["Phase", "Exit criterion (abridged — PLAN.md is authoritative)"],
     ["0", "MLX + llama.cpp baseline rows recorded on-phone; toy MSL kernels (saxpy, naive matmul) passing tests on macOS with a GPU-timing workflow"],
-    ["1", "Full CPU fp32 forward pass; logits ≤1e-3 vs fp32 HF oracle on all fixture prompts, no loosening; mlx-lm sanity check recorded"],
-    ["2", "Incremental decode on the physical iPhone via preallocated cache + naive attention kernel; cached ≡ uncached logits; 'before' benchmark row"],
+    ["1", "Full CPU fp32 forward pass; logits ≤1e-3 vs fp32 HF oracle on all fixture prompts, no loosening; mlx-lm sanity check recorded — EXITED 2026-08-23, all gates held first run"],
+    ["2", "Incremental decode on the physical iPhone via preallocated cache + naive attention kernel; pre-committed fp16 gate (tiered tolerances + tie-aware top-1 agreement) vs CPU reference; 'before' row; mmap vs wired-copy stability comparison — spec + gates committed 2026-08-23"],
     ["3", "CPU-quant oracle exists; dequant tile test bit-exact; matvec within tolerance; quality gate passed; ~4× memory drop; matvec GB/s microbench; short-context decode near roofline with bandwidth-limited counters"],
     ["4", "Fused GQA SDPA replaces naive attention; norm/RoPE folded into neighbors; dispatches-per-token reduced; latency-vs-context measured"],
     ["5", "Tiled prefill GEMM (threadgroup memory + simdgroup_matrix); prefill benchmarked separately vs MLX"],
@@ -383,16 +396,17 @@ S.append(table([
     ["Risk", "Exposure", "First contact / mitigation"],
     ["Actual device bandwidth and jetsam ceiling differ from planning estimates", "Roofline targets and memory budget shift", "CLOSED for bandwidth: Phase 0 measured 43.84 GB/s (2026-08-22). Memory ceiling: Phase 2 on-device runs; phys_footprint's mmap accounting asymmetry is recorded"],
     ["MLX/llama.cpp baseline numbers off published figures (different device, model rev, thermal state)", "Gap-closing target mis-calibrated", "CLOSED: Phase 0 measured both on-device (39.2 / 32.4 tok/s warm-burst, PROVISIONAL); target 29.4 committed from local rows"],
-    ["Tokenizer or chat-template mismatch vs HF reference", "Phase 1 logit test fails for non-engine reasons", "Spec mandates matching the Python tokenizer on fixtures and logging discrepancies before touching engine code"],
-    ["swift-transformers / mlx-swift API drift by build time", "Integration friction", "Agent instructed to log and surface conflicts (CLAUDE.md), never silently work around"],
+    ["Tokenizer or chat-template mismatch vs HF reference", "Phase 1 logit test fails for non-engine reasons", "CLOSED: Phase 1 verified swift-transformers (pinned exact 1.3.3) id-identical to Python on all 5 fixture prompts; tokenizer artifacts sha256-pinned (TOK-1)"],
+    ["swift-transformers / mlx-swift API drift by build time", "Integration friction", "swift-transformers pinned exact 1.3.3; agent instructed to log and surface conflicts (CLAUDE.md), never silently work around"],
     ["Thermal throttling makes sustained numbers device-state-sensitive", "Noisy benchmark rows", "Protocol pins starting temperature and reports burst/sustained separately; spread published, not hidden"],
     ["Scope temptation (extra quant formats, samplers, models)", "Schedule and depth erosion", "Non-goals are contractual; agent flags additions in DECISIONS.md instead of implementing"],
 ], [1.95 * inch, 1.6 * inch, 3.45 * inch]))
 S.append(Spacer(1, 10))
 S.append(HRFlowable(width="100%", color=colors.HexColor("#e2e8f0"), thickness=0.8, spaceAfter=6))
 S.append(Paragraph(
-    "Document lineage: this PDF renders the state of PLAN.md, CLAUDE.md, docs/phases/phase-0-1.md, and "
-    "DECISIONS.md as of 2026-08-22 (Phase 0 exit) into one navigable artifact. It is a snapshot: when the build produces new "
+    "Document lineage: this PDF renders the state of PLAN.md, CLAUDE.md, docs/phases/phase-0-1.md, "
+    "docs/phases/phase-2.md, and DECISIONS.md as of 2026-08-23 (Phase 1 exit; Phase 2 spec and gates committed) into "
+    "one navigable artifact. It is a snapshot: when the build produces new "
     "measurements or decisions, DECISIONS.md is updated first and this document is regenerated from it, not edited "
     "independently.", CAP))
 

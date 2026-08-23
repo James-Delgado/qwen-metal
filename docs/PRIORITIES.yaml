@@ -779,8 +779,9 @@ tasks:
   - id: DOC-1
     rank: 26
     title: "Regenerate architecture PDF (stale since Phase 0 exit v1.3)"
-    status: in_progress
+    status: done
     started_at: 2026-08-23T22:22:20Z
+    completed_at: 2026-08-23T22:35:00Z
     depends_on: []
     blocks: []
     deliverable:
@@ -795,6 +796,13 @@ tasks:
       generator content from DECISIONS.md entries, bump version/date, rerun
       both scripts, commit scripts + figures + PDF together. Filler: never
       blocks the phase chain.
+      2026-08-23 (done): v1.4 rendered (12 pages) — Phase 1 outcome + audit
+      hardening in §6, roadmap P1 DONE / P2 next, oracle-figure P2 label
+      corrected, Figure 3 rebuilt from PIN-1 derived numbers (0.97 GB /
+      448 MiB, labeled derived-not-measured), tokenizer risk row CLOSED,
+      lineage dated. Verified via pypdf marker extraction (no stale v1.3
+      strings). Future regens ride the *-EXEC phase close-outs (James,
+      SPEC-P2 review entry). See DECISIONS.md DOC-1 entry.
 
   - id: BW-1
     rank: 24

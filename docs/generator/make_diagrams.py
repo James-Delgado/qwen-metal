@@ -82,7 +82,7 @@ arrow(ax, 2.2, 3.82, 2.6, 3.6); arrow(ax, 2.2, 2.02, 2.6, 2.2)
 
 # External inputs (right)
 box(ax, 7.85, 3.9, 1.9, 0.85, "HF Hub", GRAYF, GRAY, 9,
-    sub="pinned Qwen ~1.5–2B\nbf16 safetensors")
+    sub="Qwen3-1.7B @ 70d244cc\nbf16 safetensors (pinned)")
 box(ax, 7.85, 2.6, 1.9, 0.85, "tests/fixtures", GREENF, GREEN, 9,
     sub="fp32 logit oracles\n(~13 MB, plain git)")
 box(ax, 7.85, 1.3, 1.9, 0.85, "Xcode tooling", GRAYF, GRAY, 9,
@@ -163,9 +163,12 @@ plt.savefig(f"{OUT}/d2_dataflow.png", dpi=200, bbox_inches="tight"); plt.close()
 # D3: Memory budget under the iOS ceiling
 # ----------------------------------------------------------------------------
 fig, ax = plt.subplots(figsize=(9.2, 3.4))
-segs = [("Weights (4-bit, mmap, file-backed)", 1.30, BLUE, BLUEF),
-        ("Scales + biases", 0.10, "#1d4ed8", "#bfdbfe"),
-        ("KV cache @4K (fp16)", 0.15, PURPLE, PURPLEF),
+# Sizes derive from the pinned Qwen3-1.7B config (DECISIONS.md PIN-1):
+# ~0.97 GB packed 4-bit group-64 weights incl. per-group scales/biases;
+# fp16 GQA KV @4K = 448 MiB. Derived, not yet measured — Phase 2/3 on-device
+# phys_footprint rows replace them.
+segs = [("Weights + scales (4-bit g64, mmap)", 0.97, BLUE, BLUEF),
+        ("KV cache @4K (fp16, GQA)", 0.44, PURPLE, PURPLEF),
         ("Activations + scratch", 0.10, GREEN, GREENF),
         ("App + runtime + tokenizer", 0.15, GRAY, GRAYF)]
 total = sum(s[1] for s in segs)
@@ -178,10 +181,10 @@ for name, sz, ec, fc in segs:
 ax.add_patch(Rectangle((x, 0.8), ceiling - x, 0.8, fc="white", ec=GRAY, lw=1.2, ls="--"))
 ax.text(x + (ceiling-x)/2, 1.2, f"headroom  ≈ {ceiling-total:.1f} GB\n(margin of safety vs. jetsam)",
         ha="center", va="center", fontsize=8, color=GRAY)
-# labels fanned out to fixed anchors with leader lines (segments 2-5 are thin
-# and clustered — labels at segment centers would pile on top of each other)
-labels_x = [0.65, 1.30, 1.95, 2.60, 3.10]
-labels_y = [2.18, 1.88, 2.18, 1.88, 2.18]
+# labels fanned out to fixed anchors with leader lines (trailing segments are
+# thin and clustered — labels at segment centers would pile on top of each other)
+labels_x = [0.49, 1.19, 1.95, 2.60]
+labels_y = [2.18, 1.88, 2.18, 1.88]
 x = 0
 for (name, sz, ec, fc), lx, ly in zip(segs, labels_x, labels_y):
     cx = x + sz/2
@@ -197,7 +200,7 @@ ax.text(ceiling+0.05, 1.2, "practical iOS\nmemory ceiling\n(jetsam; with\nIncrea
         fontsize=7.6, color=RED, va="center")
 ax.text(0, 0.45, "0 GB", fontsize=8, color=GRAY)
 ax.text(ceiling-0.12, 0.45, f"{ceiling} GB", fontsize=8, color=GRAY)
-ax.text(0, 0.1, "Budget rule: every allocation is accounted here before it is written. Weights are file-backed (mmap) — cheaper under iOS memory\naccounting than dirty heap pages. KV cache is preallocated at load; nothing grows at runtime.",
+ax.text(0, 0.1, "Budget rule: every allocation is accounted here before it is written. Weights are file-backed (mmap) — cheaper under iOS memory\naccounting than dirty heap pages. KV cache is preallocated at load; nothing grows at runtime. This is the Phase 3+ end state;\nthe Phase 2 interim (bf16 weights, pre-quantization) peaks near ~4.0 GB — the project's memory high-water mark.",
         fontsize=7.8, color=INK)
 plt.savefig(f"{OUT}/d3_memory.png", dpi=200, bbox_inches="tight"); plt.close()
 
@@ -318,7 +321,7 @@ box(ax, 0.3, 1.3, 2.7, 0.85, "GPU dequant tile test", ORANGEF, ORANGE, 8.5,
 box(ax, 3.45, 1.3, 2.6, 0.85, "GPU fused matvec test", ORANGEF, ORANGE, 8.5,
     sub="tol ~1e-3/elem; fp32 accum both\nsides; only reduction order differs")
 box(ax, 6.6, 1.3, 2.7, 0.85, "Full model on GPU", ORANGEF, ORANGE, 8.5,
-    sub="end-to-end diff vs CPU-quant;\ncached path ≡ uncached (Phase 2)")
+    sub="P2: vs CPU ref @ fp16 gates\nP3+: vs CPU-quant ref")
 arrow(ax, 3.9, 2.6, 1.8, 2.15, color=BLUE)
 arrow(ax, 4.6, 2.6, 4.7, 2.15, color=BLUE)
 arrow(ax, 5.4, 2.6, 7.6, 2.15, color=BLUE)
@@ -334,8 +337,8 @@ plt.savefig(f"{OUT}/d6_oracle.png", dpi=200, bbox_inches="tight"); plt.close()
 fig, ax = plt.subplots(figsize=(9.4, 4.9))
 phases = [
     ("0", "Baselines + toy kernels — DONE 2026-08-22", "measured: 43.84 GB/s; MLX 39.2 / llama.cpp 32.4 tok/s; target 29.4; energy 0.104/0.131 J/tok", 0, 1.5, GREEN, GREENF),
-    ("1", "CPU fp32 reference (macOS) — IN PROGRESS", "fixtures + tools landed (P1-1); parser, sgemm wrapper, modules, decode loop next", 1.0, 2.5, GREEN, GREENF),
-    ("2", "Naive Metal port + minimal KV cache", "incremental decode on-device; cached ≡ uncached logits; 'before' row", 3.0, 2.0, BLUE, BLUEF),
+    ("1", "CPU fp32 reference (macOS) — DONE 2026-08-23", "logit suite ≤1e-3, all 5 prompts, first run; tokenizer id-identical; 118 tests; post-phase audit hardening", 1.0, 2.5, GREEN, GREENF),
+    ("2", "Naive Metal port + minimal KV cache — NEXT (spec + fp16 gates committed)", "bf16 no-copy mmap weights; tiered fp16 gates + tie-aware top-1; 'before' row; mmap vs wired", 3.0, 2.0, BLUE, BLUEF),
     ("3", "4-bit quant + fused dequant-matvec", "CPU-quant oracle; tile test exact; matvec GB/s microbench; quality gate; roofline check", 4.5, 2.5, ORANGE, ORANGEF),
     ("4", "Fused attention + kernel fusion", "GQA SDPA kernel; fold norm/RoPE; dispatches/token down", 6.5, 2.5, ORANGE, ORANGEF),
     ("5", "Tiled prefill GEMM", "threadgroup memory + simdgroup_matrix; prefill vs MLX", 8.5, 2.0, PURPLE, PURPLEF),

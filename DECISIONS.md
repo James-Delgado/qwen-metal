@@ -1050,3 +1050,25 @@ docs/phases/phase-2.md (D8) and docs/PRIORITIES.yaml (P2-6, P2-EXEC):
   lesson) and a Regenerate button re-running the last generation from the
   same prompt (the manual form of the pinned sustained regenerate-loop
   protocol). Reduces friction for the on-device runs James performs.
+
+## 2026-08-23 — DOC-1: architecture PDF regenerated (v1.4, Phase 1 exit state)
+
+- **docs/architecture.pdf v1.3 → v1.4** (12 pages), regenerated per the
+  CLAUDE.md upkeep rule from the DECISIONS.md entries added since Phase 0
+  exit. Content updates: §6 gains the Phase 1 outcome paragraph (all gates
+  held first run; tokenizer id-identical at pinned 1.3.3; AUDIT-1 hardening
+  — CFG-1/EOS-1/TOK-1; Phase 2 fp16 gates pre-committed, free-run
+  report-not-gate); roadmap figure/table mark Phase 1 DONE and Phase 2
+  next-with-spec; oracle figure's "cached ≡ uncached" sub-label corrected
+  to the actual Phase 2 design (vs CPU ref @ fp16 gates; CPU-quant from
+  P3); risks table closes the tokenizer-mismatch row; lineage adds
+  phase-2.md, dated 2026-08-23.
+- **Figure 3 memory budget updated from generic ~1.5–2B planning estimates
+  to pinned-config DERIVED numbers** (PIN-1 entry: 0.97 GB packed 4-bit
+  weights incl. scales, 448 MiB fp16 GQA KV @4K), explicitly labeled
+  derived-not-measured with the Phase 2 bf16 ~4.0 GB high-water note;
+  Phase 2/3 on-device phys_footprint rows replace them.
+- **Verification:** both generator scripts ran clean; pypdf extraction
+  confirms all v1.4 content markers present and no stale v1.3/planning-
+  estimate strings remain (pypdf added to .venv as a verification-only
+  dev dependency).
