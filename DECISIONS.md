@@ -553,3 +553,48 @@ Decisions by James this session; agent prepared the harnesses (P0A-1 stays
   on the Mac) is the accepted phase-0-1.md behavior; raw fp16/bf16 views for
   GPU upload are a Phase 2 concern and deliberately not built (YAGNI +
   just-in-time spec rule).
+
+## 2026-08-23 — P1-3 gate pre-committed: sgemm wrapper vs triple-loop tolerance
+
+- Gate, set BEFORE the test was written or run (METHODOLOGY rule 2): per output
+  element, |sgemm − tripleLoop| <= 2·γ_K·Σ_p |a_ip|·|b_pj|, where
+  γ_K = K·u/(1−K·u) with unit roundoff u = 2^-24 (fp32), and the Σ|a||b| term
+  is accumulated in the test alongside the triple-loop reference. Inputs are
+  fp32 drawn from [-1, 1] via the seeded deterministic generator (SplitMix64,
+  same as the P0B tests). Rationale: both sides consume identical fp32 bits and
+  accumulate in fp32, so the only legitimate divergence is reduction order.
+  γ_K·Σ|a||b| is the classical rigorous forward-error bound on a K-term fp32
+  dot product; naive left-to-right summation (the test oracle) satisfies it,
+  and Accelerate's blocked/SIMD/wider-accumulator variants satisfy it or
+  tighter, so twice the bound covers the worst-case sum of both sides' errors
+  with no eyeballed headroom constant. The absolute-floor term used by earlier
+  gates is unnecessary here: the bound already scales to zero exactly when the
+  products are all zero, where both sides are exact. Any transpose /
+  leading-dimension / stride bug produces O(1) errors, orders of magnitude
+  above the bound. Per the standing rule this tolerance never loosens.
+- Exactness carve-out (== assertions, not a tolerance, same species as the
+  P1-2 upcast tests): small-integer cases whose every product and partial sum
+  is exactly representable in fp32 must match the triple loop bit-for-bit.
+- API convention (reversible, convention-following — surfaced, not blocking):
+  the wrapper is row-major fp32 with transposeA/transposeB flags so later
+  callers (per-head QK^T, tied-embeddings lm_head) never materialize
+  transposes; all four flag combinations are covered by the validation test.
+  The naive triple loop lives ONLY in the test target (phase-0-1.md build
+  step 3), exactly like the P0B-3 toy-kernel oracle.
+
+## 2026-08-23 — P1-3 landed: Accelerate sgemm wrapper (hard rule 8 path)
+
+- **Shipped:** Sources/QwenMetalEngine/BLAS/Sgemm.swift (BLAS.sgemm, the
+  single matmul path for the CPU reference) + SgemmTests (7 tests: exact
+  small-integer case, odd shapes 67x129x45 and 301x257x173, all four
+  transpose-flag combinations on 35x53x29, vector-shaped decode edges,
+  input non-mutation, explicit input-validation errors). Full suite
+  63 tests, 0 failures. The pre-committed gate (previous entry) held
+  unmodified on the first run.
+- **Implementation notes:** classic cblas_sgemm interface with Int32
+  dimensions — the SDK does not expose __LAPACK_int to Swift; realistic
+  model dimensions sit far below Int32 range. Input validation reuses
+  KernelInputError (its doc comment widened to cover the BLAS wrapper).
+  The test-side triple loop also accumulates Σ|a||b| per element as the
+  gate's error-bound basis, so the oracle is ~20 lines rather than the
+  spec's ~15 — the extra lines are the bound computation, not model logic.

@@ -258,8 +258,9 @@ tasks:
   - id: P1-3
     rank: 10
     title: "Accelerate sgemm wrapper + triple-loop validation test"
-    status: in_progress
+    status: done
     started_at: 2026-08-23T00:45:51Z
+    completed_at: 2026-08-23T00:50:55Z
     depends_on: [SETUP-1]
     blocks: [P1-4]
     deliverable:
@@ -269,11 +270,18 @@ tasks:
     notes: |
       Hard rule 8: ALL matmul-shaped work routes through this one wrapper,
       including per-head QK^T / PV later.
+      2026-08-23: landed as Sources/QwenMetalEngine/BLAS/Sgemm.swift +
+      SgemmTests (7 tests; odd shapes 67x129x45, 301x257x173, all four
+      transpose-flag combos, vector-shaped edges). Row-major fp32 with
+      transposeA/transposeB so QK^T / tied lm_head never materialize
+      transposes. Gate 2·γ_K·Σ|a||b| (γ_K = K·u/(1−K·u), u = 2^-24)
+      pre-committed in DECISIONS.md before the tests; held unmodified
+      first run. Full suite 63 tests, 0 failures. Unblocks P1-4.
 
   - id: P1-4
     rank: 11
     title: "CPU modules (family-correct) + per-module activation tests"
-    status: blocked
+    status: ready
     depends_on: [P1-1, P1-2, P1-3]
     blocks: [P1-5]
     deliverable:

@@ -1,7 +1,8 @@
 import Metal
 
-/// Input-validation errors shared by the toy kernels. Separate from
-/// MetalHarnessError: these are caller mistakes, not GPU/harness failures.
+/// Input-validation errors shared by the toy kernels and the BLAS wrapper.
+/// Separate from MetalHarnessError: these are caller mistakes, not
+/// GPU/harness failures.
 public enum KernelInputError: Error, CustomStringConvertible, Equatable {
     case emptyInput
     case lengthMismatch(x: Int, y: Int)
