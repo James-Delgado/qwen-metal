@@ -934,3 +934,103 @@ bug signal, never a tolerance-adjustment signal.
   tokenizer tests with the full mismatch message; real pins green (3 tests).
   Full suite minus the logit phase-exit gate: 129 tests, 0 failures, 17.5s.
   No gates, fixtures, or engine code touched.
+
+## 2026-08-23 — Phase 2 gates pre-committed: fp16 GPU-vs-fp32-CPU tolerances + agreement gate
+
+Set BEFORE any Phase 2 code or test exists (PLAN.md invariant 4; the eng
+review's SPEC-P2 obligation, OV#5/#11). Spec: docs/phases/phase-2.md. Premise
+for every derivation: GPU weights are the raw bf16 checkpoint bits (spec D1),
+bit-identical to what the CPU reference upcasts — so the ONLY divergence
+sources are fp16 activation rounding (unit roundoff u16 = 2^-11; activations
+fp16 between kernels, fp32 accumulation inside, spec D2) and reduction order.
+Notation: M = max|ref| over the compared slice; per-step M64 = max|ref top-64
+value| at that step (a lower bound on the step's full-vector max-abs, i.e.
+using it is conservative in the tighter direction).
+
+- **Tier K — kernel-level, synthetic unit-scale inputs (every kernel, before
+  any optimization, hard rule 3):** |Δ| <= max(2^-9·M, 2^-11). The P0B-3
+  species (fp16 operands, fp32 accumulation, 4·u16 headroom over per-operand
+  rounding), M-scaled per the P1-4 species; the 2^-11 floor covers near-zero
+  slices.
+- **Exact (==) surfaces, no tolerance:** embedding-lookup output (row copy +
+  exact bf16 upcast + correctly-rounded fp16 store — GPU fp16 must equal
+  fp16(ref fp32) bitwise); kv-append readback; residency mode B (wired copy)
+  vs mode A (mmap) full-pipeline output (same bits, same kernels); the
+  bit-shift bf16→fp32 upcast itself.
+- **Tier M — isolated module tests vs the P1 activation fixtures (module fed
+  its reference input slice):** norm/MLP/block-internal slices
+  |Δ| <= max(2^-8·M, 2^-11) — input + output rounding + at most ~6 internal
+  fp16 rounding events ⇒ 8·u16 = 2^-8. Attention (layer0_attn_output):
+  |Δ| <= max(2^-7·M, 2^-11) — stated-assumption derivation: post-QK-norm
+  q/k are RMS-normalized so raw score magnitudes are O(γ²), budgeted <= 2^3;
+  score absolute error ≈ 2·u16·|score| <= 2^-10·2^3 = 2^-7; softmax
+  sensitivity <= 2× on the simplex; the PV convex combination and o_proj keep
+  the output error within ~2^-7 of the slice scale.
+- **Tier E — full-stack (compounded) surfaces:** last_layer_output /
+  final_norm_output slices |Δ| <= max(2^-5·M, 2^-11); teacher-forced
+  full-vocab logit checkpoints (steps {0,1,24,49} × 5 prompts)
+  |Δ| <= 2^-5·M_step; per-step top-64 gathered at reference indices
+  |Δ| <= 2^-5·M64 (all 250 steps); per-step float64 fingerprints
+  |Δ lse| and |Δ mean| <= 2^-5·M64, |Δ std| <= 2^-4·M64 (1- and 2-Lipschitz
+  in the sup norm, P1-5 structure). Derivation of 2^-5: per-layer
+  contribution <= 8·u16 = 2^-8 relative; ~58 sequential rounding sites
+  (2 module boundaries × 28 blocks + head/tail); independent-error (RMS)
+  accumulation √58 ≈ 7.6 ⇒ 2^-8·7.6 ≈ 2^-5.1, committed 2^-5. Worst-case
+  LINEAR compounding (~0.4·M) was rejected as vacuous — bug-scale errors are
+  O(1)·M and the two-tier design places fine resolution in the isolated
+  tests, where no compounding argument is needed.
+- **Top-1 agreement gate, N = 250 teacher-forced steps (OV#5/#11):** exact
+  top-1 match at every step whose recorded top1-vs-top2 margin >=
+  epsilon_tie = 2·(2^-5·M64) = 2^-4·M64; below that, our top-1 must be in
+  {reference top-1, reference top-2}. No step is unasserted. With today's
+  fixtures (measured this session: margin min 0.0048 / median 4.17 / max
+  27.36; 52 of 250 steps < 1.0): 176 of 250 steps are hard-asserted, 74 sit
+  in the exemption band. Teacher-forcing keeps all 250 steps comparable (the
+  P1-5 premise); a flip at margin >= 2·δ cannot be rounding noise under the
+  committed per-element bound δ and stays a hard failure.
+- **Free-running divergence is REPORTED, not gated:** 128 free-running greedy
+  steps × 5 prompts, GPU vs CPU reference; first-divergence index and both
+  texts recorded in DECISIONS.md at P2-4. Rationale: with per-logit deviation
+  legitimately up to 2^-5·M, any near-tie step can flip and permanently fork
+  a self-fed trajectory — a numeric free-run gate is either vacuous or a
+  false-failure generator. The teacher-forced gate above is the strongest
+  agreement statement that composes across steps.
+
+Honest flag (surfaced for James, veto window = before P2-EXEC starts): the
+Tier K/M structure is the established derived-gate species
+(P0B-3/P1-4/P1-5 precedent), but two Tier E constants are judgment-derived
+rather than pure derivations — the √L independent-error compounding model
+behind 2^-5, and the 2^3 attention score budget behind 2^-7. They are
+recorded here BEFORE any Phase 2 test exists; once P2 tests exist, hard
+rule 6 applies unmodified (failures are bug signals; these numbers never
+loosen).
+
+## 2026-08-23 — SPEC-P2: Phase 2 spec written; P2 build tasks seeded
+
+- **Spec landed: docs/phases/phase-2.md** (naive Metal port + minimal KV
+  cache, on-device). All four eng-review Part 4 obligations are covered:
+  pre-committed fp16 tolerances + top-1-agreement-over-N gate (previous
+  entry), mmap-vs-wired-copy sustained-stability bench (OV#9, task P2-7),
+  "before" row per parity pins incl. validation-off recording (OV#12, P2-7).
+- **Design decisions (D1-D8, reversible/convention-following — details and
+  rationale in the spec):** GPU weights = raw bf16 checkpoint bits via ONE
+  mmap-backed no-copy MTLBuffer + per-tensor byte offsets, upcast in
+  registers by bit-shift (no weight-rounding term in any gate; wired-copy
+  variant is the same bits, so the OV#9 comparison isolates residency);
+  activations fp16 between kernels / fp32 accumulation / fp32 softmax and
+  logits; KV cache one preallocated 448 MiB fp16 buffer, head-major
+  [28][K|V][8][4096][128] (hard rule 4); naive one-thread-per-output
+  kernels; ONE command buffer per token with dual timing + dispatch count
+  (wall−GPU = the Phase 4 overhead metric, hard rule 7); sequential
+  per-token prefill (batched GEMM stays Phase 5); CPU-side argmax sharing
+  DecodeLoop's tie-break; stop-set assembly moves from CLI into the engine
+  (closing the EOS-1 note); QwenMetalApp/ thin SwiftUI shell added as the
+  planned top-level target (build by agents, deploy/run by James only).
+- **Backlog:** P2-1..P2-7 seeded at ranks 14.1-14.7 (P2-7 owner: james —
+  device rows); P2-EXEC now depends on them and stays the SPEC-P3 milestone.
+  Phase 2's memory high-water mark (~4.0 GB bf16 + KV) is inside the
+  Increased-Memory-Limit envelope and is itself the OV#9 test regime.
+- **Architecture PDF staleness surfaced (upkeep rule):** docs/architecture.pdf
+  was last regenerated at Phase 0 exit (v1.3) — Phase 1 exit, the audit
+  fixes, and this spec are not reflected. Not silently ignored: follow-up
+  DOC-1 seeded to regenerate it.

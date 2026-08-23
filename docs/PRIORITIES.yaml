@@ -486,10 +486,11 @@ tasks:
   - id: SPEC-P2
     rank: 14
     title: "Write Phase 2 PRD/spec (Metal port + minimal KV cache) with pre-committed gates"
-    status: in_progress
+    status: done
     started_at: 2026-08-23T20:43:51Z
+    completed_at: 2026-08-23T20:48:44Z
     depends_on: [P1-5, P0A-1]
-    blocks: [P2-EXEC]
+    blocks: [P2-EXEC, P2-1, P2-2]
     deliverable:
       file: docs/phases/phase-2.md
       tests: "gates committed in DECISIONS.md BEFORE P2-EXEC starts"
@@ -503,20 +504,145 @@ tasks:
       generation_config.json) lives in the CLI today; the Phase 2 decode
       redesign should decide its final home in the engine — see DECISIONS.md
       EOS-1 entry.
+      2026-08-23 (done): spec landed (docs/phases/phase-2.md, D1-D8 design
+      decisions) + Phase 2 gates pre-committed in DECISIONS.md (Tier K/M/E
+      fp16 tolerances, tie-aware top-1 agreement over N=250 teacher-forced
+      steps, free-run divergence report-not-gate). All four Part 4
+      obligations covered; stop-set home decided (engine, spec D7). P2-1..
+      P2-7 seeded below; P2-EXEC re-pointed at them. NOTE for James: two
+      Tier-E gate constants are judgment-derived (flagged in the gates
+      entry) — veto window is before P2-EXEC work starts.
+
+  # ---------- Phase 2 build tasks (seeded 2026-08-23 by SPEC-P2; spec: docs/phases/phase-2.md) ----------
+  - id: P2-1
+    rank: 14.1
+    title: "GPU weight residency: mmap no-copy MTLBuffer + tensor offsets + wired-copy variant"
+    status: ready
+    depends_on: [SPEC-P2]
+    blocks: [P2-4]
+    deliverable:
+      file: "engine package (Metal weights module)"
+      tests: "no-copy buffer exactness (bit-shift bf16 upcast ==), odd-offset path, wired-copy bit-identical to mmap, page-align/length handling"
+    est_complexity: medium
+    notes: |
+      Spec D1: single makeBuffer(bytesNoCopy:) over the mmapped consolidated
+      checkpoint; kernels get per-tensor byte offsets from SafetensorsFile;
+      bf16 read as ushort, upcast via as_type<float>(uint(w)<<16) in
+      registers. Wired-copy = same bytes memcpy'd (residency-only delta,
+      exact == harness). Invariant 5 (mmap) intact.
+
+  - id: P2-2
+    rank: 14.2
+    title: "Naive decode kernel set (matvec, rmsnorm, rope, swiglu, residual, embedding) + Tier-K tests"
+    status: ready
+    depends_on: [SPEC-P2]
+    blocks: [P2-3]
+    deliverable:
+      file: "engine package (Metal kernels)"
+      tests: "per-kernel GPU-vs-CPU synthetic tests at the pre-committed Tier-K gate max(2^-9*M, 2^-11); embedding exact"
+    est_complexity: large
+    notes: |
+      Spec D4: one-thread-per-output naive kernels, fp16 activations, fp32
+      accumulation, runtime-compiled source strings (P0B pattern). Hard rule
+      3: correctness test before ANY optimization. lm_head matvec consumes
+      the tied embedding matrix transposed without materializing a transpose.
+
+  - id: P2-3
+    rank: 14.3
+    title: "KV cache (preallocated 448 MiB) + kv-append + naive attention kernels + edge tests"
+    status: blocked
+    depends_on: [P2-2]
+    blocks: [P2-4]
+    deliverable:
+      file: "engine package (Metal kernels + cache)"
+      tests: "append-slot pattern test, GQA-mapping pattern test, position/RoPE indexing, p=0 decode, context-limit stop (no OOB), Tier-K attention kernels"
+    est_complexity: large
+    notes: |
+      Spec D3: one buffer [28][K|V][8][4096][128] fp16, head-major,
+      allocated at model load, never grown (hard rule 4). Naive unfused
+      attn-scores / softmax(fp32) / attn-pv over cache[0..p]. Spec
+      edge-case list items 1-5.
+
+  - id: P2-4
+    rank: 14.4
+    title: "GPU pipeline wiring + Tier-M/E gate suites + free-run report + engine stop set + CLI --backend gpu"
+    status: blocked
+    depends_on: [P2-1, P2-3]
+    blocks: [P2-5, P2-6]
+    deliverable:
+      file: "engine package (GPU decode path) + CLI"
+      tests: "Tier-M module tests vs activation fixtures; Tier-E teacher-forced logit suite (checkpoints/fingerprints/top-64/tie-aware argmax N=250) at the pre-committed Phase 2 gates; stop-set + CLI edge tests"
+    est_complexity: large
+    notes: |
+      The phase's correctness core. Gates: DECISIONS.md 2026-08-23 "Phase 2
+      gates pre-committed" — never loosen. Free-running divergence (128
+      steps x 5 prompts) is REPORTED in DECISIONS.md, not gated. Spec D7:
+      stop-set assembly moves from CLI into ModelDirectory (EOS-1 tests
+      move/extend). Includes Metal-unavailable clean error/skip (spec edge
+      item 10).
+
+  - id: P2-5
+    rank: 14.5
+    title: "Per-token dual timing + dispatch count + canonical-window rate + Mac sanity row"
+    status: blocked
+    depends_on: [P2-4]
+    blocks: [P2-7]
+    deliverable:
+      file: "engine package (instrumentation) + benchmarks/results.md (Mac row)"
+      tests: "timing sanity (wall >= GPU, hard rule 7), dispatch-count nonzero/stable, window accounting (tokens 128-512)"
+    est_complexity: medium
+    notes: |
+      Spec D5: one command buffer per token; median GPU/wall ms/token,
+      wall-GPU delta (the Phase 4 overhead metric), dispatches/token.
+      Windowed decode rate measured natively. Mac row PROVISIONAL,
+      dev-loop sanity only.
+
+  - id: P2-6
+    rank: 14.6
+    title: "QwenMetalApp thin iOS shell (bench protocol runner, residency toggle, entitlement)"
+    status: blocked
+    depends_on: [P2-4]
+    blocks: [P2-7]
+    deliverable:
+      file: "QwenMetalApp/ (new top-level target, planned in CLAUDE.md)"
+      tests: "engine-side harness tests; app is thin (no engine logic) — build verified, device deploy is James's"
+    est_complexity: medium
+    notes: |
+      Spec D8: generate + benchmark screens, mmap/wired toggle, Increased
+      Memory Limit entitlement, row-field export. Agents never deploy/run
+      on device.
+
+  - id: P2-7
+    rank: 14.7
+    title: "On-device 'before' row + mmap-vs-wired sustained-stability comparison"
+    status: blocked
+    owner: james
+    depends_on: [P2-5, P2-6]
+    blocks: [P2-EXEC]
+    deliverable:
+      file: "benchmarks/results.md rows + DECISIONS.md entries"
+      tests: "protocol pins (greedy, pinned prompts, token counts, phys_footprint, validation-off recorded, PROVISIONAL)"
+    est_complexity: medium
+    notes: |
+      Spec: burst+sustained, cold+warm, canonical window; mmap vs wired
+      sustained loop per mode (per-generation tok/s sequence — bimodality
+      is the signal) closing with a DECISIONS.md default-residency
+      decision for Phase 3+. Agents prepare only.
 
   - id: P2-EXEC
     rank: 15
-    title: "Execute Phase 2 per spec (tasks seeded by SPEC-P2)"
+    title: "Phase 2 exit milestone (all P2 tasks done, exit criteria walked)"
     status: blocked
-    depends_on: [SPEC-P2]
+    depends_on: [P2-1, P2-2, P2-3, P2-4, P2-5, P2-6, P2-7]
     blocks: [SPEC-P3]
     deliverable:
       file: "per docs/phases/phase-2.md"
       tests: "Phase 2 exit criteria (PLAN.md table)"
-    est_complexity: large
+    est_complexity: small
     notes: |
-      Milestone placeholder — replaced by concrete tasks when SPEC-P2 lands.
-      Includes on-device work by James ("before" row, stability bench).
+      2026-08-23: concrete tasks P2-1..P2-7 seeded by SPEC-P2; this became
+      the exit-criteria walk + DECISIONS close-out (was: milestone
+      placeholder). Includes on-device work by James (P2-7).
 
   - id: SPEC-P3
     rank: 16
@@ -644,6 +770,25 @@ tasks:
       `swift test -c release`; document a --filter fast-path; or hoist the
       per-step Double conversions in the test helper. MUST NOT touch gates,
       fixtures, or model code readability. Filler: never blocks the chain.
+  - id: DOC-1
+    rank: 26
+    title: "Regenerate architecture PDF (stale since Phase 0 exit v1.3)"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: "docs/architecture.pdf + docs/generator/ scripts"
+      tests: "n/a (docs; upkeep rule in CLAUDE.md)"
+    est_complexity: small
+    notes: |
+      Seeded 2026-08-23 by SPEC-P2 (staleness surfaced per the upkeep rule,
+      not silently ignored): v1.3 reflects Phase 0 exit only. Missing since:
+      Phase 1 exit (P1-2..P1-5 results, tokenizer pins), IO-1, AUDIT-1 +
+      CFG-1/EOS-1/TOK-1, and the Phase 2 spec + pre-committed gates. Update
+      generator content from DECISIONS.md entries, bump version/date, rerun
+      both scripts, commit scripts + figures + PDF together. Filler: never
+      blocks the phase chain.
+
   - id: BW-1
     rank: 24
     title: "Read-only streaming bandwidth microbench variant (complements triad)"
