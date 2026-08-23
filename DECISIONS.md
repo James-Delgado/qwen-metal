@@ -705,3 +705,46 @@ mmap-only (PLAN.md invariant 5).
   materialization) 190s → **11.0s**; full 89-test suite now 21.0s cold /
   16.1s warm. The P1-5 edit-test iteration tax this rank bump targeted is
   gone (~17× on the materialization).
+
+## 2026-08-23 — P1-5 gates pre-committed: logit-suite scalars, top-64, tie epsilon
+
+Set BEFORE any P1-5 test was written or run (METHODOLOGY rule 2), following
+the P0B-2/P0B-3/P1-3/P1-4 precedent of agent-committed derived gates. All of
+these are derivations of the phase's single committed number — the 1e-3
+absolute full-vocab logit gate (phase-0-1.md; DECISIONS 2026-08-20 item 6).
+No new tolerance is introduced.
+
+Premise for every-step (not just checkpoint-step) assertions: the suite
+teacher-forces the REFERENCE argmax token at each step, so both engines see
+byte-identical token prefixes at every one of the 50 steps. Divergence at any
+step is therefore pure reduction-order noise on one forward pass — the same
+species the 1e-3 checkpoint gate already bounds — and never compounds across
+steps through the discrete token channel. (Teacher-forcing also keeps steps
+after a hypothetical tie-exempt argmax flip comparable; our own argmax is
+asserted separately, and the CLI decode loop self-feeds.)
+
+- **Full-vocab checkpoints (steps 0, 1, 24, 49):** per element
+  |Δlogit| <= 1e-3. The committed phase gate, applied unchanged.
+- **Per-step scalar fingerprints (all 50 steps, float64 over the fp32
+  vector, matching the manifest protocol):**
+  - |Δ logsumexp| <= 1e-3 — logsumexp is 1-Lipschitz in the sup norm.
+  - |Δ mean| <= 1e-3 — the mean of per-element deviations each <= 1e-3.
+  - |Δ std| <= 2e-3 — std is 2-Lipschitz in the sup norm (mean shift and
+    deviation shift each contribute at most the element bound).
+- **Per-step top-64 (all 50 steps):** our logits gathered at the REFERENCE
+  top-64 indices, per element |Δ| <= 1e-3 vs the stored values. Same gate,
+  same species; asserting at reference indices (rather than comparing our
+  own top-64 set) keeps the assertion permutation-free under legitimate
+  near-tie reordering.
+- **Tie-aware argmax (all 50 steps):** exact top-1 match wherever the
+  recorded top1-vs-top2 margin >= epsilon_tie = 2e-3; below it, assert our
+  top-1 is in {reference top-1, reference top-2}. Derivation: with both
+  sides within 1e-3 per element of the true logits, an argmax flip requires
+  the reference margin < 2 x 1e-3; a flip at any larger margin cannot be
+  reduction-order noise and stays a hard failure. The current fixture set's
+  minimum margin is 4.8e-3 (1 of 250 steps below 1e-2 — P1-1 entry), so NO
+  step is exempt today; the exemption path gets a synthetic unit test so it
+  is exercised code, not dead code.
+
+Per the standing rule (hard rule 6), none of these loosen — a failure is a
+bug signal, never a tolerance-adjustment signal.
