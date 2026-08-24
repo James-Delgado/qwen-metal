@@ -573,7 +573,8 @@ tasks:
   - id: P2-3
     rank: 14.3
     title: "KV cache (preallocated 448 MiB) + kv-append + naive attention kernels + edge tests"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-24T02:21:32Z
     depends_on: [P2-2]
     blocks: [P2-4]
     deliverable:
