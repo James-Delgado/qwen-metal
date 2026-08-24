@@ -573,8 +573,9 @@ tasks:
   - id: P2-3
     rank: 14.3
     title: "KV cache (preallocated 448 MiB) + kv-append + naive attention kernels + edge tests"
-    status: in_progress
+    status: done
     started_at: 2026-08-24T02:21:32Z
+    completed_at: 2026-08-24T02:34:48Z
     depends_on: [P2-2]
     blocks: [P2-4]
     deliverable:
@@ -586,11 +587,23 @@ tasks:
       allocated at model load, never grown (hard rule 4). Naive unfused
       attn-scores / softmax(fp32) / attn-pv over cache[0..p]. Spec
       edge-case list items 1-5.
+      2026-08-23 (done): landed as Sources/QwenMetalEngine/Metal/{KVCache,
+      AttentionKernels}.swift + KVCacheTests (6) + AttentionKernelTests (9).
+      All edge cases 1-5 covered: kv-append exact-bitwise exhaustive slot
+      test (incl. NaN/inf/subnormal patterns), GQA pattern test (exact via
+      headDim=4), p>0 chain vs CPU full-recompute (sgemm oracle, one command
+      buffer), p=0 == single-token (probs exactly 1.0, output bitwise == V),
+      context-limit append throws pre-dispatch (contextFull, cache verified
+      untouched). Tier-K gates held unmodified first run. Softmax kernel is
+      out-of-place (in-place would race under one-thread-per-element; P2-4
+      needs a probs buffer, 256 KB at real dims). 448 MiB verified by test
+      at pinned dims. Suite minus logit gate: 169 tests, 0 failures.
+      Unblocks P2-4. See DECISIONS.md 2026-08-23 P2-3 entry.
 
   - id: P2-4
     rank: 14.4
     title: "GPU pipeline wiring + Tier-M/E gate suites + free-run report + engine stop set + CLI --backend gpu"
-    status: blocked
+    status: ready
     depends_on: [P2-1, P2-3]
     blocks: [P2-5, P2-6]
     deliverable:

@@ -1144,3 +1144,44 @@ docs/phases/phase-2.md (D8) and docs/PRIORITIES.yaml (P2-6, P2-EXEC):
 - lm_head needs no transposed kernel: the tied [vocab, hidden] embedding
   table IS [out, in] for logits = E·x, so the standard matvec consumes it
   directly (nothing materialized, hard rule 1).
+
+## 2026-08-23 — P2-3: KV cache + attention kernels landed (exact + Tier-K gates held first run)
+
+- **Landed: Sources/QwenMetalEngine/Metal/KVCache.swift +
+  AttentionKernels.swift** — the preallocated decode cache (spec D3) and the
+  four attention kernels of spec D4 (kv-append, attn-scores, softmax fp32,
+  attn-pv), naive one-thread-per-output, encoder-based API (P2-2
+  convention). + KVCacheTests (6) + AttentionKernelTests (9). Suite minus
+  logit gate: 169 tests, 0 failures (was 154).
+- **Cache shape as specced:** ONE fp16 buffer
+  [layers][K|V][kvHeads][maxContext][headDim], head-major; allocated in
+  full at init, no grow path exists in the API (hard rule 4 structurally
+  enforced). Size formula overflow-checked; 448 MiB verified by test at the
+  pinned dims (28/8/4096/128). Slot addressing via element offsets
+  (never `setBuffer` offsets — P2-1 convention), bounds-validated on the
+  host before any dispatch.
+- **Context-limit stop:** append at position >= maxContext throws
+  `KVCacheError.contextFull` BEFORE encoding — tested that the 
+  last in-bounds append succeeds, the next throws, and the cache bytes are
+  bit-identical after the refusal (spec edge case 5, no OOB possible).
+- **Softmax is out-of-place** (scores -> probs), a deliberate deviation
+  from the CPU module's in-place loop: under one-thread-per-element every
+  thread reads its whole row, so in-place would race with concurrent
+  writes. Same fp32 max-subtract/exp/normalize formula, same sequential
+  reduction order per thread (rmsnorm redundant-recompute pattern). P2-4
+  carries one extra [numHeads][maxContext] fp32 probs buffer (256 KB at
+  real dims, negligible vs the 448 MiB cache).
+- **GQA mapping** computed host-side (groupSize = numHeads/kvHeads,
+  validated, `gqaMismatch` on non-divisible) and passed to kernels; the
+  pattern test pins KV head h serving Q heads {2h, 2h+1} exactly (headDim=4
+  makes scale=1/2 exact, so a repeat-interleave or off-by-one mapping is a
+  hard value mismatch, not a tolerance question).
+- **Gate outcomes:** kv-append passed the pre-committed EXACT gate
+  (exhaustive whole-buffer bitwise map over three scattered slots, incl.
+  NaN-payload/±inf/subnormal patterns; everything else sentinel-untouched).
+  attn-scores and attn-pv passed Tier K max(2^-9·M, 2^-11) vs BLAS.sgemm
+  oracles on odd shapes (hard rule 8); softmax passed Tier K vs the CPU
+  formula; the p=4 append→scores→softmax→pv chain in ONE command buffer
+  passed Tier K vs CPU full-recompute (spec edge case 3); p=0 decode
+  reproduced single-token attention exactly (probs == 1.0, output bitwise
+  == the mapped V row — spec edge case 4). Nothing loosened.
