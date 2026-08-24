@@ -6,6 +6,7 @@ import Foundation
 public enum ModelError: Error, CustomStringConvertible {
     case unsupportedFamily(detail: String)
     case badWeightShape(tensor: String, expected: [Int], actual: [Int])
+    case badWeightDtype(tensor: String, expected: String, actual: String)
     case tokenIdOutOfRange(id: Int, vocabSize: Int)
     case badInput(detail: String)
 
@@ -15,6 +16,8 @@ public enum ModelError: Error, CustomStringConvertible {
             return "model: unsupported family: \(detail)"
         case .badWeightShape(let tensor, let expected, let actual):
             return "model: tensor '\(tensor)' has shape \(actual), expected \(expected)"
+        case .badWeightDtype(let tensor, let expected, let actual):
+            return "model: tensor '\(tensor)' has dtype \(actual), expected \(expected)"
         case .tokenIdOutOfRange(let id, let vocabSize):
             return "model: token id \(id) is outside the vocabulary (0..<\(vocabSize))"
         case .badInput(let detail):

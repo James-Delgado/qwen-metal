@@ -71,6 +71,70 @@ final class ModelDirectoryTests: XCTestCase {
             "generation_config.json")
     }
 
+    // MARK: - (P2-4, spec D7) engine-owned stop-set assembly
+
+    /// The pinned config mirror carries eos_token_id 151645 — the engine
+    /// union must add the tokenizer's id and generation_config.json's list.
+    private func pinnedConfig() throws -> ModelConfig {
+        try ModelConfig(jsonData: SharedCheckpoint.pinnedConfigJSON.data(using: .utf8)!)
+    }
+
+    func testStopSetUnionsAllThreeSources() throws {
+        try touch(Self.supportFiles + ["model.safetensors"])
+        try Data(#"{"eos_token_id": [151645, 151643]}"#.utf8)
+            .write(to: tempDir.appendingPathComponent("generation_config.json"))
+        let directory = try ModelDirectory(validating: tempDir)
+        let stops = try directory.stopTokenIds(
+            config: pinnedConfig(), tokenizerEOSTokenId: 151645)
+        // The pinned checkpoint's real assembly (docs/AUDIT.md F2 / EOS-1):
+        // <|endoftext|> 151643 arrives from generation_config.json alone.
+        XCTAssertEqual(stops, [151645, 151643])
+    }
+
+    func testStopSetWithoutGenerationConfigIsConfigPlusTokenizer() throws {
+        try touch(Self.supportFiles + ["model.safetensors"])
+        let directory = try ModelDirectory(validating: tempDir)
+        let stops = try directory.stopTokenIds(
+            config: pinnedConfig(), tokenizerEOSTokenId: 7)
+        XCTAssertEqual(stops, [151645, 7])
+    }
+
+    func testStopSetWithNilTokenizerEOS() throws {
+        try touch(Self.supportFiles + ["model.safetensors"])
+        try Data(#"{"eos_token_id": 151643}"#.utf8)
+            .write(to: tempDir.appendingPathComponent("generation_config.json"))
+        let directory = try ModelDirectory(validating: tempDir)
+        let stops = try directory.stopTokenIds(
+            config: pinnedConfig(), tokenizerEOSTokenId: nil)
+        XCTAssertEqual(stops, [151645, 151643])
+    }
+
+    func testStopSetFailsLoudlyOnMalformedGenerationConfig() throws {
+        try touch(Self.supportFiles + ["model.safetensors"])
+        try Data("not json".utf8)
+            .write(to: tempDir.appendingPathComponent("generation_config.json"))
+        let directory = try ModelDirectory(validating: tempDir)
+        XCTAssertThrowsError(
+            try directory.stopTokenIds(
+                config: pinnedConfig(), tokenizerEOSTokenId: nil),
+            "a present but malformed generation_config.json must throw, not "
+            + "silently shrink the stop set")
+    }
+
+    /// Spec edge case 8: the engine assembly reproduces {151645, 151643} for
+    /// the real pinned model directory (models/ — local-only; skips when the
+    /// checkpoint artifact is absent, SharedCheckpoint pattern).
+    func testStopSetForPinnedModelDirectory() throws {
+        try SharedCheckpoint.skipUnlessCheckpointPresent()
+        let directory = try ModelDirectory(validating: SharedCheckpoint.modelsDir)
+        let config = try ModelConfig.load(path: directory.configURL.path)
+        let stops = try directory.stopTokenIds(
+            config: config, tokenizerEOSTokenId: 151645)
+        XCTAssertEqual(
+            stops, [151645, 151643],
+            "pinned checkpoint stop set must be the EOS-1 pair")
+    }
+
     func testNoCheckpointThrows() throws {
         try touch(Self.supportFiles)
         XCTAssertThrowsError(try ModelDirectory(validating: tempDir)) { error in

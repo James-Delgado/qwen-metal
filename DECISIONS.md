@@ -1185,3 +1185,65 @@ docs/phases/phase-2.md (D8) and docs/PRIORITIES.yaml (P2-6, P2-EXEC):
   passed Tier K vs CPU full-recompute (spec edge case 3); p=0 decode
   reproduced single-token attention exactly (probs == 1.0, output bitwise
   == the mapped V row — spec edge case 4). Nothing loosened.
+
+## 2026-08-24 — P2-4: GPU pipeline wired; ALL Phase 2 Tier-M/E gates held first run; free-run divergence: none
+
+- **Landed: Sources/QwenMetalEngine/Metal/GPUModel.swift** — the P2-1/2/3
+  pieces wired into a full per-token forward: ONE command buffer per token
+  (21 dispatches/layer × 28 + head/tail ≈ 591, spec D5) through
+  `MetalContext.timedDispatch`, so dual timing rides every step (hard rule
+  7; `lastStepTiming` is the P2-5 hook). fp16 activations / fp32
+  accumulation / fp32 logits (D2); RoPE kernel consumes the CPU `RoPE`'s
+  fp32 tables; KV cache preallocated at init (hard rule 4); argmax stays
+  CPU-side in the shared `DecodeLoop`. Loader validates every tensor's
+  shape AND dtype up front (new `ModelError.badWeightDtype` — the register
+  upcast is bf16-specific, a non-bf16 checkpoint must fail at load).
+- **Decode-loop conformance is INCREMENTAL:** `lastPositionLogits(ids:)`
+  runs only the suffix when `ids` strictly extends the cached prefix, else
+  resets and replays; logits computed at the last position only (D6).
+  Pinned by tests: incremental == fresh replay BITWISE; prefix-mismatch
+  reset; contextFull at the preallocated bound before any dispatch.
+- **Gate outcomes (all pre-committed 2026-08-23, none touched, all held
+  unmodified first run):** Tier M — embeddings exact-bitwise fp16 vs
+  fixture; layer0_pre_attn_norm_output ≤ max(2⁻⁸·M, 2⁻¹¹);
+  layer0_attn_output ≤ max(2⁻⁷·M, 2⁻¹¹) (isolated harness fed reference
+  inputs, sequential per-position over a 1-layer cache). Tier E —
+  last_layer_output and final_norm_output ≤ max(2⁻⁵·M, 2⁻¹¹) through the
+  full 28-layer wired stack; the teacher-forced logit suite
+  (GPULogitSuiteTests, 5 prompts × 50 steps): full-vocab checkpoints
+  ≤ 2⁻⁵·M_step, per-step float64 fingerprints (lse/mean ≤ 2⁻⁵·M64, std ≤
+  2⁻⁴·M64), top-64 ≤ 2⁻⁵·M64, tie-aware top-1 at ε_tie = 2⁻⁴·M64 — all
+  250 steps asserted, zero failures. GPU suite wall time 98 s debug (vs
+  ~32 min for the CPU suite — the KV cache at work).
+- **Free-running divergence REPORT (committed protocol: 128 greedy steps ×
+  5 prompts, GPU vs CPU reference, no stop set, release build):** first
+  divergence = NONE on all five prompts — the GPU trajectory is
+  token-identical to the CPU reference for all 640 free-running steps, so
+  "both texts" collapse to one identical text per prompt (e.g.
+  short_english continues " Paris. The capital of Italy is Rome. …").
+  Reproduce: `QWEN_FREE_RUN_REPORT=1 swift test -c release --filter
+  FreeRunReport` (opt-in harness, tests/…/FreeRunReportTests.swift;
+  18.8 min, CPU side dominates). The report stays a report: nothing about
+  this result gates future runs (the 2026-08-23 rationale stands).
+- **Stop set moved into the engine (spec D7, closes the EOS-1 note):**
+  `ModelDirectory.stopTokenIds(config:tokenizerEOSTokenId:)` = config.json
+  ∪ tokenizer ∪ generation_config.json; CLI and (Phase 2) app consume the
+  one implementation. Tests pin the pinned-directory result {151645,
+  151643}, the no-generation-config and nil-tokenizer unions, and loud
+  failure on a malformed generation_config.json. EOS-1's DecodeLoop
+  regressions still pass, and the stop semantics are re-pinned against the
+  real GPU backend (scripted-free: whatever token greedy emits first,
+  adding it to the stop set stops decode right after it).
+- **CLI `--backend gpu`** (default cpu, behavior unchanged): loads
+  GPUModel at the 4096 pinned context (448 MiB cache). Verified: coherent
+  text (" Paris. The capital of Italy is Rome. …", 2.33 tok/s M2 Pro
+  debug — naive by design, P2-5 measures properly); empty prompt and
+  >4K prompt produce the same errors as the CPU backend; no-Metal machines
+  get `MetalHarnessError.noDevice`, and all GPU test classes skip cleanly
+  (spec edge cases 8–10).
+- **Suite: 196 tests, 0 failures** (full suite minus the CPU logit gate,
+  +27 new; 1 skip = the env-gated free-run harness). GPU tests also skip
+  cleanly when the local checkpoint is absent (SharedCheckpoint pattern;
+  new SharedGPUModel shares one mmap-residency pipeline across suites).
+- **Follow-up seeded: DK-1** — pre-existing generic `setBytes` warning in
+  DecodeKernels/AttentionKernels surfaced by the release build.

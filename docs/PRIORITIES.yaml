@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-08-23
+last_updated: 2026-08-24
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -603,8 +603,9 @@ tasks:
   - id: P2-4
     rank: 14.4
     title: "GPU pipeline wiring + Tier-M/E gate suites + free-run report + engine stop set + CLI --backend gpu"
-    status: in_progress
+    status: done
     started_at: 2026-08-24T07:28:31Z
+    completed_at: 2026-08-24T08:25:00Z
     depends_on: [P2-1, P2-3]
     blocks: [P2-5, P2-6]
     deliverable:
@@ -618,11 +619,24 @@ tasks:
       stop-set assembly moves from CLI into ModelDirectory (EOS-1 tests
       move/extend). Includes Metal-unavailable clean error/skip (spec edge
       item 10).
+      2026-08-24 (done): landed as Sources/QwenMetalEngine/Metal/GPUModel
+      .swift (one command buffer/token, ~591 dispatches, incremental
+      prefix-cached decode through the shared DecodeLoop) +
+      ModelDirectory.stopTokenIds (D7) + CLI --backend gpu. ALL
+      pre-committed Tier-M/E gates held unmodified first run (embeddings
+      exact; 2^-8/2^-7 module slices; 2^-5 full-stack; 250-step logit
+      suite incl. tie-aware top-1 at eps 2^-4*M64 — GPULogitSuiteTests,
+      98 s vs the CPU suite's ~32 min). Free-run divergence report: NONE
+      on all 5 prompts x 128 steps (token-identical to CPU; DECISIONS.md
+      entry; opt-in harness QWEN_FREE_RUN_REPORT=1). Suite minus CPU
+      logit gate: 196 tests, 0 failures (+27). CLI verified end-to-end
+      (coherent text, same edge errors as cpu backend). Unblocks
+      P2-5/P2-6. Seeded DK-1. See DECISIONS.md 2026-08-24 P2-4 entry.
 
   - id: P2-5
     rank: 14.5
     title: "Per-token dual timing + dispatch count + canonical-window rate + Mac sanity row"
-    status: blocked
+    status: ready
     depends_on: [P2-4]
     blocks: [P2-7]
     deliverable:
@@ -638,7 +652,7 @@ tasks:
   - id: P2-6
     rank: 14.6
     title: "QwenMetalApp thin iOS shell (bench protocol runner, residency toggle, entitlement)"
-    status: blocked
+    status: ready
     depends_on: [P2-4]
     blocks: [P2-7]
     deliverable:
@@ -841,6 +855,25 @@ tasks:
       lineage dated. Verified via pypdf marker extraction (no stale v1.3
       strings). Future regens ride the *-EXEC phase close-outs (James,
       SPEC-P2 review entry). See DECISIONS.md DOC-1 entry.
+
+  - id: DK-1
+    rank: 27
+    title: "Silence the generic setBytes warning in DecodeKernels/AttentionKernels setScalar<T>"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: "engine package (Metal kernels)"
+      tests: "existing kernel suites stay green (no behavior change)"
+    est_complexity: small
+    notes: |
+      Seeded 2026-08-24 from P2-4: release builds warn "forming
+      'UnsafeRawPointer' to a variable of type 'T'; 'T' may contain an object
+      reference" at DecodeKernels.swift:390 / AttentionKernels.swift:289
+      (the generic setScalar<T> helper). Callers only ever pass UInt32/
+      UInt64/Float, so behavior is correct; fix is to constrain T (e.g.
+      overloads per scalar type or T: BitwiseCopyable) so the warning cannot
+      mask a real one later. Filler: never blocks the phase chain.
 
   - id: BW-1
     rank: 24

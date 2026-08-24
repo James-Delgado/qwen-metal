@@ -70,4 +70,25 @@ public struct ModelDirectory {
             FileManager.default.fileExists(atPath: generationConfig.path)
                 ? generationConfig : nil
     }
+
+    /// The resolved decode stop set (phase-2.md D7 — engine-owned, one
+    /// implementation for CLI and app): config.json's eos ids ∪ the
+    /// tokenizer's eos id ∪ generation_config.json's eos ids. The last is
+    /// what HF `generate()` itself consults; on the pinned checkpoint it
+    /// alone carries <|endoftext|> 151643 (docs/AUDIT.md F2 / EOS-1). A
+    /// present but malformed generation_config.json fails loudly.
+    public func stopTokenIds(
+        config: ModelConfig, tokenizerEOSTokenId: Int?
+    ) throws -> Set<Int> {
+        var stops = Set(config.eosTokenIds)
+        if let tokenizerEOS = tokenizerEOSTokenId {
+            stops.insert(tokenizerEOS)
+        }
+        if let generationConfigURL {
+            let generationConfig = try GenerationConfig.load(
+                path: generationConfigURL.path)
+            stops.formUnion(generationConfig.eosTokenIds)
+        }
+        return stops
+    }
 }
