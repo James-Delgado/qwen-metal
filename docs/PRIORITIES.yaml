@@ -725,7 +725,8 @@ tasks:
   - id: P2-EXEC
     rank: 15
     title: "Phase 2 exit milestone (all P2 tasks done, exit criteria walked)"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-25T18:23:51Z
     depends_on: [P2-1, P2-2, P2-3, P2-4, P2-5, P2-6, P2-7]
     blocks: [SPEC-P3]
     deliverable:
