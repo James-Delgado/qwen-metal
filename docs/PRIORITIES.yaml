@@ -666,8 +666,9 @@ tasks:
   - id: P2-6
     rank: 14.6
     title: "QwenMetalApp thin iOS shell (bench protocol runner, residency toggle, entitlement)"
-    status: in_progress
+    status: done
     started_at: 2026-08-25T04:38:20Z
+    completed_at: 2026-08-25T05:01:28Z
     depends_on: [P2-4]
     blocks: [P2-7]
     deliverable:
@@ -680,11 +681,22 @@ tasks:
       (James, 2026-08-23): quick-load buttons for the two pinned prompts
       (bundled in-app) + Regenerate button (re-runs last generation; manual
       form of the sustained loop). Agents never deploy/run on device.
+      2026-08-25 (done): engine harness landed first (Bench/ module:
+      BenchGenerationRunner + SustainedLoop + BenchmarkReport export +
+      MemoryFootprint cross-check; DecodeLoop gained a cooperative
+      shouldStop) with 20 tests incl. a drift test pinning app-bundled
+      prompts byte-identical to benchmarks/prompts/rendered/. App target:
+      hand-authored xcodeproj (synchronized Sources, shared scheme, Run =
+      Release), file-sharing model transfer via Documents, Increased Memory
+      Limit entitlement wired. Release build verified for generic iOS
+      device (unsigned). Suite minus CPU logit gate: 232 tests, 0 failures.
+      Seeded CLI-2. Deploy + P2-7 runs are James's. See DECISIONS.md
+      2026-08-25 P2-6 entry.
 
   - id: P2-7
     rank: 14.7
     title: "On-device 'before' row + mmap-vs-wired sustained-stability comparison"
-    status: blocked
+    status: ready
     owner: james
     depends_on: [P2-5, P2-6]
     blocks: [P2-EXEC]
@@ -909,6 +921,25 @@ tasks:
       A --prompt-file flag reads the file bytes verbatim. Filler: never
       blocks the phase chain; worth landing before P2-7/Phase 6 Mac-side
       reproduction runs.
+
+  - id: CLI-2
+    rank: 29
+    title: "Route CLI generate through BenchGenerationRunner (dedupe the P2-5 instrumentation wiring)"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: "engine package (CLI)"
+      tests: "existing CLI behavior preserved; cpu-backend output stays byte-identical"
+    est_complexity: small
+    notes: |
+      Seeded 2026-08-25 from P2-6: the engine-side BenchGenerationRunner now
+      implements exactly the collector/onStep wiring GenerateCommand.swift
+      carries inline since P2-5 — two copies of the same hookup. Deferred
+      out of P2-6 deliberately: the CLI's printed output is pinned
+      byte-stable (P2-5 recorded cpu-backend output unchanged) and P2-6
+      had no reason to risk it. Rides well with CLI-1 (same file). Filler:
+      never blocks the phase chain.
 
   - id: BW-1
     rank: 24

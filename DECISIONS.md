@@ -1291,3 +1291,58 @@ docs/phases/phase-2.md (D8) and docs/PRIORITIES.yaml (P2-6, P2-EXEC):
   arithmetic, 3 GPUModel dispatch/timing sanity). No numeric gates added
   or touched — instrumentation tests are structural, and the Phase 2 gate
   set is untouched.
+
+## 2026-08-25 — P2-6: QwenMetalApp thin iOS shell landed (build-verified; device runs are James's)
+
+- **Landed:** `QwenMetalApp/` (the committed top-level target planned in
+  CLAUDE.md, spec D8) + an engine-side `Bench/` module so the app stays
+  thin: `BenchGenerationRunner` (instrumented single generation — the P2-5
+  collector wiring factored engine-side, + stop-reason inference and a
+  prefill-time field), `SustainedLoop` (the pinned ≥5-min regenerate
+  protocol; per-generation tok/s sequence kept — the OV#9 bimodality
+  signal; refuses to spin on empty generations), `BenchmarkReport`
+  (row-field export: PROVISIONAL marker, dual-timing medians + wall−GPU
+  overhead, dispatches/token, canonical-window labeling, operator
+  placeholders), `MemoryFootprint` (task_info phys_footprint — explicitly
+  a cross-check; the Xcode gauge stays the metric of record per the
+  protocol pin), and `BenchDefaults` (burst cap 640 = P2-5 Mac row
+  precedent; sustained minimum 300 s = PLAN.md pin; both pinned by test).
+- **DecodeLoop API extension (reversible):** `generate` gained an optional
+  `shouldStop` closure polled BEFORE each forward — token-boundary
+  cooperative stop for the app's Stop control and the sustained loop's
+  duration bound. Default nil; all existing call sites and behavior
+  unchanged (existing suites re-ran green).
+- **Model-transfer decision (reversible, convention):** the app finds the
+  model in its Documents folder (Finder file sharing; UIFileSharingEnabled)
+  — any subfolder that validates via the engine's `ModelDirectory`; a
+  missing model produces a clear error listing the expected files. No
+  bundled checkpoint (3.44 GB would bloat every install).
+- **App structure:** hand-authored `QwenMetalApp.xcodeproj` (Xcode 16
+  synchronized-folder format, local package dep on the repo root, shared
+  scheme with Run = Release per the benchmark protocol), explicit
+  Info.plist, Increased Memory Limit entitlement wired via
+  CODE_SIGN_ENTITLEMENTS (applies when James signs). SUPPORTED_PLATFORMS
+  = iphoneos only (simulator support is a non-goal). Screens per D8:
+  Generate (quick-load pinned prompts, Regenerate, Stop) and Benchmark
+  (burst with prompt picker — prefill-summarize serves the prefill row;
+  sustained pinned to decode-essay; residency mmap/wired toggle that
+  drops + reloads the model, since residency is baked in at load per D1;
+  share/copy row export).
+- **Pinned prompts ride in the bundle as copies** of the rendered forms;
+  a new drift test (AppBundledPromptTests) pins them byte-identical to
+  benchmarks/prompts/rendered/ incl. decode-essay's trailing "\n\n"
+  (the CLI-1 lesson) — a drifted copy fails the suite loudly.
+- **Honest limitations recorded:** the export's prefill figure spans
+  generation start → first generated token's completion (sequential
+  prefill + one decode forward — labeled as such in the export text);
+  Stop during a sustained loop aborts without a report (status line says
+  so); battery health and cold/warm are operator-entered fields, never
+  guessed.
+- **Verified:** `xcodebuild -scheme QwenMetalApp -destination
+  'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build` → BUILD SUCCEEDED
+  (Release, iPhoneOS 26.5 SDK, Xcode 17F113 — the release Xcode); both
+  prompts confirmed inside the built .app. Engine suite minus the CPU
+  logit gate: 232 tests, 0 failures, 1 skipped (+20 over P2-5: 14
+  harness, 4 report export, 2 bundled-prompt drift). No numeric gates
+  added or touched. Seeded CLI-2 (dedupe the CLI's inline P2-5 wiring
+  onto BenchGenerationRunner). P2-7 (James, on-device) is now ready.

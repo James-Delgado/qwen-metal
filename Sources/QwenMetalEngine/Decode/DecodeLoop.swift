@@ -60,15 +60,20 @@ public struct DecodeLoop {
 
     /// Greedy generation. Returns the generated ids only (EOS included when
     /// it fired). Stops on: a token in `eosTokenIds`, `maxNewTokens` reached,
-    /// or the context filling up.
+    /// the context filling up, or `shouldStop` returning true.
     /// - Parameter onStep: called per step with (stepIndex, fullVocabLogits,
     ///   chosenToken) — the logit-match suite and the CLI's verbose path hook
     ///   in here.
+    /// - Parameter shouldStop: polled before each forward (P2-6). A true
+    ///   return ends generation at that token boundary — never mid-forward —
+    ///   so the iOS shell's Stop control and the sustained regenerate-loop's
+    ///   duration bound both stop cleanly with valid tokens-so-far.
     public func generate(
         promptIds: [Int],
         maxNewTokens: Int,
         eosTokenIds: Set<Int> = [],
-        onStep: ((Int, [Float], Int) -> Void)? = nil
+        onStep: ((Int, [Float], Int) -> Void)? = nil,
+        shouldStop: (() -> Bool)? = nil
     ) throws -> [Int] {
         guard !promptIds.isEmpty else { throw DecodeError.emptyPrompt }
         guard promptIds.count < maxContext else {
@@ -82,6 +87,7 @@ public struct DecodeLoop {
         var ids = promptIds
         var generated: [Int] = []
         for step in 0..<maxNewTokens {
+            if shouldStop?() == true { break }
             let logits = try model.lastPositionLogits(ids: ids)
             let token = Argmax.firstIndex(logits)
             generated.append(token)

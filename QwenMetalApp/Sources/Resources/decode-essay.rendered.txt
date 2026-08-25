@@ -1,0 +1,7 @@
+<|im_start|>user
+Write a detailed history of computing for a general audience. Cover at least ten major milestones in chronological order, from mechanical calculators to modern smartphones. For each milestone, give the approximate date, name the key people or organizations involved, describe what changed technically, and explain why it mattered for what came after. Do not stop until you have covered all ten milestones.<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
