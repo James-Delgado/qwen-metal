@@ -1,0 +1,12 @@
+// Shared build configuration for the QwenMetalApp target (both configs).
+//
+// Signing identity is per-developer and deliberately NOT committed: create
+// QwenMetalApp/Local.xcconfig (gitignored) next to this file containing
+//
+//     DEVELOPMENT_TEAM = <your Apple developer team id>
+//
+// and Xcode's automatic signing picks it up. Without it the project still
+// builds unsigned — e.g. `xcodebuild ... CODE_SIGNING_ALLOWED=NO build` —
+// which is how agents/CI verify the target; only device deployment needs a
+// team. This keeps clones reproducible with no foreign signing state.
+#include? "Local.xcconfig"

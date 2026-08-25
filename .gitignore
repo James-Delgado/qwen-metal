@@ -9,8 +9,12 @@
 
 # Swift build artifacts
 .build/
-*.xcodeproj/xcuserdata/
 DerivedData/
+# Per-user Xcode state at any depth (the old root-anchored
+# *.xcodeproj/xcuserdata/ missed QwenMetalApp's nested project)
+**/xcuserdata/
+# Per-developer signing identity (see QwenMetalApp/Base.xcconfig)
+QwenMetalApp/Local.xcconfig
 # Per-user Xcode state created when the package is opened in Xcode
 .swiftpm/
 

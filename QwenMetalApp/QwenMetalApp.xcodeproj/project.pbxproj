@@ -12,15 +12,12 @@
 
 /* Begin PBXFileReference section */
 		A10000000000000000000007 /* QwenMetalApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QwenMetalApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000013 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A10000000000000000000003 /* Sources */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			explicitFileTypes = {
-			};
-			explicitFolders = (
-			);
 			path = Sources;
 			sourceTree = "<group>";
 		};
@@ -41,6 +38,7 @@
 		A10000000000000000000005 = {
 			isa = PBXGroup;
 			children = (
+				A10000000000000000000013 /* Base.xcconfig */,
 				A10000000000000000000003 /* Sources */,
 				A10000000000000000000006 /* Products */,
 			);
@@ -101,6 +99,7 @@
 			packageReferences = (
 				A1000000000000000000000E /* XCLocalSwiftPackageReference ".." */,
 			);
+			preferredProjectObjectVersion = 77;
 			productRefGroup = A10000000000000000000006 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -169,6 +168,7 @@
 		};
 		A10000000000000000000011 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A10000000000000000000013 /* Base.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = QwenMetalApp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -190,6 +190,7 @@
 		};
 		A10000000000000000000012 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A10000000000000000000013 /* Base.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = QwenMetalApp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -235,7 +236,7 @@
 /* Begin XCLocalSwiftPackageReference section */
 		A1000000000000000000000E /* XCLocalSwiftPackageReference ".." */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "..";
+			relativePath = ..;
 		};
 /* End XCLocalSwiftPackageReference section */
 

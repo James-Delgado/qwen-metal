@@ -1471,3 +1471,35 @@ were run; the first was invalidated and rerun — both are recorded.
   interleaving protocol for device rows; packed-weights residency
   re-test). No new follow-ups this session; existing fillers (BW-1,
   DEV-1, DK-1, CLI-1, CLI-2) stand.
+
+## 2026-08-25 — App signing moved to gitignored Local.xcconfig; scheme validation semantics pinned (decided by James)
+
+Housekeeping of the P2-7 device-session residue in QwenMetalApp/, decided
+by James with reproducibility as the criterion (a clone should build and
+run the diagnostics with no foreign signing state baked in):
+
+- **Signing home:** DEVELOPMENT_TEAM removed from the committed pbxproj.
+  Both app build configs now use `baseConfigurationReference` →
+  QwenMetalApp/Base.xcconfig (committed; contains only an optional
+  `#include? "Local.xcconfig"` + instructions), and the per-developer
+  QwenMetalApp/Local.xcconfig (gitignored) carries the team id. Verified:
+  `-showBuildSettings` resolves DEVELOPMENT_TEAM through the chain, and
+  the clone-equivalent unsigned build (`CODE_SIGNING_ALLOWED=NO`, no
+  Local.xcconfig consulted) still returns BUILD SUCCEEDED.
+- **.gitignore fix:** the old `*.xcodeproj/xcuserdata/` pattern was
+  root-anchored (contains a slash) and never matched the app project one
+  level deep — replaced with `**/xcuserdata/`; `QwenMetalApp/
+  Local.xcconfig` added. Both P2-7 xcuserdata dirs now ignored.
+- **Scheme attribute semantics PINNED (trap recorded so it is not
+  "fixed" backwards):** in .xcscheme files, `enableGPUValidationMode`
+  ABSENT = Metal API validation ON (Xcode default for attached runs);
+  `enableGPUValidationMode = "1"` = validation DISABLED — it is what
+  Xcode writes when the Diagnostics checkbox is UNCHECKED (confirmed
+  against James's scheme UI showing unchecked). The P2-7-modified shared
+  scheme (which carries ="1") is therefore committed deliberately: a
+  fresh clone's attached Run now defaults to validation OFF, matching
+  the P0A-1 validation-off protocol pin, where the previously committed
+  scheme (no attribute) silently defaulted it ON — the exact session-1
+  trap. Xcode's rewrite also dropped the hand-authored Run=Release
+  comment (rewrites always strip comments; the Release setting itself
+  survived and stays pinned by the scheme).
