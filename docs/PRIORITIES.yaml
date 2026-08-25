@@ -666,7 +666,8 @@ tasks:
   - id: P2-6
     rank: 14.6
     title: "QwenMetalApp thin iOS shell (bench protocol runner, residency toggle, entitlement)"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-25T04:38:20Z
     depends_on: [P2-4]
     blocks: [P2-7]
     deliverable:
