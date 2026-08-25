@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 import QwenMetalEngine
 
 // P2-6 (phase-2.md D8): the app-side glue. THIN by rule — model discovery,
@@ -67,11 +68,16 @@ struct LoadedEngine {
 final class AppModel: ObservableObject {
     /// Same cap as the CLI: the GPU KV cache is preallocated at this size
     /// (phase-2.md D3); the model's max_position_embeddings wins if smaller.
-    static let contextCap = 4096
+    nonisolated static let contextCap = 4096
 
     @Published var residency: WeightsResidency = .mmap
     @Published var isLoading = false
-    @Published var isRunning = false
+    @Published var isRunning = false {
+        // A locked screen suspends the app mid-generation and ruins the
+        // run (P2-7 sustained loops are ≥ 5 min) — keep the display awake
+        // exactly while a run is active.
+        didSet { UIApplication.shared.isIdleTimerDisabled = isRunning }
+    }
     @Published var loadSummary: String?
     @Published var errorMessage: String?
     @Published var statusLine = ""
