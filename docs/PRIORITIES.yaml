@@ -754,10 +754,11 @@ tasks:
   - id: SPEC-P3
     rank: 16
     title: "Write Phase 3 spec (4-bit quant + fused dequant-matvec) with pre-committed gates"
-    status: in_progress
+    status: done
     started_at: 2026-08-25T19:33:14Z
+    completed_at: 2026-08-25T19:41:29Z
     depends_on: [P2-EXEC]
-    blocks: [P3-EXEC]
+    blocks: [P3-EXEC, P3-1]
     deliverable:
       file: docs/phases/phase-3.md
       tests: "bandwidth fraction + quality-gate metrics committed pre-phase"
@@ -772,18 +773,165 @@ tasks:
       numbers) and re-run the mmap-vs-wired comparison interleaved on the
       packed ~0.97 GB weights (speed comparison left unresolved by P2-7;
       mmap stays default per DECISIONS.md 2026-08-25).
+      2026-08-25 (done): spec landed (docs/phases/phase-3.md, D1-D8) +
+      Phase 3 gates pre-committed in DECISIONS.md (layered oracle: exact
+      dequant tile, Tier K/M/E reused verbatim vs the CPU-quant oracle;
+      quality band vs mlx-lm 4-bit with named metrics + WikiText-2 test
+      first-4096 ppl slice; microbench fraction 0.70 x 43.84 GB/s;
+      repeats/interleaving device protocol). All four Part 4 obligations
+      covered + both P2-7 obligations folded in. P3-1..P3-7 seeded below;
+      P3-EXEC re-pointed. NOTE for James: four judgment-derived gate
+      constants + the packed-layout schema pin are flagged in the gates
+      entry — veto window is before P3-EXEC work starts.
+
+  # ---------- Phase 3 build tasks (seeded 2026-08-25 by SPEC-P3; spec: docs/phases/phase-3.md) ----------
+  - id: P3-1
+    rank: 16.1
+    title: "Packed 4-bit layout (q4g64 schema) + Swift packer CLI + adversarial packing fixtures + packed artifact"
+    status: ready
+    depends_on: [SPEC-P3]
+    blocks: [P3-2, P3-4]
+    deliverable:
+      file: "engine package (quant module + CLI pack subcommand)"
+      tests: "nibble-order pin, group-boundary indexing, degenerate/extreme/negative-heavy groups, round-trip bound + determinism, non-multiple-of-64 reject, .q 4-byte-alignment validation, metadata provenance"
+    est_complexity: large
+    notes: |
+      Spec D1/D2: {name}.q u32 (8 codes/word, low nibble first) +
+      .scales/.biases fp16 per group of 64 along the reduction dim; norms
+      pass through bf16; scale=(max-min)/15, bias=min, both fp16-rounded
+      BEFORE code selection so dequant is exactly reproducible; packer is
+      Swift engine code sharing parser/upcast/dequant with the loaders.
+      Produces models/qwen3-1.7b-70d244cc-q4g64.safetensors (~0.97 GB,
+      local-only) — sha256 to DECISIONS.md. Schema becomes a PINNED
+      invariant when this lands (CLAUDE.md hard-rules list).
+
+  - id: P3-2
+    rank: 16.2
+    title: "CPU-quant reference: packed file -> fp32 dequant materialization through the frozen CPU model"
+    status: blocked
+    depends_on: [P3-1]
+    blocks: [P3-3, P3-5]
+    deliverable:
+      file: "engine package (quant loader front end)"
+      tests: "CPU dequant exactness vs hand-computed values; loader provenance/wrong-format/alignment rejects; smoke decode coherent"
+    est_complexity: medium
+    notes: |
+      Spec D3: the PLAN invariant 4 oracle carve-out — fp32 materialization
+      is macOS test-oracle-only; hard rule 1 (register dequant) still binds
+      engine GPU + app. No CPU module changes: new weight front end only.
+      q*scale+bias == fma bit-for-bit (exact-product argument in the gates
+      entry) — CPU and GPU dequant values identical by construction.
+
+  - id: P3-3
+    rank: 16.3
+    title: "Quality gate vs mlx-lm 4-bit: tools dump extension + band-setter measurement + in-band verification"
+    status: blocked
+    depends_on: [P3-2]
+    blocks: [P3-7]
+    deliverable:
+      file: "tools/ (dump_mlx extension, ppl slice fixture, pinned dataset revision in pins.py) + engine tests (metric computation)"
+      tests: "CPU-quant top-1 agreement / mean KL / ppl-slice delta inside the pre-committed band vs the measured mlx numbers"
+    est_complexity: large
+    notes: |
+      Spec D6 + gates entry: metrics teacher-forced on the reference fp32
+      argmax sequences (250 steps), float64 stats; ppl slice = WikiText-2
+      wikitext-2-raw-v1 TEST split, first 4096 tokens, pinned dataset
+      revision. Band-setters (A_mlx, KL_mlx, dppl_mlx) measured and
+      recorded in DECISIONS.md BEFORE any of our metrics are computed.
+      Gates: A_ours >= A_mlx - 4pp; KL_ours <= 1.5x; dppl <= 1.5x + 0.01.
+      Out-of-band => suspect the packer; oracle layer 1 arbitrates. The
+      mlx comparator revision (3b1b1768) is re-verified programmatically
+      at dump time.
+
+  - id: P3-4
+    rank: 16.4
+    title: "Fused GPU kernels: dequant-tile dump + fused dequant-matvec + embedding-gather-dequant + exact/Tier-K tests"
+    status: blocked
+    depends_on: [P3-1]
+    blocks: [P3-5, P3-6]
+    deliverable:
+      file: "engine package (Metal quant kernels)"
+      tests: "dequant-tile EXACT bitwise vs CPU (incl. adversarial fixtures); embedding-gather fp16 exact; matvec Tier K max(2^-9*M, 2^-11) vs CPU-quant sgemm oracle on odd shapes"
+    est_complexity: large
+    notes: |
+      Spec D4: dequant in registers (hard rule 1); fp16- and fp32-store
+      matvec variants. UNLIKE Phase 2, this kernel may be optimized
+      (simdgroup reductions, vectorized loads) — but only after its
+      correctness tests pass, and every optimization iteration re-passes
+      them (hard rule 3). Attention/norm/swiglu/residual kernels untouched.
+
+  - id: P3-5
+    rank: 16.5
+    title: "GPU-quant pipeline wiring + Tier-M/E suites vs CPU-quant + free-run report + CLI/app packed plumbing"
+    status: blocked
+    depends_on: [P3-2, P3-4]
+    blocks: [P3-7]
+    deliverable:
+      file: "engine package (GPU quant decode path) + CLI/app"
+      tests: "Tier-M module slices + Tier-E live teacher-forced suite (250 steps) at the reused Phase 2 constants vs CPU-quant; edge behavior unchanged on the packed path"
+    est_complexity: large
+    notes: |
+      Spec D5: oracle = CPU-quant computed live (no dumped fixtures for
+      the quantized fork); tie-aware top-1 margins from CPU-quant logits.
+      Free-running divergence (128 steps x 5 prompts) REPORTED in
+      DECISIONS.md, not gated. Run oracle suites release-mode (DEV-1
+      lesson: CPU-side full re-forwards dominate debug wall time).
+      Dispatches/token drops automatically via DispatchCounter (measured,
+      not derived) — record the new number.
+
+  - id: P3-6
+    rank: 16.6
+    title: "Dequant-matvec bandwidth microbench (one token's matvecs, aggregate + per-shape GB/s) + Mac sanity row"
+    status: blocked
+    depends_on: [P3-4]
+    blocks: [P3-7]
+    deliverable:
+      file: "engine package (microbench) + CLI subcommand + app runner + benchmarks/results.md (Mac row)"
+      tests: "byte accounting pinned (q+scales+biases ~0.967 GB), dual timing sanity, per-shape + aggregate arithmetic"
+    est_complexity: medium
+    notes: |
+      Spec D7: 28x7 + lm_head = 197 real packed matvecs, weights-only, one
+      command buffer; aggregate weight-stream rate = packed bytes / summed
+      GPU time. The 0.70 x 43.84 GB/s gate applies to the ON-DEVICE run
+      (P3-7, James); Mac row is PROVISIONAL sanity, never gated.
+
+  - id: P3-7
+    rank: 16.7
+    title: "On-device Phase 3 rows: microbench gate + memory drop + decode row + packed mmap-vs-wired interleaved re-test"
+    status: blocked
+    owner: james
+    depends_on: [P3-3, P3-5, P3-6]
+    blocks: [P3-EXEC]
+    deliverable:
+      file: "benchmarks/results.md rows + DECISIONS.md entries"
+      tests: "microbench aggregate >= 30.7 GB/s; phys_footprint rows (mmap AND wired); decode burst+sustained under the D8 repeats/interleaving protocol; residency close-out decision"
+    est_complexity: medium
+    notes: |
+      Spec D7/D8 + gates entry. ALL rows under the new protocol: >=3
+      same-session repeats (median + range), A/B comparisons interleaved
+      with non-overlapping-ranges required for directional claims,
+      detached launches (validation OFF, recorded). Decode row is the
+      progress check vs 29.4 (P2-7 projection ~22-32 tok/s). Residency
+      question closes here with a DECISIONS.md entry (mmap stays default
+      unless it says otherwise). Agents prepare only.
 
   - id: P3-EXEC
     rank: 17
-    title: "Execute Phase 3 per spec (tasks seeded by SPEC-P3)"
+    title: "Phase 3 exit milestone (all P3 tasks done, exit criteria walked)"
     status: blocked
-    depends_on: [SPEC-P3]
+    depends_on: [P3-1, P3-2, P3-3, P3-4, P3-5, P3-6, P3-7]
     blocks: [SPEC-P4]
     deliverable:
       file: "per docs/phases/phase-3.md"
       tests: "Phase 3 exit criteria (PLAN.md table)"
-    est_complexity: large
-    notes: "Milestone placeholder. Includes offline packer, CPU-quant mode, kernels."
+    est_complexity: small
+    notes: |
+      2026-08-25: concrete tasks P3-1..P3-7 seeded by SPEC-P3; this became
+      the exit-criteria walk + DECISIONS close-out (was: milestone
+      placeholder). Per the SPEC-P2 review refinement, the close-out ALSO
+      regenerates docs/architecture.pdf (pattern carries to all *-EXEC
+      milestones). James's veto window on the flagged Phase 3 gate
+      constants + packed-layout schema pin closes when work here starts.
 
   - id: SPEC-P4
     rank: 18

@@ -1503,3 +1503,128 @@ run the diagnostics with no foreign signing state baked in):
   trap. Xcode's rewrite also dropped the hand-authored Run=Release
   comment (rewrites always strip comments; the Release setting itself
   survived and stays pinned by the scheme).
+
+## 2026-08-25 — Phase 3 gates pre-committed: layered quant oracle + microbench fraction + quality band
+
+Set BEFORE any Phase 3 code or test exists (PLAN.md invariant 4; the eng
+review's SPEC-P3 obligations OV#4/#11/#12). Spec: docs/phases/phase-3.md.
+Premise for every tier reuse: the packer chooses codes against the
+fp16-rounded scale/bias as stored (spec D2), and q·scale is exactly
+representable in fp32 (≤4-bit int × 11-bit fp16 significand ⇒ ≤15
+significand bits), so `q*scale + bias` is ONE correctly rounded fp32
+operation — CPU and GPU dequant produce bit-identical fp32 values
+regardless of fma contraction. Both sides of every diff therefore consume
+identical weight values, exactly the Phase 2 situation (bit-identical bf16
+upcast), and the Phase 2 divergence analysis (fp16 activation rounding +
+reduction order only) transfers unchanged.
+
+- **Layer 1 — dequant tile: EXACT (==), no tolerance.** GPU fp32 tile dump
+  vs CPU dequant of the same packed bytes, bitwise, including degenerate
+  (scale = 0), extreme-scale (fp16 max/min-normal, subnormal), and
+  negative-heavy groups. Embedding-gather fp16 store == fp16(exact fp32
+  dequant) bitwise (the Phase 2 embedding species).
+- **Layer 2 — fused dequant-matvec: Phase 2 Tier K reused unchanged,**
+  |Δ| ≤ max(2⁻⁹·M, 2⁻¹¹) vs the CPU-quant oracle (BLAS.sgemm over the
+  identical dequantized fp32 weights, hard rule 8). No new constant: same
+  divergence species as the Phase 2 matvec (fp32 accumulation both sides,
+  fp16 store). Applies to every optimization iteration of the kernel
+  (hard rule 3: correctness test first, re-passed after each change).
+- **Full-model tiers: Phase 2 Tier M and Tier E constants reused verbatim**
+  with the oracle swapped to the CPU-quant reference, computed live at the
+  same slice points and suite structure (isolated modules at
+  max(2⁻⁸·M, 2⁻¹¹) / attention max(2⁻⁷·M, 2⁻¹¹); full-stack slices
+  max(2⁻⁵·M, 2⁻¹¹); teacher-forced 5×50-step logit suite at 2⁻⁵ bounds
+  with fingerprints at 2⁻⁵/2⁻⁴·M64; tie-aware top-1 at ε_tie = 2⁻⁴·M64
+  with margins from the CPU-quant logits). Free-running divergence
+  (128 steps × 5 prompts, GPU-quant vs CPU-quant) stays REPORTED, not
+  gated — the 2026-08-23 rationale stands.
+- **Quality gate vs mlx-lm 4-bit (OV#12 named metrics + slice; grades the
+  packing recipe via the CPU-quant reference).** Metrics, all teacher-forced
+  on the reference fp32 argmax sequences, fp32 logits, float64 statistics:
+  (1) top-1 agreement vs the fp32 argmax over the 250 fixture steps;
+  (2) mean full-vocab KL(P_fp32 ‖ P_engine), nats, over the 250 steps;
+  (3) perplexity on the named slice — WikiText-2 `wikitext-2-raw-v1` TEST
+  split at a dataset revision pinned in tools/pins.py when P3-3 lands,
+  standard document concatenation, first 4096 tokens under the pinned
+  tokenizer, ppl = exp(mean NLL) over positions 1..4095. Band-setter
+  numbers (mlx's own agreement A_mlx, KL_mlx, Δppl_mlx vs the same fp32
+  reference) are measured by the extended tools/ dump and recorded here
+  BEFORE any metric of ours is computed. **Gates:** A_ours ≥ A_mlx − 4
+  percentage points; KL_ours ≤ 1.5 × KL_mlx; Δppl_ours ≤ 1.5 × Δppl_mlx
+  + 0.01 (Δppl = ppl_engine − ppl_fp32; the +0.01 floor guards a
+  near-zero mlx delta). Out-of-band ⇒ the packer is the suspect and oracle
+  layer 1 arbitrates (Issue 2 diagnosis rule). The 2026-08-22 argmax-level
+  mlx dump is NOT reused for the band — it predates these definitions.
+- **Microbench bandwidth fraction (OV#11):** the standalone fused
+  dequant-matvec microbench (one token's worth of real packed matvecs,
+  28×7 + lm_head = 197 dispatches, weights-only) must achieve aggregate
+  weight-stream rate ≥ **0.70 × 43.84 GB/s = 30.7 GB/s on the pinned
+  iPhone** (best across the pinned repeats protocol, GPU-timestamp basis,
+  wall recorded alongside per hard rule 7). Aggregate = total packed bytes
+  (q + scales + biases ≈ 0.967 GB) ÷ summed kernel GPU time; per-shape
+  rates reported but not gated. Mac rows are dev-loop sanity, PROVISIONAL,
+  never gated. Grounding (measurements, not aspiration): the naive
+  full-model Phase 2 engine already ran at ~50–70% of roofline on-device
+  (P2-7), and MLX/llama.cpp full decode sit at ~96–102% of the triad
+  figure (P0A-1) — a weights-only streaming kernel clearing 70% is a real
+  bar below the ecosystem ceiling. BW-1's caveat (triad likely understates
+  read-mostly bandwidth ~5–10%) makes the fraction conservative in the
+  strict direction.
+- **Device-row protocol addendum (from P2-7's measured ~1.4× device-state
+  variance; extends the benchmark protocol for ALL Phase 3+ rows):**
+  single-config rows = ≥3 same-session repeats, report median AND range;
+  A-vs-B comparisons = interleaved A,B,A,B,A,B (≥3 per side), a
+  directional claim requires non-overlapping ranges, else recorded
+  "unresolved at n=3"; detached launches mandatory (validation OFF,
+  recorded). P3-7 re-runs mmap-vs-wired on the packed weights under this
+  protocol and closes the residency question with its own entry.
+
+Honest flag (surfaced for James, veto window = before P3-EXEC work starts,
+the SPEC-P2 precedent): the tier reuses and the exactness arguments are
+derivations, but FOUR constants in this entry are judgment-derived — the
+0.70 microbench fraction, the 4-percentage-point agreement margin, the
+1.5× KL/Δppl multipliers, and the choice of the WikiText-2 first-4096
+slice. Also pinned by this spec and flaggable in the same window: the
+packed-layout schema itself (D1 — u32 nibble order, group 64, fp16
+scale/bias triplet naming) becomes a pinned invariant once P3-1 lands.
+Per hard rule 6, once P3 tests exist these numbers never loosen; failures
+are bug signals.
+
+## 2026-08-25 — SPEC-P3: Phase 3 spec written; P3 build tasks seeded
+
+- **Spec landed: docs/phases/phase-3.md** (4-bit quant + fused
+  dequant-matvec). All four eng-review Part 4 obligations covered:
+  microbench bandwidth fraction pre-committed (OV#11, previous entry),
+  perplexity eval slice named (OV#12, WikiText-2 test first-4096),
+  mlx-community 4-bit provenance handled (OV#12 — verified at PIN-1 via HF
+  file history; the quality-gate dump re-verifies revision 3b1b1768
+  programmatically at run time), embeddings + lm_head quantized per the
+  MLX recipe (OV#4 — the tied embedding is stored once as a packed
+  triplet; 1-D norm vectors stay bf16, matching the MLX recipe's
+  linears+embeddings coverage).
+- **P2-7 obligations folded in:** the repeats/interleaving device-row
+  protocol is pinned (spec D8 + gates entry), and P3-7 re-runs the
+  mmap-vs-wired comparison interleaved on the ~0.97 GB packed weights,
+  closing the residency question P2-7 left unresolved.
+- **Design decisions (D1–D8, rationale in the spec):** packed layout =
+  4-bit grouped affine, group 64 along the reduction dim, per-group fp16
+  scale+bias, `{name}.q` u32 (8 codes per word, low nibble first) +
+  `.scales`/`.biases` fp16, norms pass through bf16, one safetensors-format
+  file with 4-byte-aligned `.q` offsets validated at pack and load;
+  packer is Swift engine code (`qwen-metal-cli pack`) so parser/upcast/
+  dequant arithmetic are shared with the loaders — tools/ Python stays
+  oracle-side; CPU-quant reference materializes fp32 dequant weights
+  through the FROZEN CPU module path (explicitly the PLAN invariant 4
+  oracle carve-out — hard rule 1 continues to bind engine GPU + app
+  unqualified); fused dequant-matvec may be optimized within the phase
+  (after its correctness tests pass, re-passed per iteration);
+  quantization error vs kernel bugs separated by the layered oracle
+  (Issue 2); attention/KV untouched this phase.
+- **Backlog:** P3-1..P3-7 seeded at ranks 16.1–16.7 (P3-7 owner: james —
+  device rows); P3-EXEC re-pointed at them. Memory high-water drops to
+  ~1.5 GB (packed 0.97 GB + KV 448 MiB) — the packed roofline is
+  ~45.2 tok/s and P2-7's efficiency range projects ~22–32 tok/s,
+  bracketing the 29.4 target.
+- **NOTE for James (veto window before P3-EXEC):** four judgment-derived
+  gate constants + the packed-layout schema pin are flagged in the gates
+  entry above.
