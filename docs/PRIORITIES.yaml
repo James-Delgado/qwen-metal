@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-08-24
+last_updated: 2026-08-25
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -725,8 +725,9 @@ tasks:
   - id: P2-EXEC
     rank: 15
     title: "Phase 2 exit milestone (all P2 tasks done, exit criteria walked)"
-    status: in_progress
+    status: done
     started_at: 2026-08-25T18:23:51Z
+    completed_at: 2026-08-25T18:30:10Z
     depends_on: [P2-1, P2-2, P2-3, P2-4, P2-5, P2-6, P2-7]
     blocks: [SPEC-P3]
     deliverable:
@@ -741,11 +742,19 @@ tasks:
       .pdf per the CLAUDE.md upkeep rule — folded into the phase-exit
       milestone so it can't slip again (Phase 1 slipped; DOC-1 is that
       catch-up). Pattern carries to future *-EXEC milestones.
+      2026-08-25 (done): all five exit criteria walked and MET — evidence
+      in DECISIONS.md 2026-08-25 P2-EXEC entry (incremental decode +
+      preallocated cache; all pre-committed Tier K/M/E gates held first
+      run; free-run divergence NONE; "before" range 6.7-8.6 tok/s; mmap
+      default decided; Tier-E judgment-constant veto window closed
+      unexercised). architecture.pdf regenerated v1.5 (pypdf-verified,
+      no stale v1.4 strings). Suite minus CPU logit gate: 232 tests,
+      0 failures. Phase 2 EXITED; SPEC-P3 flipped to ready.
 
   - id: SPEC-P3
     rank: 16
     title: "Write Phase 3 spec (4-bit quant + fused dequant-matvec) with pre-committed gates"
-    status: blocked
+    status: ready
     depends_on: [P2-EXEC]
     blocks: [P3-EXEC]
     deliverable:

@@ -200,7 +200,7 @@ ax.text(ceiling+0.05, 1.2, "practical iOS\nmemory ceiling\n(jetsam; with\nIncrea
         fontsize=7.6, color=RED, va="center")
 ax.text(0, 0.45, "0 GB", fontsize=8, color=GRAY)
 ax.text(ceiling-0.12, 0.45, f"{ceiling} GB", fontsize=8, color=GRAY)
-ax.text(0, 0.1, "Budget rule: every allocation is accounted here before it is written. Weights are file-backed (mmap) — cheaper under iOS memory\naccounting than dirty heap pages. KV cache is preallocated at load; nothing grows at runtime. This is the Phase 3+ end state;\nthe Phase 2 interim (bf16 weights, pre-quantization) peaks near ~4.0 GB — the project's memory high-water mark.",
+ax.text(0, 0.1, "Budget rule: every allocation is accounted here before it is written. Weights are file-backed (mmap) — cheaper under iOS memory\naccounting than dirty heap pages. KV cache is preallocated at load; nothing grows at runtime. This is the Phase 3+ end state; the\nPhase 2 bf16 interim (~4.0 GB high-water) ran on-device without jetsam — measured phys_footprint: mmap ~536 MB vs wired ~4.3 GB.",
         fontsize=7.8, color=INK)
 plt.savefig(f"{OUT}/d3_memory.png", dpi=200, bbox_inches="tight"); plt.close()
 
@@ -249,11 +249,13 @@ plt.savefig(f"{OUT}/d4_fused.png", dpi=200, bbox_inches="tight"); plt.close()
 # D5: Roofline chart
 # ----------------------------------------------------------------------------
 fig, ax = plt.subplots(figsize=(8.8, 4.6))
-bpt = np.linspace(0.4, 3.4, 300)  # GB per token
+bpt = np.linspace(0.4, 3.7, 300)  # GB per token
 # Phase 0 (2026-08-22): planning curves replaced by MEASURED bandwidth —
 # 43.84 GB/s sustained triad (iPhone 15 Pro, DECISIONS.md); 51.2 = A17 Pro
 # rated, shown as context. Both engines measure at ~96-102% of the triad
 # figure (read-mostly traffic exceeds 2R+1W triad — BW-1 will bound it).
+# Phase 2 (2026-08-25): our naive bf16 'before' point added — 3.44 GB/token,
+# measured 6.7–8.6 tok/s on-device (50–70% of roofline; DECISIONS.md P2-7).
 for bw, c, ls, lab in [
     (43.84, BLUE, "-", "43.84 GB/s (MEASURED triad, iPhone 15 Pro)"),
     (51.2, "#93c5fd", "--", "51.2 GB/s (A17 Pro rated)"),
@@ -274,9 +276,13 @@ ax.scatter([1.3], [32.44], s=70, color=ORANGE, zorder=6)
 ax.annotate("llama.cpp (MEASURED, P0): 32.4\n(Q4_K_M, 5.03 BPW → more bytes/token)", (1.3, 32.44),
             xytext=(1.85, 60), fontsize=8.5, color=ORANGE,
             arrowprops=dict(arrowstyle="->", color=ORANGE))
+ax.scatter([3.44], [7.5], s=80, color=RED, marker="D", zorder=6)
+ax.annotate("qwen-metal P2 naive bf16 (MEASURED):\n6.7–8.6 tok/s 'before' @ 3.44 GB/token\n(50–70% of roofline; Phases 3–5 close it)", (3.44, 7.5),
+            xytext=(0.62, 5.5), fontsize=8.5, color=RED,
+            arrowprops=dict(arrowstyle="->", color=RED))
 ax.set_xlabel("Bytes read per generated token (GB)  ≈  packed weights + scales + KV reads", fontsize=9)
 ax.set_ylabel("Decode tokens / second (ceiling)", fontsize=9)
-ax.set_ylim(0, 130); ax.set_xlim(0.4, 3.4)
+ax.set_ylim(0, 130); ax.set_xlim(0.4, 3.7)
 ax.grid(alpha=0.25)
 ax.legend(fontsize=8, loc="upper right")
 ax.set_title("Decode roofline — why quantization and fusion set the speed limit", fontsize=10.5,
@@ -338,8 +344,8 @@ fig, ax = plt.subplots(figsize=(9.4, 4.9))
 phases = [
     ("0", "Baselines + toy kernels — DONE 2026-08-22", "measured: 43.84 GB/s; MLX 39.2 / llama.cpp 32.4 tok/s; target 29.4; energy 0.104/0.131 J/tok", 0, 1.5, GREEN, GREENF),
     ("1", "CPU fp32 reference (macOS) — DONE 2026-08-23", "logit suite ≤1e-3, all 5 prompts, first run; tokenizer id-identical; 118 tests; post-phase audit hardening", 1.0, 2.5, GREEN, GREENF),
-    ("2", "Naive Metal port + minimal KV cache — NEXT (spec + fp16 gates committed)", "bf16 no-copy mmap weights; tiered fp16 gates + tie-aware top-1; 'before' row; mmap vs wired", 3.0, 2.0, BLUE, BLUEF),
-    ("3", "4-bit quant + fused dequant-matvec", "CPU-quant oracle; tile test exact; matvec GB/s microbench; quality gate; roofline check", 4.5, 2.5, ORANGE, ORANGEF),
+    ("2", "Naive Metal port + minimal KV cache — DONE 2026-08-25", "all fp16 gates held first run; free-run divergence none; 'before' 6.7–8.6 tok/s on-device; mmap default", 3.0, 2.0, GREEN, GREENF),
+    ("3", "4-bit quant + fused dequant-matvec — NEXT (spec pending)", "CPU-quant oracle; tile test exact; matvec GB/s microbench; quality gate; roofline check", 4.5, 2.5, BLUE, BLUEF),
     ("4", "Fused attention + kernel fusion", "GQA SDPA kernel; fold norm/RoPE; dispatches/token down", 6.5, 2.5, ORANGE, ORANGEF),
     ("5", "Tiled prefill GEMM", "threadgroup memory + simdgroup_matrix; prefill vs MLX", 8.5, 2.0, PURPLE, PURPLEF),
     ("6", "Benchmark writeup", "full cross-engine table; thermal + J/tok (battery-delta); roofline analysis", 10.0, 1.5, INK, "#e2e8f0"),

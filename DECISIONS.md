@@ -1411,3 +1411,63 @@ were run; the first was invalidated and rerun — both are recorded.
   at P0A-1. Thermal: phone notably cooler than the Phase 0 MLX/llama.cpp
   sustained cycles at today's speeds; expect that to change as Phases 3–5
   approach the roofline.
+
+## 2026-08-25 — P2-EXEC: Phase 2 exit criteria walked — Phase 2 EXITED
+
+- **Exit-criteria walk (PLAN.md phase table / phase-2.md §Exit criteria —
+  all five MET, evidence cited to the entries above):**
+  1. *Preallocated K/V, append per step, naive unfused attention;
+     incremental decode from the first on-device build* ✓ — P2-3/P2-4:
+     one 448 MiB fp16 buffer allocated at model load with no grow path in
+     the API (hard rule 4 structurally enforced; size verified by test at
+     the pinned dims); per-step kv-append; incremental prefix decode
+     pinned BITWISE-equal to a fresh replay.
+  2. *Pre-committed fp16 gate passes vs CPU reference* ✓ — every Tier
+     K/M/E gate (committed 2026-08-23, before any Phase 2 code or test
+     existed) held UNMODIFIED on the first run (P2-1..P2-4 entries),
+     including the exact (==) surfaces and the tie-aware top-1 agreement
+     gate over all 250 teacher-forced steps. The free-running divergence
+     report (report, not gate, per the committed rationale): NONE — GPU
+     token-identical to the CPU reference on all 5 prompts × 128 steps.
+  3. *"Before" benchmark row recorded per parity pins* ✓ — P2-7 detached
+     session: protocol headline warm-burst canonical window
+     6.74–6.92 tok/s (mmap), honest range 6.7–8.6 tok/s; prefill
+     8.2–10.7 tok/s; greedy, pinned prompts, per-engine token counts,
+     phys_footprint, validation setting recorded (the attached session
+     was invalidated and fully rerun — the pin worked); PROVISIONAL
+     markers on every row.
+  4. *mmap vs wired-copy sustained-stability comparison recorded; default
+     residency decided in DECISIONS.md* ✓ — comparison recorded with the
+     speed question honestly UNRESOLVED (both directions observed inside
+     the ~1.4× device-state noise band); footprint and load time measured
+     cleanly (mmap 536 MB / 1.5 s vs wired 4.3 GB / 9.7 s); DECISION:
+     mmap default for Phase 3+ (James, P2-7 entry), re-test interleaved
+     on packed weights before closing the question.
+  5. *DECISIONS.md entries for everything decided/measured, incl. the
+     free-run report* ✓ — the 2026-08-23/24/25 P2-1..P2-7 entries above,
+     plus the attached-run protocol lesson.
+- **Judgment-derived Tier-E constants:** the honest-flag veto window
+  ("before P2-EXEC starts", gates entry 2026-08-23) closed UNEXERCISED —
+  James raised no veto, and both flagged constants (√L compounding model
+  behind 2⁻⁵, the 2³ attention-score budget behind 2⁻⁷) were never needed
+  as slack: all gates held first run. Hard rule 6 continues to bind them.
+- **Verification at exit:** full suite minus the CPU logit gate —
+  232 tests, 0 failures, 1 skipped (env-gated free-run harness), 127 s —
+  identical counts to the P2-6 baseline. Backlog drift test green.
+- **Architecture PDF regenerated v1.4 → v1.5** per the upkeep rule
+  (folded into this milestone by the 2026-08-23 SPEC-P2 review
+  refinement): §1 gains the Phase 2 standing (6.7–8.6 tok/s before-row),
+  §4 the measured phys_footprint asymmetry + residency decision, §5.2 the
+  Phase 2 roofline position (50–70%, dispatch overhead 1.9–2.0 ms/token @
+  591, Phase 3 projection ~22–32 tok/s bracketing 29.4), §6 the Phase 2
+  oracle outcome (all gates first run; free-run divergence none), §8
+  roadmap P2 EXITED / P3 NEXT, §10 risk rows (memory measured; ~1.4×
+  device-state variance → SPEC-P3 obligation). Figure 3 carries the
+  measured footprints; Figure 5 gains the measured P2 point
+  (3.44 GB/token, 6.7–8.6 tok/s); Figure 7 marks P2 done. Verified via
+  pypdf extraction: all v1.5 markers present, no stale v1.4 strings.
+- **Phase 2 is EXITED.** SPEC-P3 flipped to ready (rank 16) — the next
+  action; its notes already carry the P2-7 obligations (repeats/
+  interleaving protocol for device rows; packed-weights residency
+  re-test). No new follow-ups this session; existing fillers (BW-1,
+  DEV-1, DK-1, CLI-1, CLI-2) stand.
