@@ -260,6 +260,47 @@ final class GPUModelTests: XCTestCase {
         }
     }
 
+    // MARK: - P2-5 instrumentation: dispatch count + per-step dual timing
+
+    func testInstrumentationNilBeforeFirstStep() throws {
+        let model = try makeTinyModel()
+        XCTAssertNil(model.lastStepTiming)
+        XCTAssertNil(model.lastStepDispatchCount)
+    }
+
+    /// The measured count must be nonzero, match the pipeline structure
+    /// (1 layer → embedding 1 + layer 21 + logits tail 2 = 24; 22 without
+    /// the tail), and be stable across steps. Any missed or double-counted
+    /// dispatchThreads site breaks the exact values.
+    func testStepDispatchCountMeasuredNonzeroAndStable() throws {
+        let model = try makeTinyModel()
+        try model.step(token: 1, computeLogits: false)
+        XCTAssertEqual(model.lastStepDispatchCount, 22)
+        try model.step(token: 2, computeLogits: true)
+        XCTAssertEqual(model.lastStepDispatchCount, 24)
+        for token in [3, 4, 5] {
+            try model.step(token: token, computeLogits: true)
+            XCTAssertEqual(
+                model.lastStepDispatchCount, 24,
+                "dispatch count must be stable across decode steps")
+        }
+    }
+
+    /// Hard rule 7 at the model level: every step records dual timing with
+    /// wall bracketing GPU (the wall clock spans encode → completed, so
+    /// wall ≥ GPU by construction) and nonzero GPU execution time.
+    func testStepTimingSanityWallBracketsGPU() throws {
+        let model = try makeTinyModel()
+        try model.step(token: 1, computeLogits: true)
+        let timing = try XCTUnwrap(model.lastStepTiming)
+        XCTAssertGreaterThanOrEqual(timing.wallEnd, timing.wallStart)
+        XCTAssertGreaterThanOrEqual(timing.gpuEnd, timing.gpuStart)
+        XCTAssertGreaterThan(timing.gpuDuration, 0, "GPU did real work")
+        XCTAssertGreaterThanOrEqual(
+            timing.wallDuration, timing.gpuDuration,
+            "wall brackets GPU — the difference is the dispatch overhead")
+    }
+
     // MARK: - Context limit (spec edge case 5, pipeline level)
 
     func testStepAtMaxContextThrowsContextFull() throws {

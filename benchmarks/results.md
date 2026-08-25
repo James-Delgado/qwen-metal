@@ -108,6 +108,28 @@ engines saturate ~triad-level bandwidth — decode is read-dominated and the
 2R+1W triad likely understates read-mostly achievable bandwidth (follow-up
 BW-1 seeded).
 
+## Phase 2 — qwen-metal GPU backend, Mac dev-loop sanity (PROVISIONAL)
+
+### 2026-08-25 — first instrumented decode rates, M2 Pro (P2-5)
+
+NOT comparative, never a baseline (spec: "catches gross regressions before
+device time is spent"). Session: macOS 26.5.1 (25F80), Xcode 26.6 (17F113),
+`swift run -c release`, backend `gpu` (bf16 mmap weights, fp16 activations,
+naive kernels, 448 MiB KV cache at the 4096 pinned context). Prompt =
+pinned rendered decode-essay (84 tokens — note: `--prompt "$(cat file)"`
+strips the rendered form's trailing `\n\n` and tokenizes to 83; restore it
+with `$'\n\n'` or the count drifts). Greedy, stop set {151645, 151643},
+burst cap 640 (llama.cpp-runbook cap). Rates are the engine's native
+instrumentation (P2-5): medians over per-token dual timing, canonical
+window per PLAN.md (completion of generated token 128 → completion of 512,
+384 tokens). Repeatability: an earlier same-session run (83-token prompt
+variant) measured median GPU 218.51 ms / window 4.56 — identical to 3
+digits.
+
+| Date | Device | Prompt (tokens) | Generated | Median GPU ms/tok | Median wall ms/tok | Median wall−GPU ms | Dispatches/tok | Window tok/s (128–512) | Overall decode tok/s | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-08-25 | Apple M2 Pro (Mac, dev machine) | decode-essay (84) | 640 (cap) | 218.44 | 218.83 | 0.391 | 591 | 4.56 | 4.56 | PROVISIONAL, burst, warm (2nd run of session). Naive-by-design: ~9% of the M2 Pro naive roofline (178.19 GB/s ÷ 3.44 GB/token ≈ 52 tok/s) — the one-thread-per-output matvec is the known Phase 3–5 target; dispatch overhead is tiny on Mac (0.39 ms of 218.8 ms). Output coherent (computing-history essay). |
+
 ## Phase 0a — energy dry-run + corrections (PROVISIONAL)
 
 ### 2026-08-22 — sustained battery-delta cycles, iPhone 15 Pro (method VALIDATED)

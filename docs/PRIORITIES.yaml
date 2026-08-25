@@ -636,8 +636,9 @@ tasks:
   - id: P2-5
     rank: 14.5
     title: "Per-token dual timing + dispatch count + canonical-window rate + Mac sanity row"
-    status: in_progress
+    status: done
     started_at: 2026-08-25T04:01:25Z
+    completed_at: 2026-08-25T04:25:00Z
     depends_on: [P2-4]
     blocks: [P2-7]
     deliverable:
@@ -649,6 +650,18 @@ tasks:
       wall-GPU delta (the Phase 4 overhead metric), dispatches/token.
       Windowed decode rate measured natively. Mac row PROVISIONAL,
       dev-loop sanity only.
+      2026-08-25 (done): landed as Metal/DispatchCounter.swift (counts at
+      the dispatchThreads call sites — measured, not derived) +
+      GPUModel.lastStepDispatchCount + Decode/DecodeInstrumentation.swift
+      (TokenStepRecord/DecodeTimingCollector/CanonicalDecodeWindow;
+      window = completion of generated token 128 -> completion of 512,
+      384 tokens; overhead = median per-token wall-GPU) + CLI print block.
+      591 dispatches/token verified (589 without logits tail; 24/22 on the
+      tiny model — exact-value tests). Mac row: median GPU 218.44 ms/tok,
+      wall-GPU 0.391 ms, window 4.56 tok/s (release, decode-essay 84,
+      640-cap). Suite minus CPU logit gate: 212 tests, 0 failures (+16).
+      Seeded CLI-1 (prompt-file flag; $(cat) strips trailing newlines ->
+      83-token prompt drift). See DECISIONS.md 2026-08-25 P2-5 entry.
 
   - id: P2-6
     rank: 14.6
@@ -875,6 +888,26 @@ tasks:
       UInt64/Float, so behavior is correct; fix is to constrain T (e.g.
       overloads per scalar type or T: BitwiseCopyable) so the warning cannot
       mask a real one later. Filler: never blocks the phase chain.
+
+  - id: CLI-1
+    rank: 28
+    title: "CLI --prompt-file flag: feed exact prompt bytes (shell $(cat) strips trailing newlines)"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: "engine package (CLI)"
+      tests: "prompt-file vs --prompt equivalence; trailing-newline bytes preserved; missing-file error"
+    est_complexity: small
+    notes: |
+      Seeded 2026-08-25 from P2-5's Mac sanity row: the pinned rendered
+      decode-essay ends with "\n\n"; shell command substitution strips it,
+      so `--prompt "$(cat file)"` tokenizes to 83 tokens instead of the
+      pinned 84 — silent prompt-count drift in any Mac-side reproduction
+      (workaround recorded in benchmarks/results.md: append $'\n\n').
+      A --prompt-file flag reads the file bytes verbatim. Filler: never
+      blocks the phase chain; worth landing before P2-7/Phase 6 Mac-side
+      reproduction runs.
 
   - id: BW-1
     rank: 24

@@ -40,9 +40,15 @@ public final class GPUModel {
     public let weights: GPUWeights
     public let kvCache: KVCache
 
-    /// Dual timing of the most recent `step` (hard rule 7). Instrumentation
-    /// aggregation is P2-5; the raw record is captured from day one.
+    /// Dual timing of the most recent `step` (hard rule 7). Aggregation into
+    /// medians/rates is `DecodeTimingCollector`'s job (P2-5).
     public private(set) var lastStepTiming: DispatchTiming?
+
+    /// Compute dispatches encoded by the most recent `step`, measured at the
+    /// dispatchThreads call sites (P2-5, spec D5): 591 at the pinned dims
+    /// with logits (21/layer × 28 + embedding + final norm + lm_head),
+    /// 589 without the logits tail.
+    public private(set) var lastStepDispatchCount: Int?
 
     /// Tokens whose KV entries currently occupy cache positions
     /// `0..<cachedTokens.count`, in order. `lastPositionLogits` extends this
@@ -52,6 +58,7 @@ public final class GPUModel {
     private let context: MetalContext
     private let decodeKernels: DecodeKernels
     private let attentionKernels: AttentionKernels
+    private let dispatchCounter = DispatchCounter()
 
     private let embeddingOffset: Int
     private let finalNormOffset: Int
@@ -165,6 +172,8 @@ public final class GPUModel {
 
         decodeKernels = try DecodeKernels(context: context)
         attentionKernels = try AttentionKernels(context: context)
+        decodeKernels.dispatchCounter = dispatchCounter
+        attentionKernels.dispatchCounter = dispatchCounter
         kvCache = try KVCache(
             device: context.device, layers: config.numHiddenLayers,
             kvHeads: kvHeads, maxContext: maxContext, headDim: headDim)
@@ -227,11 +236,13 @@ public final class GPUModel {
         guard token >= 0, token < config.vocabSize else {
             throw ModelError.tokenIdOutOfRange(id: token, vocabSize: config.vocabSize)
         }
+        dispatchCounter.reset()
         lastStepTiming = try context.timedDispatch { encoder in
             try encodeForward(
                 into: encoder, token: token, position: position,
                 computeLogits: computeLogits)
         }
+        lastStepDispatchCount = dispatchCounter.count
         cachedTokens.append(token)
         guard computeLogits else { return nil }
         let vocab = config.vocabSize

@@ -187,6 +187,11 @@ public final class DecodeKernels {
     private let swigluPipeline: MTLComputePipelineState
     private let residualPipeline: MTLComputePipelineState
 
+    /// When set, every encoded dispatch increments it at the dispatchThreads
+    /// call site (P2-5 instrumentation; `GPUModel` attaches its per-step
+    /// counter). nil (the default) counts nothing.
+    var dispatchCounter: DispatchCounter?
+
     public init(context: MetalContext) throws {
         let library = try context.makeLibrary(source: Self.source)
         func pipeline(_ name: String) throws -> MTLComputePipelineState {
@@ -394,6 +399,7 @@ public final class DecodeKernels {
         _ encoder: MTLComputeCommandEncoder,
         pipeline: MTLComputePipelineState, count: Int
     ) {
+        dispatchCounter?.increment()
         let width = min(pipeline.maxTotalThreadsPerThreadgroup, 256)
         encoder.dispatchThreads(
             MTLSize(width: count, height: 1, depth: 1),
@@ -404,6 +410,7 @@ public final class DecodeKernels {
         _ encoder: MTLComputeCommandEncoder,
         pipeline: MTLComputePipelineState, width: Int, height: Int
     ) {
+        dispatchCounter?.increment()
         // 16×16 threadgroups like the P0B matmul; dispatchThreads handles the
         // ragged edge (kernel bounds checks are belt-and-braces).
         let side = 16

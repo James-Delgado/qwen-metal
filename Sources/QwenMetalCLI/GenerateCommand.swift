@@ -82,6 +82,7 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
         let loadStart = Date()
         let checkpoint = try SafetensorsFile(path: directory.checkpointURL.path)
         let model: any NextTokenLogitsSource
+        var gpuModel: GPUModel?
         switch backend {
         case .cpu:
             model = try QwenModel(
@@ -90,9 +91,11 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
             // A machine without Metal fails here with MetalHarnessError
             // .noDevice — a clear error, not a crash (spec edge case 10).
             let metal = try MetalContext()
-            model = try GPUModel(
+            let gpu = try GPUModel(
                 checkpoint: checkpoint, config: config, context: metal,
                 maxContext: contextLimit)
+            model = gpu
+            gpuModel = gpu
         }
         let tokenizer = try await TextTokenizer(modelFolder: directory.directoryURL)
         printStderr(String(
@@ -105,11 +108,26 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
         let eosTokenIds = try directory.stopTokenIds(
             config: config, tokenizerEOSTokenId: tokenizer.eosTokenId)
 
+        // P2-5 instrumentation (gpu backend): one TokenStepRecord per
+        // generated token, straight from the model's per-step dual timing +
+        // dispatch count. Engine-side aggregation (DecodeTimingCollector) so
+        // the Phase 2 app reports the same numbers.
+        var collector = DecodeTimingCollector()
+        let onStep: ((Int, [Float], Int) -> Void)? = gpuModel.map { gpu in
+            { _, _, _ in
+                if let timing = gpu.lastStepTiming,
+                   let dispatches = gpu.lastStepDispatchCount {
+                    collector.append(TokenStepRecord(
+                        timing: timing, dispatchCount: dispatches))
+                }
+            }
+        }
+
         let decodeStart = Date()
         let generated = try DecodeLoop(model: model, maxContext: contextLimit)
             .generate(
                 promptIds: promptIds, maxNewTokens: maxTokens,
-                eosTokenIds: eosTokenIds)
+                eosTokenIds: eosTokenIds, onStep: onStep)
         let decodeSeconds = Date().timeIntervalSince(decodeStart)
 
         print(tokenizer.decode(generated, skipSpecialTokens: true))
@@ -120,6 +138,33 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
             format: "%d prompt tokens, %d generated in %.1fs (%.2f tok/s, %@)",
             promptIds.count, generated.count, decodeSeconds,
             Double(generated.count) / max(decodeSeconds, 1e-9), backendNote))
+
+        // P2-5 instrumentation block (gpu backend only): medians + the
+        // wall−GPU dispatch-overhead metric (hard rule 7) and the canonical
+        // 128–512 window rate (benchmark protocol pin).
+        if let summary = collector.summary() {
+            let dispatches = summary.minDispatchCount == summary.maxDispatchCount
+                ? "\(summary.minDispatchCount)"
+                : "UNSTABLE \(summary.minDispatchCount)-\(summary.maxDispatchCount)"
+            printStderr(String(
+                format: "per-token (%d tokens): median GPU %.2f ms, median wall "
+                    + "%.2f ms, median wall-GPU %.3f ms, %@ dispatches/token",
+                summary.tokenCount, summary.medianGPUSeconds * 1000,
+                summary.medianWallSeconds * 1000,
+                summary.medianOverheadSeconds * 1000, dispatches))
+            let windowed = collector.canonicalWindowTokensPerSecond().map {
+                String(format: "%.2f tok/s", $0)
+            } ?? String(
+                format: "n/a (needs >= %d generated tokens, got %d)",
+                CanonicalDecodeWindow.lastToken, summary.tokenCount)
+            let overall = collector.overallTokensPerSecond().map {
+                String(format: "%.2f tok/s", $0)
+            } ?? "n/a"
+            printStderr(
+                "decode rate: overall \(overall), canonical window (tokens "
+                + "\(CanonicalDecodeWindow.firstToken)-"
+                + "\(CanonicalDecodeWindow.lastToken)) \(windowed)")
+        }
         return 0
     } catch {
         printStderr("error: \(error)")

@@ -117,6 +117,11 @@ public final class AttentionKernels {
     private let softmaxPipeline: MTLComputePipelineState
     private let pvPipeline: MTLComputePipelineState
 
+    /// When set, every encoded dispatch increments it at the dispatchThreads
+    /// call site (P2-5 instrumentation; `GPUModel` attaches its per-step
+    /// counter). nil (the default) counts nothing.
+    var dispatchCounter: DispatchCounter?
+
     public init(context: MetalContext) throws {
         let library = try context.makeLibrary(source: Self.source)
         appendPipeline = try context.makeComputePipeline(
@@ -293,6 +298,7 @@ public final class AttentionKernels {
         _ encoder: MTLComputeCommandEncoder,
         pipeline: MTLComputePipelineState, width: Int, height: Int
     ) {
+        dispatchCounter?.increment()
         // 16×16 threadgroups like DecodeKernels; dispatchThreads handles the
         // ragged edge (kernel bounds checks are belt-and-braces).
         let side = 16

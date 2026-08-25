@@ -1247,3 +1247,47 @@ docs/phases/phase-2.md (D8) and docs/PRIORITIES.yaml (P2-6, P2-EXEC):
   new SharedGPUModel shares one mmap-residency pipeline across suites).
 - **Follow-up seeded: DK-1** — pre-existing generic `setBytes` warning in
   DecodeKernels/AttentionKernels surfaced by the release build.
+
+## 2026-08-25 — P2-5: per-token instrumentation landed + first Mac GPU sanity row
+
+- **Landed:** `DispatchCounter` (increments at the exact `dispatchThreads`
+  call sites inside DecodeKernels/AttentionKernels — the count is MEASURED,
+  never derived from pipeline structure, so Phase 4 fusion changes the
+  reported number automatically); `GPUModel.lastStepDispatchCount` next to
+  the existing `lastStepTiming`; `Decode/DecodeInstrumentation.swift`
+  (`TokenStepRecord`, `DecodeTimingCollector`, `CanonicalDecodeWindow`) —
+  engine-side aggregation so CLI and the P2-6 app report identical numbers;
+  CLI `--backend gpu` now prints the per-token block + decode rates
+  (cpu-backend output byte-unchanged).
+- **Canonical-window semantics (pinned in code + tests):** window rate =
+  384 tokens ÷ (wallEnd of the forward producing generated token 512 −
+  wallEnd of the forward producing token 128), tokens 1-based — the natural
+  reading of PLAN.md's "generated tokens ÷ decode wall time, canonical
+  window = tokens 128–512". Completion-to-completion spans include host
+  work between command buffers (argmax, loop) — the honest cadence.
+  Below 512 generated tokens the window is reported n/a, never
+  extrapolated. Overhead metric = median of PER-TOKEN wall−GPU deltas
+  (not medianWall − medianGPU; a test pins the distinction).
+- **Dispatch count verified:** 591/token with logits (21×28 + embedding +
+  final norm + lm_head), 589 without the tail; tiny 1-layer synthetic
+  model measures 24/22 — exact-value tests would break on any missed or
+  double-counted dispatch site.
+- **MEASURED (Mac dev-loop sanity row, PROVISIONAL — benchmarks/results.md
+  Phase 2 section):** M2 Pro, release, decode-essay (84 pinned tokens),
+  640-token burst: median GPU 218.44 ms/token, median wall 218.83 ms,
+  median wall−GPU **0.391 ms** (the Phase 4 overhead metric — negligible
+  on Mac at 591 dispatches/token), canonical window **4.56 tok/s**,
+  overall 4.56. ~9% of the Mac naive roofline (178.19 GB/s ÷ 3.44
+  GB/token) — expected for one-thread-per-output matvec; optimization
+  stays Phase 3–5 (hard rule 3 discipline held: no kernel touched).
+  Repeatability: two same-session runs agree to 3 digits.
+- **Measurement footgun recorded:** shell `$(cat file)` strips the rendered
+  prompt's trailing `\n\n` → 83 tokens, not the pinned 84. The results.md
+  note carries the workaround; follow-up CLI-1 seeded (a `--prompt-file`
+  flag that feeds exact bytes) so P2-7/Phase 6 Mac-side reproduction can't
+  drift.
+- **Suite: 212 tests, 0 failures, 1 skipped** (env-gated free-run harness;
+  full suite minus the CPU logit gate), +16 over P2-4 (13 instrumentation
+  arithmetic, 3 GPUModel dispatch/timing sanity). No numeric gates added
+  or touched — instrumentation tests are structural, and the Phase 2 gate
+  set is untouched.
