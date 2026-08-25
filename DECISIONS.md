@@ -1346,3 +1346,68 @@ docs/phases/phase-2.md (D8) and docs/PRIORITIES.yaml (P2-6, P2-EXEC):
   harness, 4 report export, 2 bundled-prompt drift). No numeric gates
   added or touched. Seeded CLI-2 (dedupe the CLI's inline P2-5 wiring
   onto BenchGenerationRunner). P2-7 (James, on-device) is now ready.
+
+## 2026-08-25 — P2-7 MEASURED: on-device "before" rows; attached-run pitfall; residency decision (James)
+
+Full rows in benchmarks/results.md (Phase 2 iPhone section). Two sessions
+were run; the first was invalidated and rerun — both are recorded.
+
+- **Protocol incident (recorded, method-level lesson):** session 1 was
+  launched via Xcode's Run button — Metal API validation ON + debugger
+  attached — which inflated per-token GPU time **1.4–1.9×** on this
+  591-dispatch/token workload (median GPU 217 ms attached vs 112–159 ms
+  detached at identical settings). Rows kept, marked ATTACHED/non-
+  comparative per the P0A-1 validation-off pin; the full detached rerun
+  (session 2) supplies the valid rows. The P0A-1 finding that validation
+  cost is strongly engine-dependent (MLX ~1%, llama.cpp 17–21%) now has
+  our datapoint: many tiny dispatches ⇒ large penalty. Detached launches
+  are mandatory for every future device row (already in the runbook;
+  reaffirmed the hard way).
+- **Decode "before" (iPhone 15 Pro, protocol row: warm burst, canonical
+  window, detached): 6.74–6.92 tok/s (mmap)** — 23% of the committed 29.4
+  target, 17.6% of MLX's 39.2. Fast-state runs in the same session
+  reached 7.81–8.64; honest headline is the **range 6.7–8.6 tok/s**.
+- **Run-to-run device-state variance ~1.4× (detached, same settings):**
+  median GPU clustered at ~112 vs ~158 ms/token; cold/warm is not the
+  driver (the cold burst was fastest). Cause unidentified (device
+  power/thermal governor state). CONSEQUENCE for Phase 3+: comparative
+  rows use repeats/interleaving and report ranges — folded into SPEC-P3's
+  obligations (PRIORITIES note added).
+- **Dispatch overhead (the Phase 4 metric): 1.9–2.0 ms/token at 591
+  dispatches ≈ 3.4 µs/dispatch — stable across ALL 13 runs, both
+  sessions, both residencies** (Mac: 0.39 ms). The only number the state
+  variance never touched. ~6% of a Phase 3-scale 33 ms token.
+- **Prefill "before": 8.2–10.7 tok/s sequential** (852-token prompt:
+  103.5 s to first token) — Phase 5's target number.
+- **Residency (OV#9): speed comparison UNRESOLVED — and that is the
+  result.** Attached session: mmap 42% slower sustained. Detached rerun:
+  mmap FASTER (window 8.64 vs 7.46). Both directions observed; deltas
+  inside the state-noise band. What DID measure cleanly: phys_footprint
+  (Xcode gauge) **mmap ~536 MB vs wiredCopy ~4.3 GB** (the llama.cpp
+  307 MB accounting asymmetry quantified on our side, per invariant 3;
+  in-app task_info cross-check within ~2% of the gauge) and load time
+  **1.5 s vs 9.7 s**.
+- **DECISION (James, 2026-08-25): default residency for Phase 3+ stays
+  `mmap`.** Rationale: no consistent speed penalty established, and mmap
+  is strictly better on footprint (536 MB vs 4.3 GB) and load (1.5 s vs
+  9.7 s). wiredCopy remains a toggle; Phase 3 re-runs the comparison on
+  the ~0.97 GB packed weights with an interleaved-repeats protocol before
+  treating the question as closed.
+- **Determinism across modes/sessions (free evidence):** prefill-summarize
+  produced exactly 462 tokens then EOS in both sessions; the decode-essay
+  greedy trajectory EOSes at generated token 1601 (observed in the mmap
+  sustained run; all shorter runs — 640/930/1211/1595 — consistently
+  EOS-free). The sustained loop's regenerate-on-EOS path executed
+  correctly in the field.
+- **Roofline reframe (plan-level):** fast-state decode ⇒ ~30.8 GB/s
+  weight traffic ≈ 70% of the measured 43.84 GB/s roofline — on-device
+  the naive engine is close to memory-bound, unlike the Mac sanity row
+  (M2 Pro ~9% of its roofline; its "iPhone == Mac per-token" coincidence
+  was a validation artifact). Phase 3 packed roofline = 45.2 tok/s; at
+  the observed 50–70% efficiency ⇒ ~22–32 tok/s, bracketing the 29.4
+  target — Phases 4–5 remain load-bearing.
+- **Annotations:** battery field in exports recorded SoC start→end;
+  Battery Health shows "Normal" (no %) on iOS 26.5.2 — ≈85% last measured
+  at P0A-1. Thermal: phone notably cooler than the Phase 0 MLX/llama.cpp
+  sustained cycles at today's speeds; expect that to change as Phases 3–5
+  approach the roofline.

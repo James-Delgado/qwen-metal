@@ -696,7 +696,8 @@ tasks:
   - id: P2-7
     rank: 14.7
     title: "On-device 'before' row + mmap-vs-wired sustained-stability comparison"
-    status: ready
+    status: done
+    completed_at: 2026-08-25T16:05:45Z
     owner: james
     depends_on: [P2-5, P2-6]
     blocks: [P2-EXEC]
@@ -709,11 +710,22 @@ tasks:
       sustained loop per mode (per-generation tok/s sequence — bimodality
       is the signal) closing with a DECISIONS.md default-residency
       decision for Phase 3+. Agents prepare only.
+      2026-08-25 (done, James on-device): TWO sessions — first invalidated
+      (Xcode-attached, validation ON: 1.4-1.9x per-token inflation) and
+      fully rerun detached. "Before" decode: warm-burst window 6.74-6.92
+      tok/s, observed range 6.7-8.6 (23% of the 29.4 target); prefill
+      8.2-10.7 tok/s; dispatch overhead 1.9-2.0 ms/token @ 591 (stable
+      across everything). Residency SPEED comparison unresolved (direction
+      flipped between sessions; ~1.4x device-state variance dominates);
+      footprint/load clean: mmap 536 MB/1.5 s vs wired 4.3 GB/9.7 s.
+      DECISION: mmap stays default; Phase 3 re-tests interleaved on packed
+      weights (SPEC-P3 note). Rows in benchmarks/results.md (Phase 2
+      iPhone section); full entry in DECISIONS.md 2026-08-25 P2-7.
 
   - id: P2-EXEC
     rank: 15
     title: "Phase 2 exit milestone (all P2 tasks done, exit criteria walked)"
-    status: blocked
+    status: ready
     depends_on: [P2-1, P2-2, P2-3, P2-4, P2-5, P2-6, P2-7]
     blocks: [SPEC-P3]
     deliverable:
@@ -743,6 +755,12 @@ tasks:
       Context: review record Part 1 Issue 2 (layered oracle, full design) +
       Part 4: microbench fraction (OV#11), perplexity slice named (OV#12),
       mlx-community provenance check (OV#12), embeddings/lm_head quant (OV#4).
+      2026-08-25 (from P2-7): the spec must also pin a repeats/interleaving
+      protocol for device rows (~1.4x run-to-run device-state variance
+      measured detached at identical settings — report ranges, not single
+      numbers) and re-run the mmap-vs-wired comparison interleaved on the
+      packed ~0.97 GB weights (speed comparison left unresolved by P2-7;
+      mmap stays default per DECISIONS.md 2026-08-25).
 
   - id: P3-EXEC
     rank: 17

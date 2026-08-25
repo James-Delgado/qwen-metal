@@ -130,6 +130,101 @@ digits.
 |---|---|---|---|---|---|---|---|---|---|---|
 | 2026-08-25 | Apple M2 Pro (Mac, dev machine) | decode-essay (84) | 640 (cap) | 218.44 | 218.83 | 0.391 | 591 | 4.56 | 4.56 | PROVISIONAL, burst, warm (2nd run of session). Naive-by-design: ~9% of the M2 Pro naive roofline (178.19 GB/s ÷ 3.44 GB/token ≈ 52 tok/s) — the one-thread-per-output matvec is the known Phase 3–5 target; dispatch overhead is tiny on Mac (0.39 ms of 218.8 ms). Output coherent (computing-history essay). |
 
+## Phase 2 — qwen-metal GPU backend, iPhone 15 Pro "before" rows (P2-7, PROVISIONAL)
+
+### 2026-08-25 — two sessions: Xcode-attached (invalidated) + detached rerun (James)
+
+Conditions common to both sessions: iPhone 15 Pro (iPhone16,1), iOS 26.5.2,
+QwenMetalApp Release, greedy, stop set {151645, 151643}, pinned rendered
+prompts (bundled in-app), engine-native P2-5 instrumentation, Increased
+Memory Limit entitlement, starting temps ambient. Battery figures in rows
+are **SoC start→end** (the export's battery field was used for SoC; Battery
+Health displays "Normal" on this iOS build — % not read; ≈85% at P0A-1).
+Model load: **mmap 1.5 s** (lazy, file-backed) vs **wiredCopy 9.7 s**
+(3.44 GB copy). phys_footprint, Xcode gauge (the pinned metric of record):
+**mmap ~536 MB, wiredCopy ~4.3 GB** — in-app task_info cross-check within
+~2% of the gauge in every run; the mmap figure excludes the 3.44 GB of
+clean file-backed weight pages (the P0A-1 llama.cpp 307 MB accounting
+asymmetry, now quantified on our side, per PLAN.md invariant 3). Thermal:
+phone stayed notably cooler than the Phase 0 MLX/llama.cpp sustained
+cycles.
+
+**Session 1 was launched from Xcode's Run button** (established after the
+fact): Metal API validation ON + debugger attached, so per the P0A-1
+validation-off pin those rows are **INVALID for comparative/headline use**.
+Kept below for the record — they quantify the attached-run penalty at
+**1.4–1.9× on per-token GPU time** for this 591-dispatch/token workload
+(cf. P0A-1: MLX ~1%, llama.cpp 17–21% — strongly engine-dependent).
+**Session 2 was relaunched detached from the home screen (validation OFF)
+— these are the valid "before" rows.**
+
+#### Session 2 (detached — VALID): burst + prefill rows (cap 640)
+
+| Date | Residency | Prompt (tokens) | Cold/warm | Generated | Prefill s (tok/s) | Median GPU ms/tok | Median wall ms/tok | Median wall−GPU ms | Disp/tok | Window tok/s (128–512) | Overall tok/s | SoC | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-08-25 | mmap | decode-essay (84) | cold | 640 (cap) | 14.44 (5.82) | 111.71 | 113.72 | 2.026 | 591 | 8.33 | 7.81 | 79→78 | PROVISIONAL. Fastest burst of the session despite being cold — cold/warm is not what separates the speed clusters. |
+| 2026-08-25 | mmap | decode-essay (84) | warm | 640 (cap) | 7.88 (10.66) | 159.12 | 161.12 | 2.021 | 591 | 6.74 | 6.91 | 78→76 | PROVISIONAL. **Protocol headline row** (warm burst): window 6.74. |
+| 2026-08-25 | mmap | decode-essay (84) | warm | 640 (cap) | 9.63 (8.72) | 157.48 | 159.39 | 1.997 | 591 | 6.92 | 7.01 | 76→75 | PROVISIONAL. Warm repeat: window 6.92 — agrees with the other warm burst to ~3%. |
+| 2026-08-25 | mmap | prefill-summarize (852) | warm | 462 (eos) | 103.48 (8.23) | 184.62 | 186.59 | 1.983 | 591 | n/a (<512 gen) | 5.31 | 75→73 | PROVISIONAL — **the prefill row**: 852 tokens in 103.5 s = 8.23 tok/s sequential (Phase 5's target). Generated exactly 462 tokens then EOS — identical count to session 1's run (determinism across sessions). |
+| 2026-08-25 | wiredCopy | decode-essay (84) | warm | 640 (cap) | 9.39 (8.94) | 111.87 | 113.79 | 1.985 | 591 | 7.81 | 7.53 | 72→71 | PROVISIONAL. Wired burst lands in the fast cluster — no residency penalty distinguishable from state noise. |
+
+#### Session 2 (detached — VALID): sustained rows (5-min regenerate loop)
+
+| Date | Residency | Loop | Median GPU ms/tok (last gen) | Median wall−GPU ms | Window tok/s (128–512) | Overall tok/s | Notes |
+|---|---|---|---|---|---|---|---|
+| 2026-08-25 | mmap | gen 0: 1,601 tokens in 282.8 s, **stop: eos**; gen 1: 43 tokens (truncated) — 1,644 tokens total | 150.66 (gen 1, shallow cache) | 1.903 | 8.64 (gen 0) | 5.96 (gen 0) / 6.52 (gen 1) | PROVISIONAL. The loop correctly regenerated on EOS (the decode-essay greedy trajectory ends at generated token 1601 — consistent with every shorter run never seeing EOS). Gen 0 overall 5.96 < window 8.64 reflects attention-depth growth over 1,601 tokens. |
+| 2026-08-25 | wiredCopy | gen 0: 1,595 tokens in 300.0 s (truncated) | 174.73 (full gen, median depth ~880) | 1.910 | 7.46 | 5.46 | PROVISIONAL. 1,595 tokens EOS-free — consistent with the same trajectory (EOS at 1601). |
+
+#### Session 1 (Xcode-attached, validation ON — kept for the record, NOT comparative)
+
+| Date | Residency | Prompt (tokens) | Mode | Cold/warm | Generated | Prefill s (tok/s) | Median GPU ms/tok | Median wall−GPU ms | Window tok/s | Overall tok/s | SoC | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-08-25 | mmap | decode-essay (84) | burst | cold | 640 | 22.80 (3.68) | 217.16 | 1.987 | 4.53 | 4.51 | 54→54 | ATTACHED. |
+| 2026-08-25 | mmap | decode-essay (84) | burst | warm | 640 | 17.30 (4.85) | 216.71 | 1.936 | 4.53 | 4.53 | 54→53 | ATTACHED. Export reported twice ("A warm"/"B1") — recorded once. |
+| 2026-08-25 | mmap | decode-essay (84) | burst | warm (labeled) | 640 | 22.81 (3.68) | 216.89 | 2.023 | 4.54 | 4.53 | 69→69 | ATTACHED. Prefill/footprint match the cold signature (likely fresh launch after a recharge break). |
+| 2026-08-25 | mmap | prefill-summarize (852) | burst | warm | 462 (eos) | 164.88 (5.17) | 398.25 | 1.565 | n/a | 2.54 | 51→48 | ATTACHED. Same 462-token EOS count as the detached rerun. |
+| 2026-08-25 | wiredCopy | decode-essay (84) | burst | warm | 640 | 17.14 (4.90) | 217.77 | 1.975 | 4.43 | 4.44 | 66→65 | ATTACHED. |
+| 2026-08-25 | mmap | decode-essay (84) | sustained | warm | 930 (truncated) | — | 323.86 | 1.766 | 2.92 | 3.29 | 69→68 | ATTACHED. The apparent "mmap 42% slower sustained" signal here did NOT reproduce detached — see analysis. |
+| 2026-08-25 | wiredCopy | decode-essay (84) | sustained | warm | 1,211 (truncated) | — | 228.41 | 1.968 | 4.54 | 4.27 | 68→66 | ATTACHED. |
+
+#### Analysis
+
+- **Headline "before" decode (protocol row: warm burst, canonical window,
+  detached): 6.74–6.92 tok/s (mmap)** = 23% of the committed 29.4 target,
+  17.6% of MLX's 39.2. Same-session fast-state runs reached 7.81 (wired
+  burst), 8.33 (cold burst), 8.64 (sustained gen 0) — honest reporting is
+  the range **6.7–8.6 tok/s**, not a single number.
+- **Run-to-run device-state variance ~1.4×** within the detached session:
+  two clusters at ~112 and ~158 ms/token median GPU under identical
+  settings; cold/warm is not the driver (cold was fastest). Cause
+  unidentified (device power/thermal governor state). Consequence: Phase 3+
+  comparative rows need repeats/interleaving — folded into SPEC-P3.
+- **Dispatch overhead (the Phase 4 metric): 1.9–2.0 ms/token at 591
+  dispatches ≈ 3.4 µs/dispatch in ALL rows of both sessions and both
+  residencies** (vs Mac's 0.39 ms) — the one number untouched by session
+  and state variance. 1.2–1.8% of today's token; ~6% of a Phase 3-scale
+  33 ms token.
+- **Residency (OV#9): UNRESOLVED for speed.** The attached session showed
+  mmap 42% slower sustained; the valid detached session showed mmap
+  *faster* (window 8.64 vs 7.46) — both directions observed, and the
+  deltas sit inside the state-noise band. Footprint and load time DID
+  measure cleanly (mmap 536 MB / 1.5 s vs wired 4.3 GB / 9.7 s). Default
+  residency decision: DECISIONS.md 2026-08-25 (mmap; Phase 3 re-tests
+  interleaved on packed weights).
+- **Determinism across runs, modes, and sessions:** prefill-summarize
+  generated exactly 462 tokens then EOS in both sessions; decode-essay's
+  greedy trajectory EOSes at generated token 1601, consistent with the
+  640-, 930-, 1,211-, and 1,595-token runs never reaching it.
+- **Roofline position:** fast-state 111.7 ms/token ⇒ ~30.8 GB/s weight
+  traffic ≈ **70% of the 43.84 GB/s roofline** — on-device decode is far
+  closer to memory-bound than the Mac sanity row implied (M2 Pro 218 ms ≈
+  9% of its roofline; the attached-run "iPhone == Mac" coincidence is
+  dead). Mid-state ≈ 50%. Phase 3 packed roofline = 45.2 tok/s
+  (43.84 ÷ 0.97); at the observed 50–70% efficiency ⇒ ~22–32 tok/s,
+  bracketing the 29.4 target — Phases 4–5 remain necessary, not optional.
+- **Prefill "before" (warm, detached): 8.2–10.7 tok/s** sequential
+  (spec D6; Phase 5's target).
+
 ## Phase 0a — energy dry-run + corrections (PROVISIONAL)
 
 ### 2026-08-22 — sustained battery-delta cycles, iPhone 15 Pro (method VALIDATED)
