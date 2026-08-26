@@ -1628,3 +1628,30 @@ are bug signals.
 - **NOTE for James (veto window before P3-EXEC):** four judgment-derived
   gate constants + the packed-layout schema pin are flagged in the gates
   entry above.
+
+## 2026-08-26 — Phase 3 veto window CLOSED: gates + schema approved (decided by James)
+
+James reviewed the flagged items from the 2026-08-25 gates entry and
+approved them explicitly (window closed early by decision, not by the
+passive SPEC-P2-style expiry):
+
+- **All four judgment-derived constants stand as committed:** the 0.70
+  microbench bandwidth fraction, the 4-percentage-point top-1 agreement
+  margin, the 1.5× KL and 1.5×+0.01 Δppl multipliers, and the WikiText-2
+  test first-4096 perplexity slice. Discussed and resolved: the quality
+  band is a bug tripwire (floor), not an aspiration ceiling — measured
+  metrics are reported side-by-side regardless, and parity-or-better vs
+  mlx-4bit remains the expected outcome of matching the MLX recipe.
+  A tighter parity-as-gate form was considered and rejected (one-way
+  gates + legitimate rounding-choice wobble = false-failure risk).
+- **Packed-layout schema (spec D1) approved as pinned:** q4g64,
+  `{name}.q` u32 with 8 codes/word low-nibble-first, separate fp16
+  `.scales`/`.biases`, norms pass through bf16, fp16-rounded scale/bias
+  before code selection.
+- **Committed success metric unchanged:** decode ≥ 29.4 tok/s
+  (0.75 × MLX measured) stays the bar; raising it was considered and
+  declined — the phase structure already rewards overshooting, and the
+  end-to-end decode-vs-roofline judgment stays in Phase 4 per the plan.
+
+Hard rule 6 now binds all of the above unmodified. P3-1 may proceed with
+no open questions on the format or gates.
