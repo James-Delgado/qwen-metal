@@ -19,8 +19,17 @@ assumed.
 
 ## Status
 
-Phase 0 (baselines + toy kernels) — starting. Plan solidified 2026-08-20 after a
-20-finding engineering review. No engine code yet.
+**Phases 0–2 exited; Phase 3 (4-bit quantization + fused dequant-matvec) is
+next** (as of 2026-08-26). The engine decodes Qwen3-1.7B end-to-end on CPU
+(fp32 reference, logit-matched to HF transformers ≤ 1e-3) and GPU (naive Metal,
+incremental KV-cache decode, on-device) — every pre-committed correctness gate
+has held unmodified on its first run, and the GPU free-running trajectory is
+token-identical to the CPU reference on all fixture prompts. Measured so far
+(iPhone 15 Pro, PROVISIONAL rows): DRAM bandwidth 43.84 GB/s; MLX baseline
+39.2 tok/s decode (committed target: 29.4 = 0.75×); naive bf16 "before" decode
+6.7–8.6 tok/s at 50–70% of its 3.44 GB/token roofline. Phase 3 packs weights to
+~0.97 GB, lifting the roofline to ~45 tok/s. Ledger: `DECISIONS.md`; rows:
+`benchmarks/results.md`.
 
 ## Documents
 
@@ -48,7 +57,8 @@ Phase 0 (baselines + toy kernels) — starting. Plan solidified 2026-08-20 after
 
 ## Development
 
-- Engine tests: `swift test` (in the engine package, once it exists — XCTest).
+- Engine tests: `swift test` (XCTest; oracle suites need the local-only
+  consolidated checkpoint under `models/` and skip cleanly without it).
 - Backlog drift test: `.venv/bin/python -m pytest tests/test_priorities.py -q`
 - Design doc rebuild: see [`docs/generator/README.md`](docs/generator/README.md).
 - All official benchmark numbers come from a physical iPhone; the iOS target is

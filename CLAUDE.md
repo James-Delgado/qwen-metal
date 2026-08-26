@@ -173,3 +173,9 @@ scripts' content from the new entries, bump the version/date, rerun both scripts
 and commit scripts + figures + PDF together. Never edit the PDF's claims without
 a matching DECISIONS.md basis, and never let it drift silently: if it is stale
 relative to DECISIONS.md, say so rather than presenting it as current.
+
+The newcomer-facing surface rides the same trigger (decided by James,
+2026-08-26): every phase-exit close-out (*-EXEC milestone) also refreshes
+README.md (Status section, stale phrasing, doc tables) and any other doc a
+curious engineer would check when stumbling on the repo — the repo must never
+present an exited phase as current.

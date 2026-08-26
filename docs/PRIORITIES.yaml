@@ -930,8 +930,10 @@ tasks:
       the exit-criteria walk + DECISIONS close-out (was: milestone
       placeholder). Per the SPEC-P2 review refinement, the close-out ALSO
       regenerates docs/architecture.pdf (pattern carries to all *-EXEC
-      milestones). James's veto window on the flagged Phase 3 gate
-      constants + packed-layout schema pin closes when work here starts.
+      milestones). 2026-08-26 (James): close-outs ALSO refresh README.md +
+      any newcomer-facing docs (CLAUDE.md upkeep section; carries to all
+      future *-EXEC milestones). Veto window on the Phase 3 gate constants
+      + schema CLOSED 2026-08-26 — approved by James (DECISIONS entry).
 
   - id: SPEC-P4
     rank: 18
@@ -946,6 +948,10 @@ tasks:
     notes: |
       Context: review record Part 4 (OV#10 — wall-GPU delta is the overhead
       metric). End-to-end decode-vs-roofline judgment lives HERE, not Phase 3.
+      2026-08-26 (James, all future SPEC-Pn): report veto-flagged decisions
+      (judgment-derived gate constants, new pins/schemas) directly in the
+      conversation, item by item — never only in DECISIONS.md
+      (AGENT_OPERATION.md step 11).
 
   - id: P4-EXEC
     rank: 19
@@ -969,7 +975,10 @@ tasks:
       file: docs/phases/phase-5.md
       tests: "prefill targets committed pre-phase"
     est_complexity: small
-    notes: "threadgroup memory + simdgroup_matrix; prefill vs MLX separately."
+    notes: |
+      threadgroup memory + simdgroup_matrix; prefill vs MLX separately.
+      2026-08-26 (James): veto-flagged decisions reported directly in the
+      conversation at spec write-out (AGENT_OPERATION.md step 11).
 
   - id: P5-EXEC
     rank: 21
@@ -997,6 +1006,8 @@ tasks:
       Context: review record Part 4 — same-session/same-OS re-runs (OV#7),
       energy calendar budget + possible llama.cpp energy drop (OV#8),
       measurement-limitations section (Issue 3).
+      2026-08-26 (James): veto-flagged decisions reported directly in the
+      conversation at spec write-out (AGENT_OPERATION.md step 11).
 
   - id: P6-EXEC
     rank: 23

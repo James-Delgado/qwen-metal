@@ -1655,3 +1655,27 @@ passive SPEC-P2-style expiry):
 
 Hard rule 6 now binds all of the above unmodified. P3-1 may proceed with
 no open questions on the format or gates.
+
+## 2026-08-26 — Process refinements: phase-exit doc surface + spec veto reporting (decided by James)
+
+Two standing-process changes, folded into the operating docs so they bind
+every future session:
+
+- **Phase-exit close-outs refresh the newcomer-facing surface.** Every
+  *-EXEC milestone now also updates README.md (Status, stale phrasing,
+  doc tables) and any other doc a curious engineer would check when
+  stumbling on the repo — same trigger as the architecture-PDF regen.
+  Folded into CLAUDE.md ("Architecture document upkeep") and the P3-EXEC
+  backlog note (pattern carries to all future *-EXEC milestones).
+  **Catch-up done this session:** README.md was stale at "Phase 0 —
+  starting; no engine code yet" (two exited phases behind); Status
+  rewritten to the current Phase 2-exited state with measured numbers,
+  and the "once it exists" test bullet corrected.
+- **SPEC-Pn write-outs report veto-flagged decisions in-conversation.**
+  Judgment-derived gate constants and new pins/schemas are reported
+  directly in the session report, item by item with values and rationale
+  — never only as a pointer into DECISIONS.md. Folded into
+  AGENT_OPERATION.md step 11 and the SPEC-P4/P5/P6 backlog notes.
+  (Retroactive instance: the Phase 3 flagged items were walked
+  in-conversation 2026-08-26 and approved — see the veto-window entry
+  above.)
