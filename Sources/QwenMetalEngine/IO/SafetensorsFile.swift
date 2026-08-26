@@ -30,21 +30,29 @@ public enum SafetensorsError: Error, CustomStringConvertible {
             return "safetensors: tensor '\(name)' is invalid: \(detail)"
         case .unsupportedDtype(let name, let dtype):
             return "safetensors: tensor '\(name)' has unsupported dtype "
-                + "'\(dtype)' (Phase 1 reads F16/BF16 checkpoints only)"
+                + "'\(dtype)' (F16/BF16 float tensors upcast to fp32; U32 "
+                + "packed tensors load via PackedCheckpoint only)"
         case .tensorNotFound(let name):
             return "safetensors: no tensor named '\(name)' in this file"
         }
     }
 }
 
-/// Source dtypes the Phase 1 engine accepts (phase-0-1.md build step 1).
-/// Both upcast to fp32 exactly: bf16 by bit shift, fp16 by construction.
+/// Tensor dtypes the engine accepts. F16/BF16 (phase-0-1.md build step 1)
+/// upcast to fp32 exactly: bf16 by bit shift, fp16 by construction. U32
+/// (P3-1) carries q4g64 packed 4-bit codes and never upcasts — it is read
+/// raw by `PackedCheckpoint` and the fused kernels.
 public enum TensorDType: String {
     case float16 = "F16"
     case bfloat16 = "BF16"
+    case uint32 = "U32"
 
-    /// Both supported dtypes are 16-bit.
-    var byteWidth: Int { 2 }
+    var byteWidth: Int {
+        switch self {
+        case .float16, .bfloat16: return 2
+        case .uint32: return 4
+        }
+    }
 }
 
 /// One tensor's header entry: dtype, shape, and where its raw little-endian
@@ -165,6 +173,12 @@ public final class SafetensorsFile {
     /// 2-byte aligned takes the scalar path instead (exactness identical).
     public func fp32Values(for name: String) throws -> [Float] {
         let info = try self.info(for: name)
+        guard info.dtype != .uint32 else {
+            // Integer tensors have no fp32 upcast; reaching here means a
+            // packed q4g64 tensor was fed to a float loader.
+            throw SafetensorsError.unsupportedDtype(
+                name: name, dtype: info.dtype.rawValue)
+        }
         let src = base + dataSectionOffset + info.dataOffset
         let count = info.elementCount
         var out = [Float](repeating: 0, count: count)
@@ -189,6 +203,8 @@ public final class SafetensorsFile {
         switch dtype {
         case .float16: vectorUpcastF16(src: src, into: dst)
         case .bfloat16: vectorUpcastBF16(src: src, into: dst)
+        case .uint32:
+            preconditionFailure("fp32Values rejects U32 before dispatch")
         }
     }
 
@@ -265,6 +281,8 @@ public final class SafetensorsFile {
                     src.loadUnaligned(fromByteOffset: 2 * i, as: UInt16.self))
                 dst[i] = Float(Float16(bitPattern: bits))
             }
+        case .uint32:
+            preconditionFailure("fp32Values rejects U32 before dispatch")
         }
     }
 

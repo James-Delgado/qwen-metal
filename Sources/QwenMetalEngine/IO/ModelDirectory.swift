@@ -52,7 +52,12 @@ public struct ModelDirectory {
         }
 
         let entries = try FileManager.default.contentsOfDirectory(atPath: url.path)
-        let checkpoints = entries.filter { $0.hasSuffix(".safetensors") }.sorted()
+        // The Phase 3 packed artifact (`…-q4g64.safetensors`, name pinned by
+        // phase-3.md D2) legitimately lives beside the bf16 checkpoint; the
+        // bf16 discovery ignores it. P3-5 adds explicit packed-model loading.
+        let checkpoints = entries
+            .filter { $0.hasSuffix(".safetensors") && !$0.hasSuffix("-q4g64.safetensors") }
+            .sorted()
         guard !checkpoints.isEmpty else {
             throw ModelDirectoryError.noCheckpoint(directory: url.path)
         }

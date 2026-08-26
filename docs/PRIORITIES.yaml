@@ -788,8 +788,9 @@ tasks:
   - id: P3-1
     rank: 16.1
     title: "Packed 4-bit layout (q4g64 schema) + Swift packer CLI + adversarial packing fixtures + packed artifact"
-    status: in_progress
+    status: done
     started_at: 2026-08-26T05:41:16Z
+    completed_at: 2026-08-26T06:13:18Z
     depends_on: [SPEC-P3]
     blocks: [P3-2, P3-4]
     deliverable:
@@ -805,11 +806,20 @@ tasks:
       Produces models/qwen3-1.7b-70d244cc-q4g64.safetensors (~0.97 GB,
       local-only) — sha256 to DECISIONS.md. Schema becomes a PINNED
       invariant when this lands (CLAUDE.md hard-rules list).
+      2026-08-26 (done): landed as Quant/{Q4G64,Q4Packer,PackedCheckpoint}
+      .swift + CLI `pack` + 31 tests (all P3-1 edge cases; suite minus CPU
+      logit gate 262 tests, 0 failures). Artifact produced: 968,083,288 B
+      (0.968 GB), sha256 0feaa7ce… in DECISIONS.md; two full packs
+      byte-identical. Notable: source checkpoint materializes a
+      byte-identical lm_head.weight — packer stores the tied matrix once
+      (D1) after memcmp verification; rounding pinned half-away-from-zero;
+      ModelDirectory bf16 discovery now ignores *-q4g64.safetensors.
+      See DECISIONS.md 2026-08-26 P3-1 entry.
 
   - id: P3-2
     rank: 16.2
     title: "CPU-quant reference: packed file -> fp32 dequant materialization through the frozen CPU model"
-    status: blocked
+    status: ready
     depends_on: [P3-1]
     blocks: [P3-3, P3-5]
     deliverable:
@@ -822,6 +832,13 @@ tasks:
       engine GPU + app. No CPU module changes: new weight front end only.
       q*scale+bias == fma bit-for-bit (exact-product argument in the gates
       entry) — CPU and GPU dequant values identical by construction.
+      2026-08-26 (from P3-1): PackedCheckpoint.dequantMatrix is a scalar
+      per-element loop — fine for the P3-1 fixtures, but materializing all
+      197 matrices through it may repeat IO-1's debug-wall-time story
+      (~1.7B elements). Measure first; if slow, vectorize or document a
+      release-mode-only path WITHOUT changing the arithmetic (exactness
+      tests pin it). Also: tied lm_head is stored once — the loader maps
+      lm_head to the embedding triplet (see DECISIONS.md P3-1 entry).
 
   - id: P3-3
     rank: 16.3
@@ -847,7 +864,7 @@ tasks:
   - id: P3-4
     rank: 16.4
     title: "Fused GPU kernels: dequant-tile dump + fused dequant-matvec + embedding-gather-dequant + exact/Tier-K tests"
-    status: blocked
+    status: ready
     depends_on: [P3-1]
     blocks: [P3-5, P3-6]
     deliverable:

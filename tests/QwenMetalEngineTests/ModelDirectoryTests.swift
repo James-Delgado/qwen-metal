@@ -135,6 +135,16 @@ final class ModelDirectoryTests: XCTestCase {
             "pinned checkpoint stop set must be the EOS-1 pair")
     }
 
+    func testPackedArtifactBesideCheckpointIsIgnored() throws {
+        // P3-1: the q4g64 packed artifact lives beside the bf16 checkpoint
+        // in models/ (phase-3.md D2 pins the name); bf16 discovery must not
+        // trip the exactly-one rule on it.
+        try touch(Self.supportFiles
+            + ["model.safetensors", "model-q4g64.safetensors"])
+        let directory = try ModelDirectory(validating: tempDir)
+        XCTAssertEqual(directory.checkpointURL.lastPathComponent, "model.safetensors")
+    }
+
     func testNoCheckpointThrows() throws {
         try touch(Self.supportFiles)
         XCTAssertThrowsError(try ModelDirectory(validating: tempDir)) { error in

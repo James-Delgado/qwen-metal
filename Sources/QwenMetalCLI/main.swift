@@ -3,18 +3,20 @@ import QwenMetalEngine
 
 // Thin CLI entry point — all engine logic lives in QwenMetalEngine.
 // Subcommands arrive with their phases; P0B-4 added `bandwidth`,
-// P1-5 added `generate`.
+// P1-5 added `generate`, P3-1 added `pack`.
 let arguments = CommandLine.arguments.dropFirst()
 switch arguments.first {
 case nil:
-    print("\(EngineInfo.name) v\(EngineInfo.version) — subcommands: bandwidth, generate")
+    print("\(EngineInfo.name) v\(EngineInfo.version) — subcommands: bandwidth, generate, pack")
 case "bandwidth":
     exit(runBandwidthCommand())
 case "generate":
     exit(await runGenerateCommand(Array(arguments.dropFirst())))
+case "pack":
+    exit(runPackCommand(Array(arguments.dropFirst())))
 case let unknown?:
     FileHandle.standardError.write(
-        Data("unknown subcommand '\(unknown)' — available: bandwidth, generate\n".utf8)
+        Data("unknown subcommand '\(unknown)' — available: bandwidth, generate, pack\n".utf8)
     )
     exit(2)
 }

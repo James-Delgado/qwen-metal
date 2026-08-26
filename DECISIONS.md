@@ -1679,3 +1679,47 @@ every future session:
   (Retroactive instance: the Phase 3 flagged items were walked
   in-conversation 2026-08-26 and approved — see the veto-window entry
   above.)
+
+## 2026-08-26 — P3-1: q4g64 packed layout + Swift packer landed; packed artifact produced
+
+The pinned schema (D1/D2, approved 2026-08-26) is now code:
+Sources/QwenMetalEngine/Quant/{Q4G64,Q4Packer,PackedCheckpoint}.swift +
+CLI `pack` subcommand + 31 new tests (Q4G64Tests 12, Q4PackerTests 18,
+ModelDirectoryTests +1). Full suite minus the CPU logit gate: 262 tests,
+0 failures.
+
+- **Packed artifact produced:** `models/qwen3-1.7b-70d244cc-q4g64.safetensors`
+  (local-only), **968,083,288 bytes (0.968 GB)** — the spec's ~0.97 GB;
+  197 packed matrices + 113 bf16 pass-through norms.
+  **sha256 = 0feaa7ce4382cde9f9e3f7f08dbfad52fb4bae9a8ce8e94113930bdd8f0c93f3.**
+  Determinism verified for real: two independent full packs of the 1.7B
+  checkpoint are byte-identical (same sha256). Pack time ~21 s release.
+- **Discovery — the consolidated checkpoint materializes the tie:** the
+  4.06 GB source file carries `lm_head.weight` BYTE-IDENTICAL to
+  `model.embed_tokens.weight` (verified by memcmp over the mapped ranges,
+  622,329,856 bytes). Schema D1 stores the tied matrix once, so the packer
+  omits `lm_head.weight` only after verifying byte identity (an untied
+  lm_head packs normally; both behaviors pinned by tests). First pack
+  without the dedupe measured 1.143 GB / 198 matrices — the dedupe
+  recovers the ~0.17 GB the spec's 0.97 GB figure assumes.
+- **Rounding-rule pin (schema implementation detail):** the D2 recipe's
+  `round` is **round-half-away-from-zero** — the C/Metal `round()`
+  semantics the P3-4 GPU kernels will share. Pinned in code comment and by
+  an exact boundary test (q = 0.5 → 1). fp16-round-FIRST order pinned by a
+  hand-computed test (scale 1/15: value 0.4999 → code 8 against the stored
+  fp16 scale, 7 against the unrounded one).
+- **Defensive addition beyond the spec list:** a group whose fp16 scale or
+  bias would be non-finite (|w| beyond fp16 range — impossible in the
+  pinned checkpoint) aborts the pack loudly (`groupRangeOverflow`), same
+  spirit as the non-finite-weight abort. A failed pack removes its partial
+  output file (a ~1 GB half-written artifact looks complete at a glance).
+- **ModelDirectory discovery change:** bf16 checkpoint discovery now
+  ignores `*-q4g64.safetensors` — the packed artifact legitimately lives
+  beside the bf16 checkpoint in models/ (D2 pins the name) and was
+  tripping the exactly-one rule (caught by the existing pinned-directory
+  test the moment the artifact landed). P3-5 adds explicit packed-model
+  loading; until then `generate` keeps resolving the bf16 checkpoint
+  (verified end-to-end, GPU backend).
+- **Parser:** TensorDType gained U32 (byteWidth 4) so the packed file rides
+  the existing mmap parser; `fp32Values` rejects U32 with a clear error
+  (packed tensors load via PackedCheckpoint only).
