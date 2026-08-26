@@ -788,7 +788,8 @@ tasks:
   - id: P3-1
     rank: 16.1
     title: "Packed 4-bit layout (q4g64 schema) + Swift packer CLI + adversarial packing fixtures + packed artifact"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-26T05:41:16Z
     depends_on: [SPEC-P3]
     blocks: [P3-2, P3-4]
     deliverable:
