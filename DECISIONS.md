@@ -1759,3 +1759,46 @@ regenerates the packed artifact + sha256, and re-runs every oracle layer
 "measured identically to the MLX recipe" weakens if our recipe diverges).
 Sensible trigger, if ever: P3-3's quality gate lands OUT of band, or a
 later phase shows quality (not bandwidth) is the binding constraint.
+
+## 2026-08-29 — P3-2: CPU-quant reference landed (packed → fp32 through the frozen CPU model)
+
+The Phase 3+ oracle (spec D3, the PLAN invariant 4 carve-out) is now code:
+`QwenModel` gained a `WeightSource` loading front end — `SafetensorsFile`
+is the unchanged bf16 path (delegating convenience init, byte-identical
+behavior), `PackedCheckpoint` (new `Quant/PackedWeightSource.swift`) is the
+fp32 dequant materialization. The frozen forward modules cannot tell which
+front end fed them; no CPU module changed. Hard rule 1 (register-only
+dequant) continues to bind engine GPU + app unqualified — nothing GPU-side
+was touched this task.
+
+- **Tests:** PackedModelTests (5 synthetic tests: bit-exact `==` dequant
+  through the front end vs the pinned group primitives, bit-identical bf16
+  norm pass-through, tied-lm_head mapping, config/shape mismatch and
+  untied-config-vs-tied-artifact loud rejects) + PackedModelSmokeTests
+  (real artifact, pinned-revision load, skips cleanly if absent). All
+  assertions exact — NO new tolerance constants, nothing veto-flaggable.
+  Suite minus CPU logit gate: 268 tests, 1 skipped (env-gated free-run
+  report), 0 failures.
+- **Tied lm_head composes with no aliasing:** the packed artifact stores
+  the tied matrix once (P3-1) and a tied config never requests
+  lm_head.weight; an UNTIED config against the tied artifact fails with a
+  loud tensorNotFound (pinned by test) — never a silent substitute.
+- **Measured — the P3-1 wall-time warning was real:** materializing all
+  197 matrices through the scalar per-element loop cost 229–262 s in a
+  debug build (the IO-1 story repeating). `dequantMatrix` rewritten:
+  per-group 16-entry LUT (each entry computed via the same pinned
+  `Q4G64.dequant`) + `concurrentPerform` over disjoint group ranges —
+  bit-identical outputs by construction (LUT alone changed nothing:
+  262 s; parallelism is the lever). Now **42.7 s debug / 2.6 s release**;
+  smoke decode tokens identical across scalar/LUT/parallel variants and
+  both build modes. Exactness stays pinned by the P3-1/P3-2 `==` suites
+  (all green unmodified).
+- **Smoke decode (structural, no numeric gate — the quality band is
+  P3-3):** short_english prompt "The capital of France is" → " Paris. The
+  capital of France is Paris" — coherent; finite logits every step; all
+  ids in-vocab; EOS/cap termination clean.
+- **Dev-loop note:** the smoke test adds ~73 s to a debug `swift test`
+  (28 s release). Escape hatch: `--skip PackedModelSmokeTests`; oracle
+  suites consuming the CPU-quant reference should run release-mode and
+  share ONE materialized model (SharedCheckpoint pattern) — note added to
+  P3-5 in the backlog.

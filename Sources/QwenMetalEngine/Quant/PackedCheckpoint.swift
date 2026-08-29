@@ -136,6 +136,14 @@ public final class PackedCheckpoint {
     /// CPU dequant of one packed matrix to row-major fp32 `[out, in]` —
     /// exactly the arithmetic the GPU kernels reproduce in registers
     /// (`Q4G64.dequant`; single-rounding argument in the gates entry).
+    ///
+    /// Bulk-loop shape (P3-2): the 16 possible dequant values of a group are
+    /// computed ONCE via the pinned `Q4G64.dequant` and applied by table
+    /// lookup — bit-identical to calling it per element (same inputs, same
+    /// single-rounded operation), but far faster in debug builds, where the
+    /// per-element scalar loop cost ~230 s across the 1.7B checkpoint's 197
+    /// matrices (IO-1 precedent; exactness stays pinned by the P3-1/P3-2
+    /// `==` tests).
     public func dequantMatrix(_ baseName: String) throws -> [Float] {
         let dims = try dims(for: baseName)
         let qInfo = try file.info(for: baseName + Q4G64.qSuffix)
@@ -147,29 +155,44 @@ public final class PackedCheckpoint {
         let scalesPtr = dataBase + scalesInfo.dataOffset
         let biasesPtr = dataBase + biasesInfo.dataOffset
 
-        let groupsPerRow = dims.inDim / Q4G64.groupSize
-        let wordsPerRow = dims.inDim / Q4G64.codesPerWord
+        let totalGroups = dims.outDim * (dims.inDim / Q4G64.groupSize)
         var out = [Float](repeating: 0, count: dims.outDim * dims.inDim)
         out.withUnsafeMutableBufferPointer { dst in
-            for row in 0..<dims.outDim {
-                for g in 0..<groupsPerRow {
-                    let groupIndex = row * groupsPerRow + g
-                    let scale = Float16(bitPattern: UInt16(littleEndian:
-                        scalesPtr.loadUnaligned(
-                            fromByteOffset: 2 * groupIndex, as: UInt16.self)))
-                    let bias = Float16(bitPattern: UInt16(littleEndian:
-                        biasesPtr.loadUnaligned(
-                            fromByteOffset: 2 * groupIndex, as: UInt16.self)))
-                    let wordBase = row * wordsPerRow + g * Q4G64.wordsPerGroup
-                    for w in 0..<Q4G64.wordsPerGroup {
-                        let word = UInt32(littleEndian: qPtr.loadUnaligned(
-                            fromByteOffset: 4 * (wordBase + w), as: UInt32.self))
-                        let elementBase = row * dims.inDim + g * Q4G64.groupSize
-                            + w * Q4G64.codesPerWord
-                        for lane in 0..<Q4G64.codesPerWord {
-                            dst[elementBase + lane] = Q4G64.dequant(
-                                code: Q4G64.code(in: word, lane: lane),
-                                scale: scale, bias: bias)
+            // Chunks own disjoint group ranges, and groups tile the
+            // row-major element space contiguously (in-dim divides by 64),
+            // so every element is written exactly once by the same pinned
+            // arithmetic regardless of scheduling — parallelism cannot
+            // change a single output bit.
+            let chunkCount = min(
+                totalGroups, max(1, ProcessInfo.processInfo.activeProcessorCount))
+            DispatchQueue.concurrentPerform(iterations: chunkCount) { chunk in
+                let chunkStart = totalGroups * chunk / chunkCount
+                let chunkEnd = totalGroups * (chunk + 1) / chunkCount
+                withUnsafeTemporaryAllocation(
+                    of: Float.self, capacity: 16
+                ) { lutBuf in
+                    for groupIndex in chunkStart..<chunkEnd {
+                        let scale = Float16(bitPattern: UInt16(littleEndian:
+                            scalesPtr.loadUnaligned(
+                                fromByteOffset: 2 * groupIndex, as: UInt16.self)))
+                        let bias = Float16(bitPattern: UInt16(littleEndian:
+                            biasesPtr.loadUnaligned(
+                                fromByteOffset: 2 * groupIndex, as: UInt16.self)))
+                        for code in 0..<16 {
+                            lutBuf[code] = Q4G64.dequant(
+                                code: UInt32(code), scale: scale, bias: bias)
+                        }
+                        let wordBase = groupIndex * Q4G64.wordsPerGroup
+                        var element = groupIndex * Q4G64.groupSize
+                        for w in 0..<Q4G64.wordsPerGroup {
+                            // Low nibble first (schema pin, == Q4G64.code).
+                            var word = UInt32(littleEndian: qPtr.loadUnaligned(
+                                fromByteOffset: 4 * (wordBase + w), as: UInt32.self))
+                            for _ in 0..<Q4G64.codesPerWord {
+                                dst[element] = lutBuf[Int(word & 0xF)]
+                                word >>= 4
+                                element += 1
+                            }
                         }
                     }
                 }
