@@ -1723,3 +1723,39 @@ ModelDirectoryTests +1). Full suite minus the CPU logit gate: 262 tests,
 - **Parser:** TensorDType gained U32 (byteWidth 4) so the packed file rides
   the existing mmap parser; `fp32Values` rejects U32 with a clear error
   (packed tensors load via PackedCheckpoint only).
+
+## 2026-08-29 — SUGGESTION (out-of-scope per non-goals): smarter quantization grouping for quality
+
+Noted at James's request, flagged per hard rule 2 (quant-format changes are
+on the PLAN.md non-goals list — recorded here as a suggestion, NOT seeded
+as a task; picking any of it up is James's call and would need a scope
+decision in this ledger).
+
+q4g64 groups are purely positional (64 consecutive elements along the
+reduction dim). Mechanisms known to recover quality over positional
+grouped-affine, roughly in order of effort:
+
+- **GPTQ-style error-compensated rounding:** keep the q4g64 layout
+  byte-identical, choose codes by propagating rounding error across
+  columns (Hessian-weighted) instead of independent nearest-round. File
+  format unchanged — only the packer's code-selection changes — so
+  loaders/kernels would not move; but dequant would no longer be "nearest
+  to source weight", and the round-trip bound test + determinism pins
+  would need re-derivation.
+- **AWQ-style activation-aware scaling:** per-channel scales chosen from
+  activation statistics before grouping; needs a calibration pass in
+  tools/ and a schema addition (per-channel pre-scale tensor) — a schema
+  re-pin.
+- **Codebook/k-means (non-uniform levels):** replaces the affine map with
+  a 16-entry LUT per group/tensor; schema re-pin + kernel LUT loads.
+- **Smaller groups (g32) or super-blocks (K-quant style):** finer range
+  adaptation at +overhead bytes/element (g32 doubles scale/bias overhead
+  to ~0.625 B/elem, moving the roofline).
+
+Constraints that make ALL of these expensive here: the q4g64 schema is a
+PINNED invariant (2026-08-26 approval); any change re-pins the schema,
+regenerates the packed artifact + sha256, and re-runs every oracle layer
+(exact tile, Tier K/M/E, quality band vs mlx-lm 4-bit — whose premise
+"measured identically to the MLX recipe" weakens if our recipe diverges).
+Sensible trigger, if ever: P3-3's quality gate lands OUT of band, or a
+later phase shows quality (not bandwidth) is the binding constraint.
