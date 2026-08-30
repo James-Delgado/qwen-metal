@@ -1845,3 +1845,72 @@ tests/test_quality_fixtures.py (stdlib-only, 7 tests).
   computed AFTER this entry, by the Swift QuantQualityGateTests.
 - The 2026-08-22 argmax-level mlx dump remains unused for the band, as
   the gates entry requires (it predates these definitions).
+
+## 2026-08-30 — P3-3 (part 2): quality gate OUT OF BAND; root cause = D2 recipe, not the packer implementation
+
+Our CPU-quant metrics, measured by QuantQualityGateTests (release, Swift
+float64 stats over fp32 logits, identical protocol to the band-setter dump)
+AFTER the part-1 entry landed (commit 76b8351):
+
+- **A_ours = 206/250 = 0.824** — gate ≥ 0.836: **FAIL** (−1.2 pp).
+- **KL_ours = 0.357424 nats** — gate ≤ 0.172375: **FAIL** (3.11× mlx).
+- **ppl_ours = 19.023943, Δppl_ours = 5.027802** — gate ≤ 3.720882:
+  **FAIL** (2.03× mlx's Δppl).
+
+Gates untouched (hard rule 6). Per the pre-committed diagnosis rule the
+packer was the suspect; the layered-oracle arbitration ran the same day
+(scratchpad experiments, all numbers below measured this session):
+
+1. **Weight space exonerates the packer IMPLEMENTATION:** independent
+   numpy dequant of the artifact reproduces the pinned schema, and
+   per-tensor reconstruction RMSE vs fp32 is UNIFORMLY (slightly) BETTER
+   than the mlx-community stored weights on ALL 197 packed tensors
+   (ours/mlx ratio 0.984–0.988); tensor coverage identical both ways.
+2. **Weights, not engines, cause the gap:** teacher-forced KL on
+   short_english with the SAME HF fp32 engine, only weights swapped —
+   our dequant weights 0.188103, mlx dequant weights 0.089006 nats. The
+   latter matches mlx's own-engine number (0.086505), so the band-setter
+   measurement and our Swift suite are both faithful.
+3. **Locus:** swapping ONLY the MLP projections to mlx's closes most of
+   the gap (0.188 → 0.086); embedding swap is negligible (0.186 / 0.081);
+   attention swap intermediate (0.139).
+4. **Root cause — the D2 recipe differs from MLX's actual recipe:**
+   mx.quantize (probed on controlled groups) snaps the grid to an INTEGER
+   ZERO-POINT (bias/scale exactly integer whenever 0 is in the group's
+   range; e.g. b/s = −8.000, s = max(max/(15−z), −min/z)), so zero and
+   near-zero weights reconstruct with ~zero systematic offset. Our pinned
+   pure min/max affine (scale=(max−min)/15, bias=min) leaves zero
+   OFF-GRID: the dense near-zero mass of trained weights picks up
+   group-correlated residuals that add coherently across the 2048/6144
+   reduction dims — lower per-element RMSE, but ~2–3× the distributional
+   damage. The spec's premise (D1/D2 "matches the MLX recipe") was wrong
+   at the code-selection level; logged per the conflicts-with-reality
+   rule rather than worked around.
+5. **Candidate fix validated end-to-end:** a zero-point-aligned q4g64
+   recipe (z = clamp(round(−min·15/range), 0, 15), s covering both sides,
+   b = −z·s; SAME schema, SAME group size, applied to the same fp32
+   source) measures KL 0.092300 on the swap harness — at ecosystem
+   parity (mlx 0.089) — despite higher RMSE (3.20e-3 vs ours 3.06e-3 on
+   l0 down_proj). RMSE is the wrong objective; grid-zero alignment is
+   what the band actually grades.
+
+**Status/decision:** P3-3 CANNOT close in-band without amending the
+pinned D2 packing recipe. The schema (D1: tensor triplet, u32 low-nibble
+order, group 64, fp16 scales/biases) is NOT implicated and needs no
+change; the amendment is to scale/bias/code SELECTION only. Because D2
+was veto-approved 2026-08-25/26, the amendment waits for James
+(AGENT_OPERATION pause rule): seeded QR-1 (decision, owner james) and
+QR-2 (implementation: packer amendment + repack + P3-1/P3-2 re-verify)
+in the backlog; P3-3 re-blocked on QR-2. The failing band tests are
+committed as-is — they are the phase gate detecting a real defect, and
+they skip cleanly on machines without the local artifacts. Full detail
+for the decision: the fp16-rounding-before-code-selection principle and
+the exact-dequant (fma) argument both SURVIVE the amendment unchanged —
+only the (scale, bias) choice per group changes, so the Phase 3 gate
+premises (bit-identical CPU/GPU dequant) are unaffected.
+
+Artifacts of record this session: ref-logits artifact sha256 b8a157f3…
+(part-1 entry), band.json (committed), Swift suite QuantQualityGateTests
+(+ 6 synthetic metric unit tests, green), scratchpad diagnosis scripts
+(diag_recipe/diag_all/diag_swap/diag_class/diag_class2/diag_mx_recipe/
+diag_zp — session-local; numbers preserved in this entry).

@@ -852,12 +852,55 @@ tasks:
       config never requests it; untied config fails loudly — tested).
       See DECISIONS.md 2026-08-29 P3-2 entry. Unblocks P3-3.
 
+  - id: QR-1
+    rank: 16.15
+    title: "Decide: amend the pinned D2 packing recipe to zero-point-aligned code selection (schema D1 unchanged)"
+    status: ready
+    owner: james
+    depends_on: []
+    blocks: [QR-2]
+    deliverable:
+      file: DECISIONS.md
+      tests: "n/a (decision entry)"
+    est_complexity: small
+    notes: |
+      Seeded 2026-08-30 by P3-3: quality gate failed 3/3 (A 0.824 < 0.836,
+      KL 0.357 > 0.172, dppl 5.03 < gate 3.72 FAIL) — root-caused NOT to the
+      packer implementation (all 197 tensors reconstruct BETTER than mlx's
+      stored weights) but to the D2 recipe itself: mx.quantize uses an
+      integer zero-point (zero exactly on the grid); our pure min/max
+      affine leaves zero off-grid -> group-correlated near-zero residuals.
+      Candidate zero-point recipe validated at KL 0.0923 vs mlx 0.089 on
+      the swap harness (same schema, same group size). Full diagnosis:
+      DECISIONS.md 2026-08-30 P3-3 part 2. D2 was veto-approved, so the
+      amendment is James's call (AGENT_OPERATION pause rule). Gates stay
+      untouched per hard rule 6.
+
+  - id: QR-2
+    rank: 16.16
+    title: "Implement the approved recipe amendment: packer selection change + repack artifact + re-verify P3-1/P3-2 suites"
+    status: blocked
+    depends_on: [QR-1]
+    blocks: [P3-3]
+    deliverable:
+      file: "engine package (Quant module) + models/ packed artifact (new sha256 -> DECISIONS)"
+      tests: "P3-1 packing/edge suites updated to the amended recipe (red-first where behavior changes); P3-2 exactness suites re-green; determinism re-verified"
+    est_complexity: medium
+    notes: |
+      Seeded 2026-08-30 by P3-3. Scope: Q4G64 group scale/bias/code
+      SELECTION only — schema (triplet, u32 low-nibble, group 64, fp16
+      scale/bias storage), fp16-round-before-code-selection principle, and
+      the exact-dequant fma argument all survive unchanged (gate premises
+      unaffected; see DECISIONS.md 2026-08-30 part 2). After repack,
+      P3-3's band suite re-runs against the same committed band.json
+      (band-setters stay valid — they measure mlx, not us).
+
   - id: P3-3
     rank: 16.3
     title: "Quality gate vs mlx-lm 4-bit: tools dump extension + band-setter measurement + in-band verification"
-    status: in_progress
+    status: blocked
     started_at: 2026-08-30T16:16:16Z
-    depends_on: [P3-2]
+    depends_on: [P3-2, QR-2]
     blocks: [P3-7]
     deliverable:
       file: "tools/ (dump_mlx extension, ppl slice fixture, pinned dataset revision in pins.py) + engine tests (metric computation)"
@@ -873,6 +916,15 @@ tasks:
       Out-of-band => suspect the packer; oracle layer 1 arbitrates. The
       mlx comparator revision (3b1b1768) is re-verified programmatically
       at dump time.
+      2026-08-30 (session 1): tools/fixture/metric machinery LANDED and
+      band-setters recorded (A_mlx 0.876, KL_mlx 0.114917, dppl_mlx
+      2.473921 — DECISIONS part 1, committed BEFORE our metrics).
+      In-band verification FAILED 3/3 (A 0.824, KL 0.357, dppl 5.028);
+      root cause = pinned D2 recipe lacks zero-point alignment (NOT a
+      packer bug — full arbitration chain in DECISIONS part 2). Band
+      tests committed honestly red-when-artifacts-present. RE-BLOCKED on
+      QR-2 (recipe amendment, decision QR-1 owner james); after repack,
+      only the Swift band suite needs re-running — band.json stays valid.
 
   - id: P3-4
     rank: 16.4
