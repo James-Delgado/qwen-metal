@@ -45,5 +45,16 @@ tools/.venv/bin/python tools/consolidate_shards.py --out <path>.safetensors
 | `fixture_prompts.json` | the 5 pinned fixture prompts |
 | `dump_reference.py` | primary oracle dump (full-vocab logit checkpoints, fingerprints, top-64, margins, argmax, per-module activations, tokenizer ids) |
 | `dump_mlx.py` | secondary mlx-lm dump (loose, argmax-level; Phase 3 quality-gate comparator) |
+| `dump_quality_gate.py` | P3-3 quality-gate dump: band-setters vs mlx-lm 4-bit, WikiText-2 ppl slice, local-only reference-logits artifact (see its module docstring for the full protocol) |
 | `consolidate_shards.py` | shard → single-file safetensors consolidation |
 | `requirements.txt` | exact pinned package versions |
+
+## Quality-gate fixtures (tests/fixtures/qwen3-1.7b-quality/)
+
+Produced by `tools/.venv/bin/python tools/dump_quality_gate.py` (P3-3;
+run after the primary fixtures exist). Aborts unless the HF fp32 pass
+reproduces the committed checkpoint blobs byte-identically. Also writes the
+local-only `models/qwen3-1.7b-70d244cc-ref-logits-250.bin` (152 MB, never
+committed — sha256 in DECISIONS.md). Validated by
+`tests/test_quality_fixtures.py`; consumed by the Swift
+`QuantQualityGateTests` (run release-mode).

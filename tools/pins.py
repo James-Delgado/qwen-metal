@@ -26,3 +26,16 @@ ENABLE_THINKING = False
 # Layout
 FIXTURE_DIRNAME = "qwen3-1.7b"  # under tests/fixtures/
 ACTIVATION_PROMPT_ID = "short_english"  # per-module activations for prompt #1 only
+
+# Phase 3 quality-gate perplexity slice (docs/phases/phase-3.md D6; the gates
+# entry, DECISIONS.md 2026-08-25, mandates this dataset pin landing with P3-3).
+WIKITEXT_REPO = "Salesforce/wikitext"
+WIKITEXT_REVISION = "b08601e04326c79dfdd32d625aee71d232d685c3"
+WIKITEXT_CONFIG = "wikitext-2-raw-v1"
+WIKITEXT_SPLIT = "test"
+WIKITEXT_TEST_FILE = "wikitext-2-raw-v1/test-00000-of-00001.parquet"
+PPL_SLICE_TOKENS = 4096  # first N tokens of the concatenated test split
+
+# P3-3 quality-gate fixtures live beside (not inside) the frozen P1-1 set —
+# tests/fixtures/qwen3-1.7b/ and its manifest are never touched after Phase 1.
+QUALITY_FIXTURE_DIRNAME = "qwen3-1.7b-quality"  # under tests/fixtures/

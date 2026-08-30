@@ -1,0 +1,121 @@
+{
+ "role": "P3-3 quality-gate band-setters + ppl slice. Binding gate record: DECISIONS.md 2026-08-25 'Phase 3 gates pre-committed' (veto-closed 2026-08-26); this file carries the measured numbers and the protocol.",
+ "model": {
+  "repo": "Qwen/Qwen3-1.7B",
+  "revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e"
+ },
+ "mlx_model": {
+  "repo": "mlx-community/Qwen3-1.7B-4bit",
+  "revision": "3b1b1768f8f8cf8351c712464f906e86c2b8269e"
+ },
+ "dataset": {
+  "repo": "Salesforce/wikitext",
+  "revision": "b08601e04326c79dfdd32d625aee71d232d685c3",
+  "config": "wikitext-2-raw-v1",
+  "split": "test",
+  "file": "wikitext-2-raw-v1/test-00000-of-00001.parquet",
+  "parquet_sha256": "5f1bea067869d04849c0f975a2b29c4ff47d867f484f5010ea5e861eab246d91",
+  "row_count": 4358
+ },
+ "versions": {
+  "torch": "2.13.0",
+  "transformers": "5.15.1",
+  "tokenizers": "0.22.2",
+  "numpy": "2.5.2",
+  "mlx": "0.32.1",
+  "mlx-lm": "0.31.3",
+  "pyarrow": "25.0.1",
+  "huggingface_hub": "1.28.0"
+ },
+ "python": "3.14.6",
+ "protocol": {
+  "generator": "tools/dump_quality_gate.py",
+  "command": "tools/.venv/bin/python tools/dump_quality_gate.py",
+  "concatenation": "\"\".join(parquet text rows, stored order) \u2014 non-empty rows carry their trailing newline",
+  "tokenization": "pinned HF tokenizer, add_special_tokens=False, first 4096 tokens",
+  "ppl": "exp(mean NLL) over positions 1..4095, one causal window, float64 NLL over fp32 logits, KV-cached chunked prefill (chunk 512)",
+  "teacher_forcing": "committed input_ids + committed reference argmax ids (identical prefixes, 250 steps)",
+  "agreement": "argmax(engine fp32 logits, first-index tie-break) == committed reference argmax id",
+  "kl": "KL(P_fp32 || P_engine) nats, float64 full-vocab softmax, mean over 250 steps",
+  "mlx_compute": "as-shipped mlx-lm 4-bit (fp16 activations); logits cast fp32 before float64 statistics",
+  "hf_reference_verification": "byte-identical committed checkpoint blobs at steps {0,1,24,49} x 5 prompts; argmax == steps.json at all 250 steps"
+ },
+ "reference": {
+  "ppl_fp32": 13.996141152006112,
+  "ref_logits_artifact": {
+   "path": "models/qwen3-1.7b-70d244cc-ref-logits-250.bin",
+   "dtype": "float32",
+   "shape": [
+    5,
+    50,
+    151936
+   ],
+   "byte_len": 151936000,
+   "sha256": "b8a157f39972cb08917b388821f0f196de674ff76df8a1508b28b01268dd1261",
+   "prompt_order": [
+    "short_english",
+    "multi_sentence",
+    "code_snippet",
+    "non_ascii",
+    "chat_template"
+   ],
+   "note": "local-only (152 MB >> fixture budget); sha256 also recorded in DECISIONS.md; Swift suite skips if absent"
+  }
+ },
+ "band_setters": {
+  "A_mlx": 0.876,
+  "A_mlx_count": 219,
+  "steps_total": 250,
+  "KL_mlx_nats": 0.11491656363943861,
+  "ppl_mlx": 16.470062287114892,
+  "dppl_mlx": 2.47392113510878,
+  "per_prompt": {
+   "short_english": {
+    "agree": 45,
+    "mean_kl_nats": 0.08650529101458516
+   },
+   "multi_sentence": {
+    "agree": 43,
+    "mean_kl_nats": 0.12491561551716973
+   },
+   "code_snippet": {
+    "agree": 47,
+    "mean_kl_nats": 0.0711141233094608
+   },
+   "non_ascii": {
+    "agree": 42,
+    "mean_kl_nats": 0.060541466664275435
+   },
+   "chat_template": {
+    "agree": 42,
+    "mean_kl_nats": 0.2315063216917019
+   }
+  }
+ },
+ "gates_reminder": {
+  "agreement": "A_ours >= A_mlx - 0.04",
+  "kl": "KL_ours <= 1.5 * KL_mlx_nats",
+  "dppl": "dppl_ours <= 1.5 * dppl_mlx + 0.01",
+  "note": "constants are binding in DECISIONS.md, restated here for the reader only"
+ },
+ "generated_at": "2026-08-30T16:26:20Z",
+ "files": {
+  "ppl_slice_tokens.bin": {
+   "dtype": "int32",
+   "shape": [
+    4096
+   ],
+   "byte_len": 16384,
+   "sha256": "64c90851544a2db8a0de970053f25c9e5f2c70972788b694c7916c13b0809dc3"
+  },
+  "ppl_slice_ref_nll.bin": {
+   "dtype": "float32",
+   "shape": [
+    4095
+   ],
+   "byte_len": 16380,
+   "sha256": "a3799d3cbd5ece899d6f6c472ad35ecfa028b40b05573ec3e0f0e01976639489",
+   "note": "diagnostic per-position fp32 NLL of the fp32 reference; ppl_fp32 in this file is the float64 scalar of record"
+  }
+ }
+}

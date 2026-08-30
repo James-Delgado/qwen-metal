@@ -1802,3 +1802,46 @@ was touched this task.
   suites consuming the CPU-quant reference should run release-mode and
   share ONE materialized model (SharedCheckpoint pattern) — note added to
   P3-5 in the backlog.
+
+## 2026-08-30 — P3-3 (part 1): quality-gate band-setters MEASURED + dataset pin
+
+Recorded BEFORE any metric of ours is computed (the ordering rule in the
+2026-08-25 gates entry). Generator: tools/dump_quality_gate.py (new; pinned
+venv, pyarrow==25.0.1 added to tools/requirements.txt). Committed outputs:
+tests/fixtures/qwen3-1.7b-quality/ (band.json + ppl-slice blobs, sibling of
+the FROZEN P1-1 set, which is untouched); drift test:
+tests/test_quality_fixtures.py (stdlib-only, 7 tests).
+
+- **Dataset pin (mandated by the gates entry to land with P3-3):**
+  Salesforce/wikitext @ b08601e04326c79dfdd32d625aee71d232d685c3
+  (unchanged upstream since 2024-01-04), config wikitext-2-raw-v1, TEST
+  split, file wikitext-2-raw-v1/test-00000-of-00001.parquet, sha256
+  5f1bea067869d04849c0f975a2b29c4ff47d867f484f5010ea5e861eab246d91.
+  Pinned in tools/pins.py. Slice protocol (documented in the dump script,
+  per spec D6): `"".join` of the parquet text rows in stored order (rows
+  carry their own trailing newlines), pinned HF tokenizer with
+  add_special_tokens=False, first 4096 ids, one causal window,
+  ppl = exp(mean NLL) over positions 1..4095, float64 NLL over fp32
+  logits, KV-cached chunked prefill (chunk 512).
+- **Reference-logits artifact (local-only, 151.9 MB):**
+  models/qwen3-1.7b-70d244cc-ref-logits-250.bin — HF fp32 teacher-forced
+  full-vocab logits, [5, 50, 151936] fp32 LE in fixture_prompts.json
+  order, sha256
+  b8a157f39972cb08917b388821f0f196de674ff76df8a1508b28b01268dd1261.
+  Integrity at dump time: rows at the committed checkpoint steps
+  {0,1,24,49} x 5 prompts came out BYTE-IDENTICAL to the P1-1 fixtures,
+  and all 250 argmax steps reproduced steps.json — the oracle
+  environment still regenerates Phase 1 exactly.
+- **Band-setters (mlx-community/Qwen3-1.7B-4bit @ 3b1b1768, revision
+  requested explicitly at download — measured per the gates-entry
+  definitions, float64 stats over fp32 logits):**
+  - **A_mlx = 219/250 = 0.876** (per prompt: short_english 45,
+    multi_sentence 43, code_snippet 47, non_ascii 42, chat_template 42).
+  - **KL_mlx = 0.114917 nats** (mean full-vocab KL(P_fp32 ‖ P_mlx)).
+  - **ppl_fp32 = 13.996141; ppl_mlx = 16.470062; Δppl_mlx = 2.473921.**
+- **The pre-committed gate formulas therefore resolve to:** A_ours ≥
+  0.836; KL_ours ≤ 0.172375; Δppl_ours ≤ 3.720882. Constants unchanged
+  from the 2026-08-25 entry (hard rule 6); our CPU-quant metrics are
+  computed AFTER this entry, by the Swift QuantQualityGateTests.
+- The 2026-08-22 argmax-level mlx dump remains unused for the band, as
+  the gates entry requires (it predates these definitions).
