@@ -855,7 +855,8 @@ tasks:
   - id: P3-3
     rank: 16.3
     title: "Quality gate vs mlx-lm 4-bit: tools dump extension + band-setter measurement + in-band verification"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-30T16:16:16Z
     depends_on: [P3-2]
     blocks: [P3-7]
     deliverable:
