@@ -909,7 +909,8 @@ tasks:
   - id: QR-3
     rank: 16.17
     title: "Amend D2 selection to snap-scale (decision James 2026-08-31) + repack + re-verify"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-31T04:59:01Z
     depends_on: [QR-2]
     blocks: [P3-3]
     deliverable:
