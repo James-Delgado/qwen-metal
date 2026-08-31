@@ -855,7 +855,8 @@ tasks:
   - id: QR-1
     rank: 16.15
     title: "Decide: amend the pinned D2 packing recipe to zero-point-aligned code selection (schema D1 unchanged)"
-    status: ready
+    status: done
+    completed_at: 2026-08-31T03:06:06Z
     owner: james
     depends_on: []
     blocks: [QR-2]
@@ -879,7 +880,7 @@ tasks:
   - id: QR-2
     rank: 16.16
     title: "Implement the approved recipe amendment: packer selection change + repack artifact + re-verify P3-1/P3-2 suites"
-    status: blocked
+    status: ready
     depends_on: [QR-1]
     blocks: [P3-3]
     deliverable:
@@ -894,6 +895,8 @@ tasks:
       unaffected; see DECISIONS.md 2026-08-30 part 2). After repack,
       P3-3's band suite re-runs against the same committed band.json
       (band-setters stay valid — they measure mlx, not us).
+      2026-08-30: QR-1 decided (A1, James — DECISIONS QR-1 entry, incl.
+      the exact amended formulas); unblocked.
 
   - id: P3-3
     rank: 16.3

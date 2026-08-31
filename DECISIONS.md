@@ -1914,3 +1914,40 @@ Artifacts of record this session: ref-logits artifact sha256 b8a157f3…
 (+ 6 synthetic metric unit tests, green), scratchpad diagnosis scripts
 (diag_recipe/diag_all/diag_swap/diag_class/diag_class2/diag_mx_recipe/
 diag_zp — session-local; numbers preserved in this entry).
+
+## 2026-08-30 — QR-1 DECIDED (James): D2 amended to zero-point-aligned selection (option A1)
+
+James reviewed the P3-3 part-2 diagnosis and the decision directions
+(walked in-conversation with trade-offs) and chose **A1 — our own clean
+zero-point-aligned selection rule**, rejecting A2 (bit-emulating
+mx.quantize, with its reverse-engineered corner behaviors) and deferring
+C (GPTQ/AWQ/codebook/g32 quality mechanisms).
+
+- **The amended D2 recipe (binding from this entry on):** per group of 64
+  fp32 values with min m, max M, range R = M − m:
+  - Degenerate (R = 0): scale = 0, bias = fp16(m), all codes 0 — unchanged.
+  - Else: zero-point z = clamp(round(−m·15/R), 0, 15) (round
+    half-away-from-zero, the existing rounding pin); scale s = max of the
+    applicable endpoint covers, M/(15−z) when z < 15 and −m/z when z > 0
+    (both endpoints stay covered — no mlx-style clipping); fp16-round the
+    scale FIRST, then bias b = fp16(−z·s16); codes
+    q = clamp(round((w − b16)/s16), 0, 15) against the values AS STORED.
+  - Everything else survives unchanged: schema D1 (triplet, u32
+    low-nibble-first, group 64, fp16 scale/bias storage, alignment),
+    the fp16-round-before-code-selection principle, the exact-dequant
+    fma argument (q·s + b unchanged), all gate constants (hard rule 6).
+  - Known fine print (accepted): b16 = fp16(−z·s16) is not always exactly
+    −z·s16 (4+11 mantissa bits), so grid-zero can sit off by up to
+    ~2⁻¹¹·|b| ≈ 2e-5 — vs up to ~1.5e-3 under the old recipe.
+- **Basis:** validated end-to-end this session at KL 0.0923 vs mlx 0.089
+  on the HF swap harness (part-2 entry, point 5).
+- **C is deferred, not dead (James):** in a LATER optimization phase the
+  part-2 suggestion-entry mechanisms (2026-08-29: GPTQ-style
+  error-compensated rounding first among them) may be picked up with the
+  explicit goal of beating mlx-4bit quality, not just matching it. Until
+  that phase is chartered, quant-format/recipe upgrades beyond A1 remain
+  on the non-goals list; recorded in TODOS.md so it cannot silently drop.
+- **Execution:** QR-1 marked done; QR-2 (packer amendment + repack +
+  P3-1/P3-2 re-verify) unblocked and proceeds now; P3-3 band suite
+  re-runs against the SAME committed band.json (band-setters measure mlx
+  and fp32, not us — they remain valid).
