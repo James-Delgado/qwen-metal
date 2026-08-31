@@ -1951,3 +1951,33 @@ C (GPTQ/AWQ/codebook/g32 quality mechanisms).
   P3-1/P3-2 re-verify) unblocked and proceeds now; P3-3 band suite
   re-runs against the SAME committed band.json (band-setters measure mlx
   and fp32, not us — they remain valid).
+
+## 2026-08-30 — QR-2: amended recipe implemented; artifact repacked (new sha256)
+
+- **Code:** Q4G64.packGroup (scale, bias) selection replaced with the QR-1
+  A1 formulas (z = 0 pins bias to +0 explicitly); dequant, packWords,
+  nibble order, error paths untouched. phase-3.md D2 carries a dated
+  AMENDED note pointing at the QR-1 entry (superseded text kept, labeled).
+- **Tests (red-first):** 3 new Q4G64Tests pin the amended selection with
+  hand-derived fp16 constants — zero-straddling group (z = 4; b16 = −4·s16
+  is fp16-EXACT there, so the 62 zero elements dequant to 0.0 bitwise),
+  all-positive (z = 0, bias +0, grid [0, M]), all-negative (z = 15, grid
+  top within the 2⁻¹¹·|bias| fine-print slack of zero). All three failed
+  against the old recipe first (verified red), pass after. Every
+  pre-existing pin survived UNMODIFIED — including fp16-round-first and
+  half-away rounding (their min = 0 fixtures make old and amended recipes
+  coincide), the scale-relative round-trip bound, determinism, and both
+  overflow rejects. Quant suites: 15 + 17 + 5 green (debug), full 38 incl.
+  real-artifact smoke green (release).
+- **Artifact repacked:** models/qwen3-1.7b-70d244cc-q4g64.safetensors,
+  968,083,288 bytes (size unchanged — schema identical), sha256
+  **d073af49b3a37dd53be397d9c8045e36e38cc820701efcb1dc20b79692eef3ce**
+  (supersedes 0feaa7ce…, which was the old-recipe pack). Two consecutive
+  packs byte-identical (determinism re-verified); tied lm_head again
+  memcmp-verified and stored once; 197 matrices + 113 bf16 pass-through
+  norms; 22.6 s release.
+- **Smoke note (honest):** the 8-token smoke continuation changed vs the
+  old artifact (" Paris. The capital of France is Paris" → " in the city
+  of ...? The question"). Structural assertions all pass; argmax-path
+  flips are expected under a recipe change, and the committed quality
+  judgment is the P3-3 band suite, not the smoke — running next.

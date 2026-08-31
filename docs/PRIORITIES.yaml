@@ -880,8 +880,9 @@ tasks:
   - id: QR-2
     rank: 16.16
     title: "Implement the approved recipe amendment: packer selection change + repack artifact + re-verify P3-1/P3-2 suites"
-    status: in_progress
+    status: done
     started_at: 2026-08-31T03:06:06Z
+    completed_at: 2026-08-31T03:16:00Z
     depends_on: [QR-1]
     blocks: [P3-3]
     deliverable:
@@ -898,11 +899,17 @@ tasks:
       (band-setters stay valid — they measure mlx, not us).
       2026-08-30: QR-1 decided (A1, James — DECISIONS QR-1 entry, incl.
       the exact amended formulas); unblocked.
+      2026-08-30 (done): A1 landed in Q4G64.packGroup (3 red-first tests,
+      all pre-existing pins survived unmodified); artifact repacked,
+      sha256 d073af49… (supersedes 0feaa7ce…), byte-identical across two
+      packs; quant suites 38 green incl. real-artifact smoke; phase-3.md
+      D2 carries the dated AMENDED note. See DECISIONS.md QR-2 entry.
+      P3-3 flipped back to ready.
 
   - id: P3-3
     rank: 16.3
     title: "Quality gate vs mlx-lm 4-bit: tools dump extension + band-setter measurement + in-band verification"
-    status: blocked
+    status: ready
     started_at: 2026-08-30T16:16:16Z
     depends_on: [P3-2, QR-2]
     blocks: [P3-7]

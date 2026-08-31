@@ -79,6 +79,62 @@ final class Q4G64Tests: XCTestCase {
         XCTAssertEqual(g.codes[2], 15)
     }
 
+    // MARK: - Amended D2 (QR-1, DECISIONS.md 2026-08-30): zero-point alignment
+
+    func testZeroStraddlingGroupIsZeroPointAligned() throws {
+        // m = -1, M = 3, R = 4: z = round(15/4) = round(3.75) = 4 (half-away).
+        // s = max(3/11, 1/4) = 3/11; fp16(3/11) = 2234·2⁻¹³ = 0.272705078125.
+        // b = -4·s16 = -1117·2⁻¹⁰ = -1.0908203125 — EXACTLY representable in
+        // fp16, so grid-zero is exact: the 62 zero elements must code to the
+        // zero-point and dequant to 0.0 bit-exactly (the whole point of A1).
+        var values = [Float](repeating: 0, count: 64)
+        values[0] = -1
+        values[63] = 3
+        let g = try group(values)
+        XCTAssertEqual(g.scale, Float16(0.272705078125))
+        XCTAssertEqual(g.bias, Float16(-1.0908203125))
+        XCTAssertEqual(g.codes[0], 0)   // m: (-1 + 1.0908)/s = 0.333 -> 0
+        XCTAssertEqual(g.codes[63], 15) // M: 15.0009 -> 15
+        for i in 1...62 {
+            XCTAssertEqual(g.codes[i], 4, "zero element \(i) must sit on the zero-point")
+            XCTAssertEqual(
+                Q4G64.dequant(code: UInt32(g.codes[i]), scale: g.scale, bias: g.bias),
+                0.0, "grid-zero must reconstruct exactly here (b16 = -z·s16 is fp16-exact)")
+        }
+    }
+
+    func testAllPositiveGroupAnchorsGridAtZero() throws {
+        // m = 0.5 > 0 -> z clamps to 0, bias = +0 exactly, s = M/15.
+        // Grid runs [0, M]; the min codes interior (5), not to 0.
+        var values = [Float](repeating: 1.0, count: 64)
+        values[0] = 0.5
+        values[63] = 1.5
+        let g = try group(values)
+        XCTAssertEqual(g.scale, Float16(1.5 / 15))
+        XCTAssertEqual(g.bias, 0)
+        XCTAssertEqual(g.bias.sign, .plus, "z = 0 pins bias to +0, not -0")
+        XCTAssertEqual(g.codes[0], 5)   // 0.5/0.0999756 = 5.001 -> 5
+        XCTAssertEqual(g.codes[63], 15)
+    }
+
+    func testAllNegativeGroupAnchorsGridTopNearZero() throws {
+        // m = -2, M = -1 -> z clamps to 15, s = -m/15, bias = fp16(-15·s16).
+        // Grid top (code 15) lands within the documented fp16-bias slack of
+        // zero (QR-1 fine print: |top| <= ~2⁻¹¹·|bias|), NOT at M.
+        var values = [Float](repeating: -1.0, count: 64)
+        values[0] = -2
+        let g = try group(values)
+        XCTAssertEqual(g.scale, Float16(0.13330078125)) // fp16(2/15)
+        XCTAssertEqual(g.bias, Float16(-2.0))           // fp16(-15·s16) rounds to -2
+        XCTAssertEqual(g.codes[0], 0)
+        for i in 1...63 {
+            XCTAssertEqual(g.codes[i], 8, "-1 sits at (1.0/s16) = 7.5018 -> 8")
+        }
+        let top = Q4G64.dequant(code: 15, scale: g.scale, bias: g.bias)
+        XCTAssertLessThanOrEqual(abs(top), 2 * Float(0x1p-11) * abs(Float(g.bias)),
+                                 "grid top must be zero-anchored within fp16 bias slack")
+    }
+
     // MARK: - Edge case 3: degenerate group
 
     func testDegenerateGroupHasScaleZeroAndDequantsToBias() throws {

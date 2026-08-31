@@ -86,7 +86,18 @@ tag; loaders verify revision like SharedCheckpoint does.
 
 ### D2. Packing recipe + offline Swift packer
 
-Per group of 64 fp32 values (exact bf16 upcast of the pinned checkpoint):
+> **AMENDED 2026-08-30 (QR-1, decided by James — binding record: DECISIONS.md
+> "QR-1 DECIDED" entry):** the (scale, bias) selection below was superseded by
+> zero-point-aligned selection after the P3-3 quality gate root-caused the
+> original min/max recipe (out-of-band vs mlx-4bit; zero off-grid ⇒
+> group-correlated near-zero residuals). Amended selection: z =
+> clamp(round(−min·15/range), 0, 15); s = max(max/(15−z) if z<15, −min/z if
+> z>0); scale = fp16(s) first, bias = fp16(−z·scale). Everything else in this
+> section — fp16-round-before-code-selection, rounding pin, degenerate group,
+> non-finite abort, schema D1 — stands unchanged.
+
+Original (superseded) selection, per group of 64 fp32 values (exact bf16
+upcast of the pinned checkpoint):
 `scale = (max − min) / 15`, `bias = min`, both rounded to fp16 FIRST; then
 `q = clamp(round((w − bias_fp16) / scale_fp16), 0, 15)` — codes are chosen
 against the values as stored, so dequant is exactly reproducible from the

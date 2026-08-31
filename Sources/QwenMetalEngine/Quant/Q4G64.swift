@@ -100,14 +100,25 @@ public enum Q4G64 {
         public let codes: [UInt8]
     }
 
-    /// Packs one group of exactly 64 fp32 values per the D2 recipe:
-    /// `scale = (max − min) / 15`, `bias = min`, both rounded to fp16 FIRST;
-    /// codes are then chosen against the fp16 values as stored, so dequant
-    /// is exactly reproducible from the file with no hidden packer state.
+    /// Packs one group of exactly 64 fp32 values per the AMENDED D2 recipe —
+    /// zero-point-aligned selection (option A1, decided by James: DECISIONS.md
+    /// 2026-08-30 QR-1 entry, superseding the original min/max selection
+    /// after the P3-3 quality gate root-caused it):
+    ///
+    /// With group min m, max M, range R = M − m:
+    ///   z = clamp(round(−m·15/R), 0, 15)          (integer zero-point)
+    ///   s = max(M/(15−z) if z < 15, −m/z if z > 0) (both endpoints covered)
+    ///   scale = fp16(s) FIRST, then bias = fp16(−z·scale)
+    ///
+    /// so the value 0 sits on the stored grid (exactly when z·scale is
+    /// fp16-exact, else within ~2⁻¹¹·|bias| — the QR-1 fine print). Codes are
+    /// then chosen against the fp16 values AS STORED, so dequant is exactly
+    /// reproducible from the file with no hidden packer state.
     /// Degenerate group (max == min): scale = 0, all codes 0, w = bias.
     ///
-    /// Rounding pin: `round` in `q = clamp(round((w − bias)/scale), 0, 15)`
-    /// is round-half-away-from-zero — the C/Metal `round()` semantics the
+    /// Rounding pin: every `round` here (z selection and
+    /// `q = clamp(round((w − bias)/scale), 0, 15)`) is
+    /// round-half-away-from-zero — the C/Metal `round()` semantics the
     /// P3-4 GPU kernels share.
     ///
     /// `elementOffset` is the group's flat start index within the source
@@ -127,8 +138,21 @@ public enum Q4G64 {
             minValue = min(minValue, v)
             maxValue = max(maxValue, v)
         }
-        let scale = Float16((maxValue - minValue) / 15)
-        let bias = Float16(minValue)
+        let range = maxValue - minValue
+        let scale: Float16
+        let bias: Float16
+        if range == 0 {
+            scale = 0
+            bias = Float16(minValue)
+        } else {
+            let zeroPoint = min(max(
+                (-minValue * 15 / range).rounded(.toNearestOrAwayFromZero), 0), 15)
+            var stretch: Float = 0
+            if zeroPoint < 15 { stretch = max(stretch, maxValue / (15 - zeroPoint)) }
+            if zeroPoint > 0 { stretch = max(stretch, -minValue / zeroPoint) }
+            scale = Float16(stretch)
+            bias = zeroPoint == 0 ? Float16(0) : Float16(-zeroPoint * Float(scale))
+        }
         guard scale.isFinite, bias.isFinite else {
             throw Q4G64Error.groupRangeOverflow(
                 tensor: tensor, groupIndex: elementOffset / groupSize)
