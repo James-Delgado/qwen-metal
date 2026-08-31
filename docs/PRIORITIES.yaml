@@ -880,7 +880,8 @@ tasks:
   - id: QR-2
     rank: 16.16
     title: "Implement the approved recipe amendment: packer selection change + repack artifact + re-verify P3-1/P3-2 suites"
-    status: ready
+    status: in_progress
+    started_at: 2026-08-31T03:06:06Z
     depends_on: [QR-1]
     blocks: [P3-3]
     deliverable:
