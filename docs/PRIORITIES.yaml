@@ -938,8 +938,9 @@ tasks:
   - id: P3-3
     rank: 16.3
     title: "Quality gate vs mlx-lm 4-bit: tools dump extension + band-setter measurement + in-band verification"
-    status: in_progress
+    status: done
     started_at: 2026-08-30T16:16:16Z
+    completed_at: 2026-08-31T05:15:00Z
     depends_on: [P3-2, QR-2, QR-3]
     blocks: [P3-7]
     deliverable:
@@ -965,6 +966,13 @@ tasks:
       tests committed honestly red-when-artifacts-present. RE-BLOCKED on
       QR-2 (recipe amendment, decision QR-1 owner james); after repack,
       only the Swift band suite needs re-running — band.json stays valid.
+      2026-08-31 (done, IN-BAND): after QR-2 (A1: 2/3 gates, KL 1.553x)
+      and QR-3 (snap-scale), the band suite PASSES on artifact d03b3fe3…:
+      A 218/250 = 0.872 (gate 0.836), KL 0.115575 (gate 0.172375; 1.006x
+      mlx — parity), dppl 2.500193 (gate 3.720882). No gate touched
+      across the whole arc. Full record: DECISIONS.md 2026-08-30/31 P3-3
+      parts 1-2, QR-1/QR-2/QR-3 entries, and the close entry. P3-7 stays
+      blocked on P3-5/P3-6; next ready by rank is P3-4.
 
   - id: P3-4
     rank: 16.4
