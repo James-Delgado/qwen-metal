@@ -1981,3 +1981,104 @@ C (GPTQ/AWQ/codebook/g32 quality mechanisms).
   of ...? The question"). Structural assertions all pass; argmax-path
   flips are expected under a recipe change, and the committed quality
   judgment is the P3-3 band suite, not the smoke — running next.
+
+## 2026-08-31 — QR-3 DECIDED (James): D2 selection re-amended to SNAP-SCALE; A1 measured 3.5% out of band
+
+**A1 band result (the QR-2 artifact, QuantQualityGateTests release):**
+A_ours = 214/250 = 0.856 (gate ≥ 0.836: PASS), Δppl_ours = 2.985137
+(gate ≤ 3.720882: PASS), **KL_ours = 0.178458 (gate ≤ 0.172375: FAIL at
+1.553× mlx vs the allowed 1.5×)**. Gates untouched (hard rule 6);
+arbitration re-ran the same day:
+
+- The HF swap harness reproduces the Swift number EXACTLY (0.178458) —
+  measurement pipelines agree; the excess is recipe-borne. Per-prompt:
+  short 0.0950 / multi 0.1782 / code 0.0766 / non_ascii 0.0768 /
+  **chat_template 0.4657** (2.01× mlx's 0.2315) — the failure is carried
+  by one prompt class, and a class-swap on chat pins it ENTIRELY on the
+  MLP projections (swapping only MLP to mlx: 0.4657 → 0.1744; embedding
+  and attention swaps make it WORSE — our A1 beats mlx on those classes).
+- Root cause of the residual: A1 inflates the group step (up to ~50% in
+  asymmetric groups) to keep BOTH endpoints on-grid; mlx's actual stored
+  parameters (inspected on down_proj L13: z concentrated at 8–9,
+  bias = min exactly, s ≈ |edge|/round(|edge|·15/range)) show the
+  ecosystem rule keeps the step ≈ range/15 (optimal) and SNAPS the
+  dominant-|.| endpoint onto the grid, letting the far endpoint clip by
+  ≤ ~one step in rare cases. Asymmetric groups concentrate in the MLP
+  tensors — exactly the located class. An argmin-z variant of A1 was
+  tested and rejected (chat 0.4657 → only 0.4476; not the mechanism).
+- **Snap-scale emulated end-to-end** (emulator bit-faithful: reproduces
+  the A1 artifact's per-prompt KLs to 6 decimals): per-prompt KL
+  0.091766 / 0.121147 / 0.075019 / 0.058372 / 0.213670 → **overall
+  0.111995, BELOW mlx's 0.114917 (0.975×)**; agreement 219/250 — exactly
+  mlx's count. down_proj L13 RMSE 3.1365e-3 ≈ mlx stored 3.1383e-3.
+
+**Decision (James, in-conversation, after a full walk of the mechanism,
+step-size significance, why snap edges out mlx — fp16 vs bf16 scale
+storage + grid-consistent code selection — and both options):** amend the
+D2 selection to snap-scale. **Binding formulas (supersede the 2026-08-30
+QR-1 A1 selection):** per group with min m, max M, range R = M − m:
+- Degenerate (R = 0): scale = 0, bias = fp16(m), codes 0 — unchanged.
+- Else: s₀ = R/15; edge = m if |m| ≥ |M| else M (dominant-magnitude
+  endpoint); q₀ = max(round(|edge|/s₀), 1) (round half-away-from-zero,
+  the standing rounding pin; q₀ deliberately NOT clamped to 15 —
+  single-sign groups keep the fine step, zero isn't in their range);
+  s = |edge|/q₀; scale = fp16(s) FIRST; bias = fp16(k·scale) with
+  k = −q₀ when m dominates (edge at code 0) and k = q₀ − 15 when M
+  dominates (edge at code 15); codes q = clamp(round((w − bias)/scale),
+  0, 15) against the values AS STORED. Selection arithmetic is evaluated
+  in fp32 (as every prior recipe was) — the emulator that produced the
+  validation numbers above uses identical fp32 arithmetic, so q₀ ties
+  resolve the same way in both.
+- Zero sits on the stored grid for EVERY zero-straddling group (there
+  q₀ ≤ 15 always); the non-dominant endpoint may clip by |δ|·15·s₀/q₀
+  ≤ ~one step (δ = the q₀ rounding residue) on at most one extreme per
+  group. Schema D1, fp16-round-first, the fma exactness argument, and
+  all gate constants remain untouched.
+Honest accounting also recorded: the A1 proposal was validated on
+short_english only — the least step-sensitive prompt — which is how the
+covering-rule flaw slipped through; the snap validation above covers all
+250 steps.
+
+## 2026-08-31 — QR-3 landed + P3-3 CLOSED IN-BAND: all three quality gates PASS
+
+**QR-3 implementation:** Q4G64.packGroup selection replaced with the
+snap-scale formulas (red-first: the two single-sign A1 pins re-derived
+and verified failing before the change; the zero-straddling pin is
+grid-identical under both rules and stayed green by derivation). One
+hand-derived expectation was corrected to the packer's actual fp32
+arithmetic (fp32(1/15) rounds up, so the all-positive fixture's q₀ is 22,
+not the real-number 22.5→23 — the emulator agrees bit-for-bit; noted in
+the QR-3 formulas entry). Round-trip bound extended to one full step
+(clipped-endpoint term, derivation in the test comment). Quant suites:
+37 green debug, 38 green release incl. real-artifact smoke — which is
+back to " in the city of Paris, and the" on the short_english prompt.
+
+**Artifact (supersedes d073af49… / 0feaa7ce…):**
+models/qwen3-1.7b-70d244cc-q4g64.safetensors, 968,083,288 bytes, sha256
+**d03b3fe3a2a7a3ad393e42f195f790787ab746103f309545d0320c4727632fcc**;
+two consecutive packs byte-identical; tied lm_head memcmp-verified and
+stored once; 21.3 s release.
+
+**P3-3 band verification (QuantQualityGateTests, release, 255 s —
+2 tests, 0 failures) against the committed band.json band-setters:**
+- **Top-1 agreement: A_ours = 218/250 = 0.872 ≥ 0.836 — PASS**
+  (A_mlx 219/250; one argmax flip apart).
+- **Mean KL: 0.115575 nats ≤ 0.172375 — PASS with 33% margin**
+  (1.006× KL_mlx 0.114917 — parity).
+- **Δppl: 2.500193 ≤ 3.720882 — PASS with 33% margin**
+  (ppl_ours 16.496334 vs ppl_fp32 13.996141; 1.011× Δppl_mlx 2.473921).
+All gates held at the pre-committed constants — nothing was loosened at
+any point in the three-recipe arc (hard rule 6 observed throughout; the
+two intermediate failures are recorded above as bug signals that were
+fixed in the packer, exactly as the 2026-08-25 diagnosis rule
+prescribed). Real-artifact numbers sit ~3% above the fp32-emulated
+projection (KL 0.1156 vs 0.1120) — consistent with the engine-side
+≤1e-3 CPU-vs-HF divergence the emulator does not carry; comfortably
+inside the band either way.
+
+**P3-3 exit criterion (spec D6 / exit table) is MET: the packing recipe
+is in-band vs mlx-lm 4-bit on all three pre-committed metrics.** The
+oracle chain now reads: HF fp32 (byte-verified) → CPU-quant reference
+(quality-banded, this entry) → GPU-quant (P3-4/P3-5, pending). Unblocks
+nothing yet (P3-7 also needs P3-5/P3-6); next ready task by rank is
+P3-4.

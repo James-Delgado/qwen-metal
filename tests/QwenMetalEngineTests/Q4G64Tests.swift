@@ -79,14 +79,15 @@ final class Q4G64Tests: XCTestCase {
         XCTAssertEqual(g.codes[2], 15)
     }
 
-    // MARK: - Amended D2 (QR-1, DECISIONS.md 2026-08-30): zero-point alignment
+    // MARK: - Amended D2 (QR-3 snap-scale, DECISIONS.md 2026-08-31)
 
     func testZeroStraddlingGroupIsZeroPointAligned() throws {
-        // m = -1, M = 3, R = 4: z = round(15/4) = round(3.75) = 4 (half-away).
-        // s = max(3/11, 1/4) = 3/11; fp16(3/11) = 2234·2⁻¹³ = 0.272705078125.
+        // m = -1, M = 3, R = 4: edge = M (|3| > |-1|), s0 = 4/15,
+        // q0 = round(3/s0) = round(11.25) = 11 (half-away), s = 3/11;
+        // fp16(3/11) = 2234·2⁻¹³ = 0.272705078125; k = q0-15 = -4 ->
         // b = -4·s16 = -1117·2⁻¹⁰ = -1.0908203125 — EXACTLY representable in
         // fp16, so grid-zero is exact: the 62 zero elements must code to the
-        // zero-point and dequant to 0.0 bit-exactly (the whole point of A1).
+        // zero-point (15 - q0 = 4) and dequant to 0.0 bit-exactly.
         var values = [Float](repeating: 0, count: 64)
         values[0] = -1
         values[63] = 3
@@ -94,45 +95,60 @@ final class Q4G64Tests: XCTestCase {
         XCTAssertEqual(g.scale, Float16(0.272705078125))
         XCTAssertEqual(g.bias, Float16(-1.0908203125))
         XCTAssertEqual(g.codes[0], 0)   // m: (-1 + 1.0908)/s = 0.333 -> 0
-        XCTAssertEqual(g.codes[63], 15) // M: 15.0009 -> 15
+        XCTAssertEqual(g.codes[63], 15) // M: 15.0009 -> 15 (edge on grid)
         for i in 1...62 {
             XCTAssertEqual(g.codes[i], 4, "zero element \(i) must sit on the zero-point")
             XCTAssertEqual(
                 Q4G64.dequant(code: UInt32(g.codes[i]), scale: g.scale, bias: g.bias),
-                0.0, "grid-zero must reconstruct exactly here (b16 = -z·s16 is fp16-exact)")
+                0.0, "grid-zero must reconstruct exactly here (b16 = -4·s16 is fp16-exact)")
         }
     }
 
-    func testAllPositiveGroupAnchorsGridAtZero() throws {
-        // m = 0.5 > 0 -> z clamps to 0, bias = +0 exactly, s = M/15.
-        // Grid runs [0, M]; the min codes interior (5), not to 0.
+    func testAllPositiveGroupSnapsMaxOntoGrid() throws {
+        // m = 0.5, M = 1.5 (dominant), R = 1. In the packer's fp32
+        // arithmetic (matching the validated emulator bit-for-bit):
+        // s0 = fp32(1/15) rounds UP, so |edge|/s0 = 22.4999988 -> q0 = 22
+        // (NOT the real-number 22.5; q0 > 15 is legal — zero is outside a
+        // single-sign group's range). s = 1.5/22; fp16(s) = 1117·2⁻¹⁴ =
+        // 0.06817626953125; k = q0-15 = 7 -> bias = fp16(7·s16) =
+        // fp16(0.47723388671875) = 0.477294921875 (POSITIVE; ties-to-even
+        // at exactly half an ulp). Step stays ~R/15 (0.068 vs A1's
+        // covering 0.1); the min end clips to the grid bottom.
         var values = [Float](repeating: 1.0, count: 64)
         values[0] = 0.5
         values[63] = 1.5
         let g = try group(values)
-        XCTAssertEqual(g.scale, Float16(1.5 / 15))
-        XCTAssertEqual(g.bias, 0)
-        XCTAssertEqual(g.bias.sign, .plus, "z = 0 pins bias to +0, not -0")
-        XCTAssertEqual(g.codes[0], 5)   // 0.5/0.0999756 = 5.001 -> 5
-        XCTAssertEqual(g.codes[63], 15)
+        XCTAssertEqual(g.scale, Float16(0.06817626953125))
+        XCTAssertEqual(g.bias, Float16(0.477294921875))
+        XCTAssertEqual(g.codes[0], 0)   // clipped min: (0.5-b)/s = 0.333 -> 0
+        for i in 1...62 {
+            XCTAssertEqual(g.codes[i], 8, "1.0 sits at 7.667 -> 8")
+        }
+        XCTAssertEqual(g.codes[63], 15) // edge M at code 15
+        // Clip error bounded by one step (QR-3 entry: |δ|·15·s0/q0).
+        let minErr = abs(Q4G64.dequant(code: 0, scale: g.scale, bias: g.bias) - 0.5)
+        XCTAssertLessThanOrEqual(minErr, Float(g.scale))
     }
 
-    func testAllNegativeGroupAnchorsGridTopNearZero() throws {
-        // m = -2, M = -1 -> z clamps to 15, s = -m/15, bias = fp16(-15·s16).
-        // Grid top (code 15) lands within the documented fp16-bias slack of
-        // zero (QR-1 fine print: |top| <= ~2⁻¹¹·|bias|), NOT at M.
+    func testAllNegativeGroupSnapsMinAndKeepsOptimalStep() throws {
+        // m = -2 (dominant), M = -1, R = 1: s0 = 1/15, q0 = round(30) = 30,
+        // s = 2/30 = 1/15 -> s16 = fp16(1/15) = 0.066650390625 — the OPTIMAL
+        // step (A1 forced 2/15 here, 2x coarser, to put zero on the grid;
+        // zero is not in an all-negative group's range, so snap keeps the
+        // fine grid). bias = fp16(-30·s16) = fp16(-1.99951171875) -> -2.0
+        // (ties-to-even at 2047.5 ulps); edge m lands at code 0.
         var values = [Float](repeating: -1.0, count: 64)
         values[0] = -2
         let g = try group(values)
-        XCTAssertEqual(g.scale, Float16(0.13330078125)) // fp16(2/15)
-        XCTAssertEqual(g.bias, Float16(-2.0))           // fp16(-15·s16) rounds to -2
+        XCTAssertEqual(g.scale, Float16(0.066650390625))
+        XCTAssertEqual(g.bias, Float16(-2.0))
         XCTAssertEqual(g.codes[0], 0)
         for i in 1...63 {
-            XCTAssertEqual(g.codes[i], 8, "-1 sits at (1.0/s16) = 7.5018 -> 8")
+            XCTAssertEqual(g.codes[i], 15, "-1 sits at 15.0037 -> 15")
         }
-        let top = Q4G64.dequant(code: 15, scale: g.scale, bias: g.bias)
-        XCTAssertLessThanOrEqual(abs(top), 2 * Float(0x1p-11) * abs(Float(g.bias)),
-                                 "grid top must be zero-anchored within fp16 bias slack")
+        // Grid top approximates M with the fine step: exact fp32 value.
+        XCTAssertEqual(Q4G64.dequant(code: 15, scale: g.scale, bias: g.bias),
+                       -1.000244140625)
     }
 
     // MARK: - Edge case 3: degenerate group
@@ -173,11 +189,15 @@ final class Q4G64Tests: XCTestCase {
 
     // MARK: - Edge cases 4/5: negative-heavy + round-trip bound + determinism
 
-    /// s/2 (half quantization step) + clamp-edge slack from rounding scale
-    /// to fp16 (≤ 15·s·2⁻¹¹) + bias fp16 rounding (≤ ulp/2) + fp32 noise.
+    /// One full step s: interior values round within s/2, and under the
+    /// QR-3 snap-scale selection the NON-dominant endpoint may clip by up
+    /// to |δ|·15·s0/q0 ≤ ~s (δ = the q0 rounding residue; q0 ≥ 8 always
+    /// since the dominant endpoint is ≥ half the range). Plus fp16 grid
+    /// slack: scale rounding (≤ 15·s·2⁻¹¹) + bias rounding (≤ ulp/2) +
+    /// fp32 noise.
     private func roundTripBound(_ g: Q4G64.Group) -> Float {
         let s = Float(g.scale)
-        return s / 2 + 15 * s * Float(0x1p-11) + Float(g.bias.ulp) / 2 + 2e-6
+        return s + 15 * s * Float(0x1p-11) + Float(g.bias.ulp) / 2 + 2e-6
     }
 
     func testNegativeHeavyGroupRoundTrips() throws {

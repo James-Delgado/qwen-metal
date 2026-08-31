@@ -86,15 +86,18 @@ tag; loaders verify revision like SharedCheckpoint does.
 
 ### D2. Packing recipe + offline Swift packer
 
-> **AMENDED 2026-08-30 (QR-1, decided by James — binding record: DECISIONS.md
-> "QR-1 DECIDED" entry):** the (scale, bias) selection below was superseded by
-> zero-point-aligned selection after the P3-3 quality gate root-caused the
-> original min/max recipe (out-of-band vs mlx-4bit; zero off-grid ⇒
-> group-correlated near-zero residuals). Amended selection: z =
-> clamp(round(−min·15/range), 0, 15); s = max(max/(15−z) if z<15, −min/z if
-> z>0); scale = fp16(s) first, bias = fp16(−z·scale). Everything else in this
-> section — fp16-round-before-code-selection, rounding pin, degenerate group,
-> non-finite abort, schema D1 — stands unchanged.
+> **AMENDED — current selection is SNAP-SCALE (2026-08-31 QR-3, decided by
+> James; binding record: DECISIONS.md "QR-3 DECIDED" entry):** s₀ = range/15;
+> edge = the dominant-|.| endpoint (min if |min| ≥ |max| else max);
+> q₀ = max(round(|edge|/s₀), 1); s = |edge|/q₀; scale = fp16(s) first;
+> bias = fp16(k·scale) with k = −q₀ (min dominant) or q₀ − 15 (max dominant).
+> Zero sits on the stored grid for every zero-straddling group; the step stays
+> ~range/15; the non-dominant endpoint may clip by ≤ ~one step.
+> History: the original min/max selection below was first superseded by the
+> A1 covering rule (2026-08-30 QR-1 — zero-aligned but step-inflating in
+> asymmetric groups; measured 3.5% out of band on KL), then by snap-scale.
+> Everything else in this section — fp16-round-before-code-selection, rounding
+> pin, degenerate group, non-finite abort, schema D1 — stands unchanged.
 
 Original (superseded) selection, per group of 64 fp32 values (exact bf16
 upcast of the pinned checkpoint):

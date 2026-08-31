@@ -101,22 +101,28 @@ public enum Q4G64 {
     }
 
     /// Packs one group of exactly 64 fp32 values per the AMENDED D2 recipe —
-    /// zero-point-aligned selection (option A1, decided by James: DECISIONS.md
-    /// 2026-08-30 QR-1 entry, superseding the original min/max selection
-    /// after the P3-3 quality gate root-caused it):
+    /// SNAP-SCALE selection (decided by James: DECISIONS.md 2026-08-31 QR-3
+    /// entry, superseding the 2026-08-30 A1 covering rule after the P3-3
+    /// band measured A1's step inflation in asymmetric groups):
     ///
     /// With group min m, max M, range R = M − m:
-    ///   z = clamp(round(−m·15/R), 0, 15)          (integer zero-point)
-    ///   s = max(M/(15−z) if z < 15, −m/z if z > 0) (both endpoints covered)
-    ///   scale = fp16(s) FIRST, then bias = fp16(−z·scale)
+    ///   s0   = R/15                       (the optimal covering step)
+    ///   edge = m if |m| ≥ |M| else M      (dominant-magnitude endpoint)
+    ///   q0   = max(round(|edge|/s0), 1)   (integer steps from zero to edge;
+    ///                                      deliberately NOT clamped to 15)
+    ///   s    = |edge|/q0                  (≈ s0, snapped)
+    ///   scale = fp16(s) FIRST; bias = fp16(k·scale), k = −q0 (m dominant,
+    ///   edge at code 0) or q0 − 15 (M dominant, edge at code 15)
     ///
-    /// so the value 0 sits on the stored grid (exactly when z·scale is
-    /// fp16-exact, else within ~2⁻¹¹·|bias| — the QR-1 fine print). Codes are
-    /// then chosen against the fp16 values AS STORED, so dequant is exactly
-    /// reproducible from the file with no hidden packer state.
+    /// The step stays within ~s0/(2·q0) of optimal, the dominant endpoint
+    /// sits ON the grid, and zero is a grid value for every zero-straddling
+    /// group (there q0 ≤ 15 always). The non-dominant endpoint may clip by
+    /// up to ~one step. Codes are then chosen against the fp16 values AS
+    /// STORED, so dequant is exactly reproducible from the file with no
+    /// hidden packer state.
     /// Degenerate group (max == min): scale = 0, all codes 0, w = bias.
     ///
-    /// Rounding pin: every `round` here (z selection and
+    /// Rounding pin: every `round` here (q0 selection and
     /// `q = clamp(round((w − bias)/scale), 0, 15)`) is
     /// round-half-away-from-zero — the C/Metal `round()` semantics the
     /// P3-4 GPU kernels share.
@@ -145,13 +151,14 @@ public enum Q4G64 {
             scale = 0
             bias = Float16(minValue)
         } else {
-            let zeroPoint = min(max(
-                (-minValue * 15 / range).rounded(.toNearestOrAwayFromZero), 0), 15)
-            var stretch: Float = 0
-            if zeroPoint < 15 { stretch = max(stretch, maxValue / (15 - zeroPoint)) }
-            if zeroPoint > 0 { stretch = max(stretch, -minValue / zeroPoint) }
-            scale = Float16(stretch)
-            bias = zeroPoint == 0 ? Float16(0) : Float16(-zeroPoint * Float(scale))
+            let step0 = range / 15
+            let minDominant = -minValue >= maxValue
+            let edgeMagnitude = minDominant ? -minValue : maxValue
+            let steps = max(
+                (edgeMagnitude / step0).rounded(.toNearestOrAwayFromZero), 1)
+            scale = Float16(edgeMagnitude / steps)
+            let biasSteps = minDominant ? -steps : steps - 15
+            bias = Float16(biasSteps * Float(scale))
         }
         guard scale.isFinite, bias.isFinite else {
             throw Q4G64Error.groupRangeOverflow(

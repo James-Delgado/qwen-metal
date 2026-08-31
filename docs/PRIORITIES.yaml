@@ -909,8 +909,9 @@ tasks:
   - id: QR-3
     rank: 16.17
     title: "Amend D2 selection to snap-scale (decision James 2026-08-31) + repack + re-verify"
-    status: in_progress
+    status: done
     started_at: 2026-08-31T04:59:01Z
+    completed_at: 2026-08-31T05:12:17Z
     depends_on: [QR-2]
     blocks: [P3-3]
     deliverable:
@@ -926,11 +927,18 @@ tasks:
       end-to-end: KL 0.111995 (beats mlx 0.114917), agreement 219/250 ==
       mlx. Decision by James in-conversation 2026-08-31 (option 1);
       binding formulas in the DECISIONS.md 2026-08-31 amendment entry.
+      2026-08-31 (done): snap-scale landed in Q4G64.packGroup (red-first;
+      one hand-derived pin corrected to the packer's fp32 arithmetic —
+      emulator agrees bit-for-bit); round-trip bound extended with the
+      clipped-endpoint term; artifact repacked deterministically, sha256
+      d03b3fe3… (supersedes d073af49…); quant suites 38 green release
+      incl. smoke (back to "…city of Paris…"). See DECISIONS.md
+      2026-08-31 QR-3-landed entry. P3-3 flipped to ready.
 
   - id: P3-3
     rank: 16.3
     title: "Quality gate vs mlx-lm 4-bit: tools dump extension + band-setter measurement + in-band verification"
-    status: blocked
+    status: ready
     started_at: 2026-08-30T16:16:16Z
     depends_on: [P3-2, QR-2, QR-3]
     blocks: [P3-7]
