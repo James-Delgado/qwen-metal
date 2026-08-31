@@ -906,12 +906,32 @@ tasks:
       D2 carries the dated AMENDED note. See DECISIONS.md QR-2 entry.
       P3-3 flipped back to ready.
 
+  - id: QR-3
+    rank: 16.17
+    title: "Amend D2 selection to snap-scale (decision James 2026-08-31) + repack + re-verify"
+    status: ready
+    depends_on: [QR-2]
+    blocks: [P3-3]
+    deliverable:
+      file: "engine package (Quant module) + models/ packed artifact (new sha256 -> DECISIONS)"
+      tests: "A1 selection pins re-derived red-first to snap-scale; round-trip bound extended with the clipped-endpoint term; P3-1/P3-2 suites re-green; determinism re-verified"
+    est_complexity: small
+    notes: |
+      Seeded 2026-08-31: the QR-1 A1 formulas measured 3.5% out of band on
+      KL (0.178458 vs gate 0.172375; agreement and dppl passed). Arbitration
+      localized the residual to step-size inflation in asymmetric groups
+      (A1 covers both endpoints; ecosystem rule keeps step ~range/15 and
+      snaps the dominant endpoint onto the grid). Snap-scale emulated
+      end-to-end: KL 0.111995 (beats mlx 0.114917), agreement 219/250 ==
+      mlx. Decision by James in-conversation 2026-08-31 (option 1);
+      binding formulas in the DECISIONS.md 2026-08-31 amendment entry.
+
   - id: P3-3
     rank: 16.3
     title: "Quality gate vs mlx-lm 4-bit: tools dump extension + band-setter measurement + in-band verification"
-    status: in_progress
+    status: blocked
     started_at: 2026-08-30T16:16:16Z
-    depends_on: [P3-2, QR-2]
+    depends_on: [P3-2, QR-2, QR-3]
     blocks: [P3-7]
     deliverable:
       file: "tools/ (dump_mlx extension, ppl slice fixture, pinned dataset revision in pins.py) + engine tests (metric computation)"
