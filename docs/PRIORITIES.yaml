@@ -1008,7 +1008,8 @@ tasks:
   - id: P3-5
     rank: 16.5
     title: "GPU-quant pipeline wiring + Tier-M/E suites vs CPU-quant + free-run report + CLI/app packed plumbing"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-02T22:36:32Z
     depends_on: [P3-2, P3-4]
     blocks: [P3-7]
     deliverable:
