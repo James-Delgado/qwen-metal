@@ -977,8 +977,9 @@ tasks:
   - id: P3-4
     rank: 16.4
     title: "Fused GPU kernels: dequant-tile dump + fused dequant-matvec + embedding-gather-dequant + exact/Tier-K tests"
-    status: in_progress
+    status: done
     started_at: 2026-09-02T18:46:45Z
+    completed_at: 2026-09-02T22:12:17Z
     depends_on: [P3-1]
     blocks: [P3-5, P3-6]
     deliverable:
@@ -991,11 +992,23 @@ tasks:
       (simdgroup reductions, vectorized loads) — but only after its
       correctness tests pass, and every optimization iteration re-passes
       them (hard rule 3). Attention/norm/swiglu/residual kernels untouched.
+      2026-09-02 (done): landed as Metal/QuantKernels.swift (4 kernels:
+      dequant_tile_f32, embedding_gather_q4_f16, matvec_q4_f16/f32;
+      triplet bound as buffer+byte-offset pairs so P3-5 binds one
+      GPUWeights buffer three times) + QuantKernelTests (13). ALL
+      pre-committed gates held first run: layer-1 EXACT bitwise
+      (adversarial fixtures + real-artifact q_proj vs dequantMatrix
+      through mmap GPUWeights), Tier K matvec vs sgemm-over-dequant
+      (hard rule 8). Nibble-swap mutation check confirmed test teeth.
+      Kernel naive first (optimization license activates at P3-6 with
+      suites re-passed per iteration). Suite minus CPU logit gate,
+      RELEASE: 292 tests, 1 skip (free-run opt-in), 0 failures.
+      See DECISIONS.md 2026-09-02 P3-4 entry. Unblocks P3-5, P3-6.
 
   - id: P3-5
     rank: 16.5
     title: "GPU-quant pipeline wiring + Tier-M/E suites vs CPU-quant + free-run report + CLI/app packed plumbing"
-    status: blocked
+    status: ready
     depends_on: [P3-2, P3-4]
     blocks: [P3-7]
     deliverable:
@@ -1018,7 +1031,7 @@ tasks:
   - id: P3-6
     rank: 16.6
     title: "Dequant-matvec bandwidth microbench (one token's matvecs, aggregate + per-shape GB/s) + Mac sanity row"
-    status: blocked
+    status: ready
     depends_on: [P3-4]
     blocks: [P3-7]
     deliverable:
@@ -1179,6 +1192,11 @@ tasks:
       `swift test -c release`; document a --filter fast-path; or hoist the
       per-step Double conversions in the test helper. MUST NOT touch gates,
       fixtures, or model code readability. Filler: never blocks the chain.
+      2026-09-02 (from P3-4): same species now includes the P3-3 band
+      suite — a debug run stalled >40 CPU-min inside
+      testPplSliceDeltaWithinBand (4096-token CPU-quant forward at
+      -Onone); P3-4 verified in release instead (QR-3 precedent). Any
+      DEV-1 fix should cover the band suite alongside the logit suite.
   - id: DOC-1
     rank: 26
     title: "Regenerate architecture PDF (stale since Phase 0 exit v1.3)"

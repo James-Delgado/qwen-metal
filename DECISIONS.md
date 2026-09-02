@@ -2082,3 +2082,54 @@ oracle chain now reads: HF fp32 (byte-verified) → CPU-quant reference
 (quality-banded, this entry) → GPU-quant (P3-4/P3-5, pending). Unblocks
 nothing yet (P3-7 also needs P3-5/P3-6); next ready task by rank is
 P3-4.
+
+## 2026-09-02 — P3-4 landed: fused q4g64 GPU kernels; layer-1 exact + Tier-K gates held first run
+
+Landed `Sources/QwenMetalEngine/Metal/QuantKernels.swift` (spec D4) +
+`QuantKernelTests` (13 tests): the dequant-tile dump (oracle layer 1,
+test support), fused dequant-matvec (fp16- and fp32-store variants), and
+embedding-gather-dequant. Dequant is in registers via the pinned
+`float(q)·float(scale)+float(bias)` (hard rule 1; single-rounding
+argument in the 2026-08-25 gates entry). Kernels take (buffer, byte
+offset) per triplet tensor — synthetic tests bind three small buffers,
+P3-5 binds the whole-checkpoint `GPUWeights` buffer three times; wrappers
+convert to element offsets and reject misalignment (.q mod 4,
+scales/biases mod 2), non-multiple-of-64 in-dims, short buffers, and
+out-of-range token ids pre-dispatch.
+
+**Gate outcomes (all pre-committed 2026-08-25, none touched):**
+
+- Layer 1 EXACT: GPU tile dump bitwise == CPU dequant on hand-built
+  adversarial fixtures (asymmetric nibble pattern, two-group boundary at
+  elements 63/64/65, per-row group indexing, degenerate scale=0, fp16
+  max-normal/min-normal/SUBNORMAL scale+bias, negative-heavy) and on
+  packer-produced random matrices. Embedding-gather fp16 store bitwise
+  == fp16(exact fp32) including rows whose dequant overflows fp16 to
+  ±inf on store. Real-artifact check: layers.0 q_proj [2048, 2048] from
+  the pinned packed artifact (d03b3fe3…) dequants bitwise-identical to
+  `PackedCheckpoint.dequantMatrix` through the mmap GPUWeights buffer at
+  real file offsets.
+- Layer 2 Tier K (Phase 2 constant reused, max(2⁻⁹·M, 2⁻¹¹)): fused
+  matvec vs BLAS.sgemm over the identical dequant fp32 weights (hard
+  rule 8) — odd out-dims, both store variants, near-zero floor case,
+  tied-embedding-as-lm_head structural case (edge 10), and the real
+  q_proj shape. All held unmodified first run.
+- Test-teeth check: deliberately swapping the kernel's nibble read to
+  high-first failed the suite; reverting re-greened it (red evidence for
+  an all-new exact suite).
+
+Kernel is deliberately naive (one thread per output element, P2-2
+shape): hard rule 3 puts correctness first; spec D4's optimization
+license (simdgroup reductions, vectorized loads) is exercised against
+the P3-6 microbench with these suites re-passed per iteration.
+
+Verification: full suite minus the CPU logit gate, **release mode: 292
+tests, 1 skipped (the QWEN_FREE_RUN_REPORT opt-in harness), 0
+failures** (690 s). Release chosen deliberately: a debug-mode run
+stalled >40 CPU-min inside P3-3's ppl-slice band test (the DEV-1/P3-2
+wall-time species — 4096-token CPU-quant forward at -Onone); noted on
+DEV-1 in the backlog rather than seeded as a new task. Gates are
+build-mode-independent (exact == and Tier K on fp32 values).
+
+No new pins, no schema changes, no judgment-derived constants
+introduced. Unblocks P3-5 (pipeline wiring) and P3-6 (microbench).
