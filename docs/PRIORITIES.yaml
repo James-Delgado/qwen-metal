@@ -977,7 +977,8 @@ tasks:
   - id: P3-4
     rank: 16.4
     title: "Fused GPU kernels: dequant-tile dump + fused dequant-matvec + embedding-gather-dequant + exact/Tier-K tests"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-02T18:46:45Z
     depends_on: [P3-1]
     blocks: [P3-5, P3-6]
     deliverable:
