@@ -14,6 +14,15 @@ public enum WeightsResidency: String, CaseIterable, Sendable {
     case wiredCopy
 }
 
+/// Which weight encoding the GPU pipeline consumes (P3-5): the Phase 2 bf16
+/// checkpoint (register bit-shift upcast) or the Phase 3 q4g64 packed
+/// triplets (register dequant — hard rule 1 either way). Both ride the same
+/// whole-file `GPUWeights` buffer; the format decides which kernels bind it.
+public enum WeightsFormat: String, CaseIterable, Sendable {
+    case bf16
+    case q4g64
+}
+
 /// GPU residency for the whole checkpoint (P2-1, spec D1): ONE `MTLBuffer`
 /// over the raw safetensors bytes, plus per-tensor byte offsets from the
 /// parsed header index. Kernels read weights as 16-bit words at

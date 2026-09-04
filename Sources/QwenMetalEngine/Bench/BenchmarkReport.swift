@@ -21,6 +21,9 @@ public struct BenchmarkReport: Sendable {
     /// Operator-entered cold/warm annotation; empty renders a placeholder.
     public var coldOrWarmNote: String
     public var residency: WeightsResidency
+    /// Which weight encoding produced the row (P3-5): Phase 2 bf16 or the
+    /// Phase 3 q4g64 packed artifact — rows must record it.
+    public var weightsFormat: WeightsFormat
     public var promptName: String
     public var promptTokenCount: Int
     public var mode: Mode
@@ -35,7 +38,8 @@ public struct BenchmarkReport: Sendable {
     public init(
         dateStamp: String, deviceLabel: String, osVersion: String,
         batteryHealthNote: String, coldOrWarmNote: String,
-        residency: WeightsResidency, promptName: String,
+        residency: WeightsResidency, weightsFormat: WeightsFormat = .bf16,
+        promptName: String,
         promptTokenCount: Int, mode: Mode,
         burst: GenerationMetrics? = nil,
         sustained: SustainedLoopResult? = nil,
@@ -47,6 +51,7 @@ public struct BenchmarkReport: Sendable {
         self.batteryHealthNote = batteryHealthNote
         self.coldOrWarmNote = coldOrWarmNote
         self.residency = residency
+        self.weightsFormat = weightsFormat
         self.promptName = promptName
         self.promptTokenCount = promptTokenCount
         self.mode = mode
@@ -57,12 +62,17 @@ public struct BenchmarkReport: Sendable {
 
     public func exportText() -> String {
         var lines: [String] = []
-        lines.append("qwen-metal Phase 2 row export (PROVISIONAL)")
+        let phase = weightsFormat == .bf16 ? "Phase 2" : "Phase 3"
+        lines.append("qwen-metal \(phase) row export (PROVISIONAL)")
         lines.append("date: \(dateStamp)")
         lines.append("device: \(deviceLabel) (iOS \(osVersion))")
         lines.append("battery health: \(orPlaceholder(batteryHealthNote))")
+        let engineDescription = weightsFormat == .bf16
+            ? "naive fp16 GPU"
+            : "q4g64 fused-dequant GPU"
         lines.append(
-            "engine: qwen-metal naive fp16 GPU — residency \(residency.rawValue)")
+            "engine: qwen-metal \(engineDescription) — weights "
+                + "\(weightsFormat.rawValue), residency \(residency.rawValue)")
         lines.append("prompt: \(promptName) (\(promptTokenCount) prompt tokens)")
         lines.append("mode: \(mode.rawValue) | cold/warm: \(orPlaceholder(coldOrWarmNote))")
         lines.append(

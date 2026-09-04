@@ -3,8 +3,8 @@ import UIKit
 import QwenMetalEngine
 
 /// D8 benchmark screen: runs the pinned protocol (burst decode-essay,
-/// sustained 5-min regenerate loop), residency mmap/wired toggle, and
-/// displays + exports the row fields. The prompt picker on burst also
+/// sustained 5-min regenerate loop), weights bf16/q4g64 toggle (P3-5),
+/// residency mmap/wired toggle, and displays + exports the row fields. The prompt picker on burst also
 /// serves the prefill row (prefill-summarize — prompts/README roles).
 struct BenchmarkView: View {
     @EnvironmentObject private var model: AppModel
@@ -17,6 +17,16 @@ struct BenchmarkView: View {
         NavigationStack {
             Form {
                 Section("Engine") {
+                    Picker("Weights", selection: $model.weightsFormat) {
+                        ForEach(WeightsFormat.allCases, id: \.self) {
+                            Text($0.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(model.isRunning || model.isLoading)
+                    .onChange(of: model.weightsFormat) {
+                        model.weightsFormatChanged()
+                    }
                     Picker("Residency", selection: $model.residency) {
                         ForEach(WeightsResidency.allCases, id: \.self) {
                             Text($0.rawValue)

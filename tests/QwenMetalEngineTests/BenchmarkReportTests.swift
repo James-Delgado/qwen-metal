@@ -79,6 +79,29 @@ final class BenchmarkReportTests: XCTestCase {
         XCTAssertTrue(text.contains("Xcode gauge is the metric of record"))
     }
 
+    // MARK: - (P3-5) rows record the weights format
+
+    func testDefaultExportIsBF16Phase2() throws {
+        let text = report(
+            mode: .burst, burst: syntheticMetrics(tokens: 64)).exportText()
+        XCTAssertTrue(text.contains("Phase 2 row export"))
+        XCTAssertTrue(text.contains("weights bf16"))
+        XCTAssertTrue(text.contains("naive fp16 GPU"))
+    }
+
+    func testQ4G64ExportRecordsFormatAndPhase() throws {
+        let text = BenchmarkReport(
+            dateStamp: "2026-09-02", deviceLabel: "iPhone 15 Pro",
+            osVersion: "19.0", batteryHealthNote: "88%",
+            coldOrWarmNote: "warm", residency: .mmap, weightsFormat: .q4g64,
+            promptName: "decode-essay", promptTokenCount: 84, mode: .burst,
+            burst: syntheticMetrics(tokens: 64)).exportText()
+        XCTAssertTrue(text.contains("Phase 3 row export"))
+        XCTAssertTrue(text.contains("weights q4g64"))
+        XCTAssertTrue(text.contains("q4g64 fused-dequant GPU"))
+        XCTAssertTrue(text.contains("residency mmap"))
+    }
+
     func testBurstExportLabelsWindowUnavailableBelow512() throws {
         let text = report(
             mode: .burst, burst: syntheticMetrics(tokens: 64)).exportText()

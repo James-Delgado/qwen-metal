@@ -13,12 +13,14 @@ import QwenMetalEngine
 private let contextCap = 4096
 
 private let generateUsage = """
-usage: qwen-metal-cli generate --model-dir <dir> --prompt "<text>" [--max-tokens N] [--backend cpu|gpu]
+usage: qwen-metal-cli generate --model-dir <dir> --prompt "<text>" [--max-tokens N] [--backend cpu|gpu] [--weights bf16|q4g64]
   --model-dir   directory with exactly one .safetensors checkpoint,
                 config.json, tokenizer.json, tokenizer_config.json
   --prompt      non-empty prompt text
   --max-tokens  max new tokens to generate (default 64)
   --backend     cpu (fp32 reference, default) or gpu (Metal fp16 + KV cache)
+  --weights     bf16 (default) or q4g64 (the packed 4-bit artifact — needs a
+                *-q4g64.safetensors file beside the checkpoint)
 """
 
 private func printStderr(_ message: String) {
@@ -41,6 +43,7 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
     var prompt: String?
     var maxTokens = 64
     var backend = Backend.cpu
+    var weightsFormat = WeightsFormat.bf16
 
     var index = 0
     while index < arguments.count {
@@ -62,6 +65,11 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
                 return usageError("--backend must be 'cpu' or 'gpu', got '\(value)'")
             }
             backend = parsed
+        case "--weights":
+            guard let parsed = WeightsFormat(rawValue: value) else {
+                return usageError("--weights must be 'bf16' or 'q4g64', got '\(value)'")
+            }
+            weightsFormat = parsed
         default:
             return usageError("unknown flag '\(flag)'")
         }
@@ -78,29 +86,56 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
         let config = try ModelConfig.load(path: directory.configURL.path)
         let contextLimit = min(contextCap, config.maxPositionEmbeddings)
 
-        printStderr("loading checkpoint \(directory.checkpointURL.lastPathComponent) ...")
-        let loadStart = Date()
-        let checkpoint = try SafetensorsFile(path: directory.checkpointURL.path)
+        // P3-5: q4g64 resolves the packed artifact (clear missing-file error
+        // from requirePackedCheckpoint); bf16 keeps the Phase 2 path and its
+        // byte-stable output.
         let model: any NextTokenLogitsSource
         var gpuModel: GPUModel?
-        switch backend {
-        case .cpu:
-            model = try QwenModel(
-                checkpoint: checkpoint, config: config, maxSequenceLength: contextLimit)
-        case .gpu:
-            // A machine without Metal fails here with MetalHarnessError
-            // .noDevice — a clear error, not a crash (spec edge case 10).
-            let metal = try MetalContext()
-            let gpu = try GPUModel(
-                checkpoint: checkpoint, config: config, context: metal,
-                maxContext: contextLimit)
-            model = gpu
-            gpuModel = gpu
+        let loadStart: Date
+        switch weightsFormat {
+        case .bf16:
+            printStderr("loading checkpoint \(directory.checkpointURL.lastPathComponent) ...")
+            loadStart = Date()
+            let checkpoint = try SafetensorsFile(path: directory.checkpointURL.path)
+            switch backend {
+            case .cpu:
+                model = try QwenModel(
+                    checkpoint: checkpoint, config: config, maxSequenceLength: contextLimit)
+            case .gpu:
+                // A machine without Metal fails here with MetalHarnessError
+                // .noDevice — a clear error, not a crash (spec edge case 10).
+                let metal = try MetalContext()
+                let gpu = try GPUModel(
+                    checkpoint: checkpoint, config: config, context: metal,
+                    maxContext: contextLimit)
+                model = gpu
+                gpuModel = gpu
+            }
+        case .q4g64:
+            let packedURL = try directory.requirePackedCheckpoint()
+            printStderr("loading packed checkpoint \(packedURL.lastPathComponent) ...")
+            loadStart = Date()
+            let packed = try PackedCheckpoint(path: packedURL.path)
+            switch backend {
+            case .cpu:
+                // The CPU-quant reference (phase-3.md D3): fp32 dequant
+                // materialization through the frozen CPU model.
+                model = try QwenModel(
+                    weights: packed, config: config, maxSequenceLength: contextLimit)
+            case .gpu:
+                let metal = try MetalContext()
+                let gpu = try GPUModel(
+                    packed: packed, config: config, context: metal,
+                    maxContext: contextLimit)
+                model = gpu
+                gpuModel = gpu
+            }
         }
         let tokenizer = try await TextTokenizer(modelFolder: directory.directoryURL)
         printStderr(String(
-            format: "loaded in %.1fs (backend: %@)",
-            Date().timeIntervalSince(loadStart), backend.rawValue))
+            format: "loaded in %.1fs (backend: %@%@)",
+            Date().timeIntervalSince(loadStart), backend.rawValue,
+            weightsFormat == .bf16 ? "" : ", weights: q4g64"))
 
         let promptIds = tokenizer.encode(prompt)
         // Engine-owned stop set (phase-2.md D7): config.json ∪ tokenizer ∪
@@ -131,9 +166,13 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
         let decodeSeconds = Date().timeIntervalSince(decodeStart)
 
         print(tokenizer.decode(generated, skipSpecialTokens: true))
-        let backendNote = backend == .cpu
-            ? "CPU reference — no KV cache"
-            : "GPU fp16 + KV cache, naive kernels"
+        let backendNote: String
+        switch (backend, weightsFormat) {
+        case (.cpu, .bf16): backendNote = "CPU reference — no KV cache"
+        case (.cpu, .q4g64): backendNote = "CPU-quant reference — no KV cache"
+        case (.gpu, .bf16): backendNote = "GPU fp16 + KV cache, naive kernels"
+        case (.gpu, .q4g64): backendNote = "GPU q4g64 + KV cache, fused dequant kernels"
+        }
         printStderr(String(
             format: "%d prompt tokens, %d generated in %.1fs (%.2f tok/s, %@)",
             promptIds.count, generated.count, decodeSeconds,

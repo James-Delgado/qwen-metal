@@ -1008,8 +1008,9 @@ tasks:
   - id: P3-5
     rank: 16.5
     title: "GPU-quant pipeline wiring + Tier-M/E suites vs CPU-quant + free-run report + CLI/app packed plumbing"
-    status: in_progress
+    status: done
     started_at: 2026-09-02T22:36:32Z
+    completed_at: 2026-09-04T04:43:19Z
     depends_on: [P3-2, P3-4]
     blocks: [P3-7]
     deliverable:
@@ -1028,6 +1029,18 @@ tasks:
       across the live oracle suites (SharedCheckpoint pattern) —
       materialization measured 2.6 s release / 42.7 s debug per instance
       (DECISIONS.md 2026-08-29 P3-2 entry).
+      2026-09-04 (done): landed as GPUModel MatrixRef dual-format core
+      (init(packed:); QuantKernels for embedding + all matvecs; bf16 norms
+      on the Phase 2 kernel) + CLI --weights bf16|q4g64 + ModelDirectory
+      packed discovery + app weights toggle (DEFAULT q4g64) +
+      BenchmarkReport weights field. ALL Tier-M/E gates held first run
+      (live CPU-quant oracle, Phase 2 constants verbatim); free-run
+      divergence NONE (5 prompts x 128 steps, token-identical);
+      dispatches/token measured 591 (unchanged, 1:1 swap). Full suite
+      minus CPU logit gate, release: 316 tests, 2 opt-in skips, 0
+      failures (1416 s). +34 tests. Seeded DEV-2 (runner swallows in-test
+      stdout — free-run report file mechanism, port to Phase 2 harness).
+      See DECISIONS.md 2026-09-04 P3-5 entry.
 
   - id: P3-6
     rank: 16.6
@@ -1198,6 +1211,30 @@ tasks:
       testPplSliceDeltaWithinBand (4096-token CPU-quant forward at
       -Onone); P3-4 verified in release instead (QR-3 precedent). Any
       DEV-1 fix should cover the band suite alongside the logit suite.
+      2026-09-04 (from P3-5): the species now also includes the
+      GPU-quant Tier-E logit suite (~14 min release — 250 live CPU-quant
+      re-forwards; GPUQuantLogitSuiteTests) and the quant free-run
+      harness (~30 min release when opted in). Same lever applies:
+      release-mode + documented --filter fast paths.
+
+  - id: DEV-2
+    rank: 25.5
+    title: "Port the QWEN_FREE_RUN_REPORT_FILE mechanism to the Phase 2 FreeRunReportTests"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: "tests (FreeRunReportTests)"
+      tests: "report harness writes its lines to the env-var file; behavior unchanged otherwise"
+    est_complexity: small
+    notes: |
+      Seeded 2026-09-04 by P3-5: the current swift-test runner captures
+      in-test stdout and does NOT replay it — a report emitted only via
+      print is silently lost (cost P3-5 a blind 30-min re-run).
+      QuantFreeRunReportTests now also writes its report to
+      QWEN_FREE_RUN_REPORT_FILE; the Phase 2 FreeRunReportTests still has
+      the print-only fragility. Mirror the mechanism. Filler: never
+      blocks the phase chain.
   - id: DOC-1
     rank: 26
     title: "Regenerate architecture PDF (stale since Phase 0 exit v1.3)"

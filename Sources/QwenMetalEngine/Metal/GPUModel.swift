@@ -4,41 +4,63 @@ import Metal
 /// P2-4 (docs/phases/phase-2.md D5): the full GPU decode pipeline — the
 /// P2-1/P2-2/P2-3 pieces (whole-checkpoint residency buffer, naive decode
 /// kernels, preallocated KV cache + naive attention) wired into a per-token
-/// forward pass. ONE command buffer per decoded token: all ~590 dispatches
+/// forward pass. ONE command buffer per decoded token: all dispatches
 /// (21/layer × 28 + head/tail) encode into a single `timedDispatch`, so dual
 /// timing (hard rule 7) rides along on every step and wall−GPU is the
 /// dispatch-overhead metric Phase 4 consumes.
 ///
 /// Precision per spec D2: fp16 activations between kernels, fp32 accumulation
-/// inside, fp32 scores/softmax and logits; weights stay raw bf16 checkpoint
-/// bits upcast in registers (D1 — bit-identical to the CPU reference's, so
-/// every GPU-vs-CPU gate sees zero weight-rounding divergence). The RoPE
-/// kernel consumes the CPU `RoPE`'s fp32 tables, and argmax stays CPU-side in
-/// the shared `DecodeLoop` — GPU and CPU decode share one tie-break.
+/// inside, fp32 scores/softmax and logits; the RoPE kernel consumes the CPU
+/// `RoPE`'s fp32 tables, and argmax stays CPU-side in the shared `DecodeLoop`
+/// — GPU and CPU decode share one tie-break.
+///
+/// Weights come in exactly two formats (`WeightsFormat`), both consumed in
+/// registers (hard rule 1, nothing materialized):
+/// - **bf16** (Phase 2): raw checkpoint bits upcast via bit-shift in the
+///   consuming kernel — bit-identical to the CPU reference's upcast.
+/// - **q4g64** (P3-5, phase-3.md D5): packed triplets dequanted in registers
+///   by the P3-4 fused kernels — dequant values bit-identical to the
+///   CPU-quant reference's by the single-rounding argument (gates entry).
+///   Norm vectors pass through as bf16 and ride the Phase 2 RMSNorm kernel;
+///   attention/RoPE/SwiGLU/residual kernels are untouched (spec scope).
 ///
 /// Exactly one family, like `QwenModel`: the loader refuses configs that are
-/// not Qwen3-shaped (QK-norm, no attention biases), and refuses weight
-/// tensors that are not bf16 (the kernels' register upcast is bf16-specific).
+/// not Qwen3-shaped (QK-norm, no attention biases), and each format's loader
+/// refuses the other format's file with a clear error.
 public final class GPUModel {
-    /// Byte offsets of one decoder layer's tensors inside `weights.buffer`.
-    private struct LayerOffsets {
+    /// Where a weight matrix's bytes live inside `weights.buffer`: a bf16
+    /// tensor's byte offset (Phase 2 kernels) or the q4g64 triplet's three
+    /// byte offsets (P3-4 kernels — the whole-checkpoint buffer bound three
+    /// times, as QuantKernels anticipates).
+    private enum MatrixRef {
+        case bf16(byteOffset: Int)
+        case q4(qByteOffset: Int, scalesByteOffset: Int, biasesByteOffset: Int)
+    }
+
+    /// Byte offsets / matrix refs of one decoder layer's tensors inside
+    /// `weights.buffer`. Norm vectors are bf16 in BOTH formats (schema D1
+    /// pass-through), so they stay plain byte offsets.
+    private struct LayerRefs {
         let inputNorm: Int
-        let qProj: Int
-        let kProj: Int
-        let vProj: Int
-        let oProj: Int
+        let qProj: MatrixRef
+        let kProj: MatrixRef
+        let vProj: MatrixRef
+        let oProj: MatrixRef
         let qNorm: Int
         let kNorm: Int
         let postAttentionNorm: Int
-        let gateProj: Int
-        let upProj: Int
-        let downProj: Int
+        let gateProj: MatrixRef
+        let upProj: MatrixRef
+        let downProj: MatrixRef
     }
 
     public let config: ModelConfig
     public let maxContext: Int
     public let weights: GPUWeights
     public let kvCache: KVCache
+    /// Which weight encoding this pipeline consumes (P3-5) — benchmark rows
+    /// and reports record it alongside residency.
+    public let weightsFormat: WeightsFormat
 
     /// Dual timing of the most recent `step` (hard rule 7). Aggregation into
     /// medians/rates is `DecodeTimingCollector`'s job (P2-5).
@@ -47,7 +69,8 @@ public final class GPUModel {
     /// Compute dispatches encoded by the most recent `step`, measured at the
     /// dispatchThreads call sites (P2-5, spec D5): 591 at the pinned dims
     /// with logits (21/layer × 28 + embedding + final norm + lm_head),
-    /// 589 without the logits tail.
+    /// 589 without the logits tail. The packed path replaces kernels 1:1,
+    /// so its measured count is reported by the same counter.
     public private(set) var lastStepDispatchCount: Int?
 
     /// Tokens whose KV entries currently occupy cache positions
@@ -58,12 +81,14 @@ public final class GPUModel {
     private let context: MetalContext
     private let decodeKernels: DecodeKernels
     private let attentionKernels: AttentionKernels
+    /// Present exactly on the packed path (created iff any `.q4` ref exists).
+    private let quantKernels: QuantKernels?
     private let dispatchCounter = DispatchCounter()
 
-    private let embeddingOffset: Int
+    private let embeddingRef: MatrixRef
     private let finalNormOffset: Int
-    private let lmHeadOffset: Int
-    private let layerOffsets: [LayerOffsets]
+    private let lmHeadRef: MatrixRef
+    private let layerRefs: [LayerRefs]
 
     // Scratch buffers, allocated once at init (sizes are config-fixed).
     // The residual stream ping-pongs hiddenA → hiddenB → hiddenA per layer
@@ -87,12 +112,43 @@ public final class GPUModel {
     private let cosTable: MTLBuffer     // fp32 [maxContext·headDim/2]
     private let sinTable: MTLBuffer     // fp32 [maxContext·headDim/2]
 
+    /// The Phase 2 bf16 path. Rejects a q4g64 packed file with a clear error
+    /// (phase-3.md edge case 9): the packed loader is `init(packed:)`.
+    ///
     /// - Parameter maxContext: sizes the preallocated KV cache (hard rule 4)
     ///   and the RoPE tables. The CLI passes the Phase 2 pinned 4096; tests
     ///   pass something small.
-    public init(
+    public convenience init(
         checkpoint: SafetensorsFile, config: ModelConfig, context: MetalContext,
         residency: WeightsResidency = .mmap, maxContext: Int
+    ) throws {
+        guard checkpoint.metadata[Q4G64.formatMetadataKey] != Q4G64.formatTag else {
+            throw ModelError.badInput(detail:
+                "checkpoint is a q4g64 packed file — load it through "
+                + "PackedCheckpoint + GPUModel(packed:), not the bf16 "
+                + "checkpoint initializer")
+        }
+        try self.init(
+            file: checkpoint, packed: nil, config: config, context: context,
+            residency: residency, maxContext: maxContext)
+    }
+
+    /// The P3-5 packed path: identical pipeline, q4g64 matrices consumed by
+    /// the P3-4 fused kernels (register dequant, hard rule 1). The packed
+    /// file's validation (format tag, provenance, triplet consistency, `.q`
+    /// alignment) already happened in `PackedCheckpoint`.
+    public convenience init(
+        packed: PackedCheckpoint, config: ModelConfig, context: MetalContext,
+        residency: WeightsResidency = .mmap, maxContext: Int
+    ) throws {
+        try self.init(
+            file: packed.file, packed: packed, config: config, context: context,
+            residency: residency, maxContext: maxContext)
+    }
+
+    private init(
+        file: SafetensorsFile, packed: PackedCheckpoint?, config: ModelConfig,
+        context: MetalContext, residency: WeightsResidency, maxContext: Int
     ) throws {
         guard config.usesQKNorm, !config.attentionBias else {
             throw ModelError.unsupportedFamily(
@@ -108,8 +164,9 @@ public final class GPUModel {
         self.config = config
         self.maxContext = maxContext
         self.context = context
+        self.weightsFormat = packed == nil ? .bf16 : .q4g64
 
-        let weights = try GPUWeights(file: checkpoint, context: context, residency: residency)
+        let weights = try GPUWeights(file: file, context: context, residency: residency)
         self.weights = weights
 
         let hidden = config.hiddenSize
@@ -120,6 +177,7 @@ public final class GPUModel {
 
         // Every tensor's byte offset is resolved (and shape/dtype-validated)
         // up front: a wrong checkpoint fails at load, never mid-decode.
+        // Norm vectors are raw bf16 in both formats (schema D1 pass-through).
         func offset(_ name: String, shape: [Int]) throws -> Int {
             let info = try weights.info(for: name)
             guard info.shape == shape else {
@@ -133,47 +191,66 @@ public final class GPUModel {
             }
             return try weights.byteOffset(for: name)
         }
+        func matrix(_ name: String, shape: [Int]) throws -> MatrixRef {
+            guard let packed else {
+                return .bf16(byteOffset: try offset(name, shape: shape))
+            }
+            let dims = try packed.dims(for: name)
+            guard [dims.outDim, dims.inDim] == shape else {
+                throw ModelError.badWeightShape(
+                    tensor: name, expected: shape,
+                    actual: [dims.outDim, dims.inDim])
+            }
+            return .q4(
+                qByteOffset: try weights.byteOffset(for: name + Q4G64.qSuffix),
+                scalesByteOffset: try weights.byteOffset(for: name + Q4G64.scalesSuffix),
+                biasesByteOffset: try weights.byteOffset(for: name + Q4G64.biasesSuffix))
+        }
 
-        embeddingOffset = try offset(
+        embeddingRef = try matrix(
             "model.embed_tokens.weight", shape: [config.vocabSize, hidden])
         finalNormOffset = try offset("model.norm.weight", shape: [hidden])
         // Tied embeddings reuse the table as [out, in] directly (P2-2: no
-        // transpose is ever materialized).
-        lmHeadOffset = config.tieWordEmbeddings
-            ? embeddingOffset
-            : try offset("lm_head.weight", shape: [config.vocabSize, hidden])
+        // transpose is ever materialized; the packed artifact stores the tied
+        // triplet once — P3-1). An untied config resolves lm_head.weight in
+        // its own format and fails loudly when absent.
+        lmHeadRef = config.tieWordEmbeddings
+            ? embeddingRef
+            : try matrix("lm_head.weight", shape: [config.vocabSize, hidden])
 
-        var layers: [LayerOffsets] = []
+        var layers: [LayerRefs] = []
         layers.reserveCapacity(config.numHiddenLayers)
         for layer in 0..<config.numHiddenLayers {
             let prefix = "model.layers.\(layer)."
-            layers.append(LayerOffsets(
+            layers.append(LayerRefs(
                 inputNorm: try offset(prefix + "input_layernorm.weight", shape: [hidden]),
-                qProj: try offset(
+                qProj: try matrix(
                     prefix + "self_attn.q_proj.weight", shape: [numHeads * headDim, hidden]),
-                kProj: try offset(
+                kProj: try matrix(
                     prefix + "self_attn.k_proj.weight", shape: [kvHeads * headDim, hidden]),
-                vProj: try offset(
+                vProj: try matrix(
                     prefix + "self_attn.v_proj.weight", shape: [kvHeads * headDim, hidden]),
-                oProj: try offset(
+                oProj: try matrix(
                     prefix + "self_attn.o_proj.weight", shape: [hidden, numHeads * headDim]),
                 qNorm: try offset(prefix + "self_attn.q_norm.weight", shape: [headDim]),
                 kNorm: try offset(prefix + "self_attn.k_norm.weight", shape: [headDim]),
                 postAttentionNorm: try offset(
                     prefix + "post_attention_layernorm.weight", shape: [hidden]),
-                gateProj: try offset(
+                gateProj: try matrix(
                     prefix + "mlp.gate_proj.weight", shape: [intermediate, hidden]),
-                upProj: try offset(
+                upProj: try matrix(
                     prefix + "mlp.up_proj.weight", shape: [intermediate, hidden]),
-                downProj: try offset(
+                downProj: try matrix(
                     prefix + "mlp.down_proj.weight", shape: [hidden, intermediate])))
         }
-        layerOffsets = layers
+        layerRefs = layers
 
         decodeKernels = try DecodeKernels(context: context)
         attentionKernels = try AttentionKernels(context: context)
+        quantKernels = packed == nil ? nil : try QuantKernels(context: context)
         decodeKernels.dispatchCounter = dispatchCounter
         attentionKernels.dispatchCounter = dispatchCounter
+        quantKernels?.dispatchCounter = dispatchCounter
         kvCache = try KVCache(
             device: context.device, layers: config.numHiddenLayers,
             kvHeads: kvHeads, maxContext: maxContext, headDim: headDim)
@@ -273,6 +350,52 @@ public final class GPUModel {
         }
     }
 
+    // MARK: - Format-dispatched encode helpers (P3-5)
+
+    /// One matvec against a weight matrix in whichever format it lives —
+    /// bf16 (Phase 2 kernel, register upcast) or q4g64 (P3-4 fused kernel,
+    /// register dequant). `quantKernels` exists whenever a `.q4` ref exists:
+    /// both are created exactly on the packed path.
+    private func encodeMatvec(
+        _ ref: MatrixRef, into encoder: MTLComputeCommandEncoder,
+        input: MTLBuffer, outDim: Int, inDim: Int, output: MTLBuffer,
+        fp32Output: Bool = false
+    ) throws {
+        switch ref {
+        case .bf16(let byteOffset):
+            try decodeKernels.encodeMatvec(
+                into: encoder, weights: weights.buffer, weightByteOffset: byteOffset,
+                input: input, outDim: outDim, inDim: inDim, output: output,
+                fp32Output: fp32Output)
+        case .q4(let q, let scales, let biases):
+            try quantKernels!.encodeMatvec(
+                into: encoder, q: weights.buffer, qByteOffset: q,
+                scales: weights.buffer, scalesByteOffset: scales,
+                biases: weights.buffer, biasesByteOffset: biases,
+                input: input, outDim: outDim, inDim: inDim, output: output,
+                fp32Output: fp32Output)
+        }
+    }
+
+    private func encodeEmbedding(
+        into encoder: MTLComputeCommandEncoder, token: Int, output: MTLBuffer
+    ) throws {
+        switch embeddingRef {
+        case .bf16(let byteOffset):
+            try decodeKernels.encodeEmbeddingLookup(
+                into: encoder, table: weights.buffer, tableByteOffset: byteOffset,
+                vocabSize: config.vocabSize, hiddenSize: config.hiddenSize,
+                tokenId: token, output: output)
+        case .q4(let q, let scales, let biases):
+            try quantKernels!.encodeEmbeddingGather(
+                into: encoder, q: weights.buffer, qByteOffset: q,
+                scales: weights.buffer, scalesByteOffset: scales,
+                biases: weights.buffer, biasesByteOffset: biases,
+                vocabSize: config.vocabSize, hiddenSize: config.hiddenSize,
+                tokenId: token, output: output)
+        }
+    }
+
     // MARK: - The forward encoding (one command buffer per token, spec D5)
 
     private func encodeForward(
@@ -286,34 +409,31 @@ public final class GPUModel {
         let intermediate = config.intermediateSize
         let eps = Float(config.rmsNormEps)
 
-        try decodeKernels.encodeEmbeddingLookup(
-            into: encoder, table: weights.buffer, tableByteOffset: embeddingOffset,
-            vocabSize: config.vocabSize, hiddenSize: hidden, tokenId: token,
-            output: hiddenA)
+        try encodeEmbedding(into: encoder, token: token, output: hiddenA)
 
-        for (layer, offsets) in layerOffsets.enumerated() {
+        for (layer, refs) in layerRefs.enumerated() {
             // h = hiddenA on entry. Attention half: hiddenB = h + attn(norm(h)).
             try decodeKernels.encodeRMSNorm(
                 into: encoder, input: hiddenA, weight: weights.buffer,
-                weightByteOffset: offsets.inputNorm, rows: 1, dim: hidden,
+                weightByteOffset: refs.inputNorm, rows: 1, dim: hidden,
                 eps: eps, output: normed)
-            try decodeKernels.encodeMatvec(
-                into: encoder, weights: weights.buffer, weightByteOffset: offsets.qProj,
-                input: normed, outDim: numHeads * headDim, inDim: hidden, output: qRaw)
-            try decodeKernels.encodeMatvec(
-                into: encoder, weights: weights.buffer, weightByteOffset: offsets.kProj,
-                input: normed, outDim: kvHeads * headDim, inDim: hidden, output: kRaw)
-            try decodeKernels.encodeMatvec(
-                into: encoder, weights: weights.buffer, weightByteOffset: offsets.vProj,
-                input: normed, outDim: kvHeads * headDim, inDim: hidden, output: vVec)
+            try encodeMatvec(
+                refs.qProj, into: encoder, input: normed,
+                outDim: numHeads * headDim, inDim: hidden, output: qRaw)
+            try encodeMatvec(
+                refs.kProj, into: encoder, input: normed,
+                outDim: kvHeads * headDim, inDim: hidden, output: kRaw)
+            try encodeMatvec(
+                refs.vProj, into: encoder, input: normed,
+                outDim: kvHeads * headDim, inDim: hidden, output: vVec)
             // Family order (PIN-1): per-head Q/K RMSNorm, THEN RoPE.
             try decodeKernels.encodeRMSNorm(
                 into: encoder, input: qRaw, weight: weights.buffer,
-                weightByteOffset: offsets.qNorm, rows: numHeads, dim: headDim,
+                weightByteOffset: refs.qNorm, rows: numHeads, dim: headDim,
                 eps: eps, output: qVec)
             try decodeKernels.encodeRMSNorm(
                 into: encoder, input: kRaw, weight: weights.buffer,
-                weightByteOffset: offsets.kNorm, rows: kvHeads, dim: headDim,
+                weightByteOffset: refs.kNorm, rows: kvHeads, dim: headDim,
                 eps: eps, output: kVec)
             try decodeKernels.encodeRoPE(
                 into: encoder, vector: qVec, cosTable: cosTable, sinTable: sinTable,
@@ -338,30 +458,29 @@ public final class GPUModel {
             try attentionKernels.encodeAttentionPV(
                 into: encoder, cache: kvCache, layer: layer, position: position,
                 probs: probs, numHeads: numHeads, output: attnOut)
-            try decodeKernels.encodeMatvec(
-                into: encoder, weights: weights.buffer, weightByteOffset: offsets.oProj,
-                input: attnOut, outDim: hidden, inDim: numHeads * headDim,
-                output: projOut)
+            try encodeMatvec(
+                refs.oProj, into: encoder, input: attnOut,
+                outDim: hidden, inDim: numHeads * headDim, output: projOut)
             try decodeKernels.encodeResidualAdd(
                 into: encoder, a: hiddenA, b: projOut, count: hidden, output: hiddenB)
 
             // MLP half: hiddenA = hiddenB + mlp(norm(hiddenB)).
             try decodeKernels.encodeRMSNorm(
                 into: encoder, input: hiddenB, weight: weights.buffer,
-                weightByteOffset: offsets.postAttentionNorm, rows: 1, dim: hidden,
+                weightByteOffset: refs.postAttentionNorm, rows: 1, dim: hidden,
                 eps: eps, output: normed)
-            try decodeKernels.encodeMatvec(
-                into: encoder, weights: weights.buffer, weightByteOffset: offsets.gateProj,
-                input: normed, outDim: intermediate, inDim: hidden, output: gateBuf)
-            try decodeKernels.encodeMatvec(
-                into: encoder, weights: weights.buffer, weightByteOffset: offsets.upProj,
-                input: normed, outDim: intermediate, inDim: hidden, output: upBuf)
+            try encodeMatvec(
+                refs.gateProj, into: encoder, input: normed,
+                outDim: intermediate, inDim: hidden, output: gateBuf)
+            try encodeMatvec(
+                refs.upProj, into: encoder, input: normed,
+                outDim: intermediate, inDim: hidden, output: upBuf)
             try decodeKernels.encodeSwiGLU(
                 into: encoder, gate: gateBuf, up: upBuf, count: intermediate,
                 output: actBuf)
-            try decodeKernels.encodeMatvec(
-                into: encoder, weights: weights.buffer, weightByteOffset: offsets.downProj,
-                input: actBuf, outDim: hidden, inDim: intermediate, output: projOut)
+            try encodeMatvec(
+                refs.downProj, into: encoder, input: actBuf,
+                outDim: hidden, inDim: intermediate, output: projOut)
             try decodeKernels.encodeResidualAdd(
                 into: encoder, a: hiddenB, b: projOut, count: hidden, output: hiddenA)
         }
@@ -371,10 +490,10 @@ public final class GPUModel {
             into: encoder, input: hiddenA, weight: weights.buffer,
             weightByteOffset: finalNormOffset, rows: 1, dim: hidden,
             eps: eps, output: normed)
-        try decodeKernels.encodeMatvec(
-            into: encoder, weights: weights.buffer, weightByteOffset: lmHeadOffset,
-            input: normed, outDim: config.vocabSize, inDim: hidden,
-            output: logitsBuf, fp32Output: true)
+        try encodeMatvec(
+            lmHeadRef, into: encoder, input: normed,
+            outDim: config.vocabSize, inDim: hidden, output: logitsBuf,
+            fp32Output: true)
     }
 }
 

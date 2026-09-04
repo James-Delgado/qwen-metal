@@ -8,6 +8,8 @@ public enum ModelDirectoryError: Error, Equatable, CustomStringConvertible {
     case missingFile(name: String, directory: String)
     case noCheckpoint(directory: String)
     case multipleCheckpoints(directory: String, found: [String])
+    case noPackedCheckpoint(directory: String)
+    case multiplePackedCheckpoints(directory: String, found: [String])
 
     public var description: String {
         switch self {
@@ -20,6 +22,14 @@ public enum ModelDirectoryError: Error, Equatable, CustomStringConvertible {
         case .multipleCheckpoints(let directory, let found):
             return "model dir: '\(directory)' contains \(found.count) .safetensors "
                 + "files (\(found.joined(separator: ", "))) — expected exactly one"
+        case .noPackedCheckpoint(let directory):
+            return "model dir: '\(directory)' contains no *-q4g64.safetensors "
+                + "packed checkpoint — produce one with `qwen-metal-cli pack` "
+                + "or drop --weights q4g64"
+        case .multiplePackedCheckpoints(let directory, let found):
+            return "model dir: '\(directory)' contains \(found.count) "
+                + "*-q4g64.safetensors files (\(found.joined(separator: ", "))) "
+                + "— expected at most one"
         }
     }
 }
@@ -36,6 +46,11 @@ public struct ModelDirectory {
     /// absent. When present, its eos_token_id ids join the decode stop set
     /// (HF `generate()` consults this file; docs/AUDIT.md F2).
     public let generationConfigURL: URL?
+    /// The q4g64 packed artifact beside the bf16 checkpoint (phase-3.md D2
+    /// pins the `*-q4g64.safetensors` name) — nil when absent; more than one
+    /// is an error at validation time. `requirePackedCheckpoint()` is the
+    /// loud accessor for callers that need it (P3-5 CLI/app plumbing).
+    public let packedCheckpointURL: URL?
 
     public init(validating url: URL) throws {
         var isDirectory: ObjCBool = false
@@ -54,7 +69,7 @@ public struct ModelDirectory {
         let entries = try FileManager.default.contentsOfDirectory(atPath: url.path)
         // The Phase 3 packed artifact (`…-q4g64.safetensors`, name pinned by
         // phase-3.md D2) legitimately lives beside the bf16 checkpoint; the
-        // bf16 discovery ignores it. P3-5 adds explicit packed-model loading.
+        // bf16 discovery ignores it (packedCheckpointURL resolves it below).
         let checkpoints = entries
             .filter { $0.hasSuffix(".safetensors") && !$0.hasSuffix("-q4g64.safetensors") }
             .sorted()
@@ -66,14 +81,34 @@ public struct ModelDirectory {
                 directory: url.path, found: checkpoints)
         }
 
+        let packedCheckpoints = entries
+            .filter { $0.hasSuffix("-q4g64.safetensors") }
+            .sorted()
+        guard packedCheckpoints.count <= 1 else {
+            throw ModelDirectoryError.multiplePackedCheckpoints(
+                directory: url.path, found: packedCheckpoints)
+        }
+
         directoryURL = url
         checkpointURL = url.appendingPathComponent(checkpoints[0])
+        packedCheckpointURL = packedCheckpoints.first
+            .map { url.appendingPathComponent($0) }
         configURL = url.appendingPathComponent("config.json")
 
         let generationConfig = url.appendingPathComponent("generation_config.json")
         generationConfigURL =
             FileManager.default.fileExists(atPath: generationConfig.path)
                 ? generationConfig : nil
+    }
+
+    /// The packed artifact's URL, or a clear error naming what is missing
+    /// (P3-5: `--weights q4g64` / the app's packed toggle resolve through
+    /// this, so a missing artifact is a usage error, never a crash).
+    public func requirePackedCheckpoint() throws -> URL {
+        guard let packedCheckpointURL else {
+            throw ModelDirectoryError.noPackedCheckpoint(directory: directoryURL.path)
+        }
+        return packedCheckpointURL
     }
 
     /// The resolved decode stop set (phase-2.md D7 — engine-owned, one

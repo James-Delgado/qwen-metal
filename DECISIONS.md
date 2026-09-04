@@ -2133,3 +2133,78 @@ build-mode-independent (exact == and Tier K on fp32 values).
 
 No new pins, no schema changes, no judgment-derived constants
 introduced. Unblocks P3-5 (pipeline wiring) and P3-6 (microbench).
+
+## 2026-09-04 — P3-5 landed: GPU-quant pipeline wired; all Tier-M/E gates held first run; free-run divergence NONE
+
+Landed the packed decode path end to end (spec D5). `GPUModel` gained a
+q4g64 initializer (`init(packed: PackedCheckpoint, ...)`): the P3-4 fused
+kernels serve the embedding gather and all matvecs (QKV/o/gate/up/down +
+tied lm_head as [out, in], no transpose); 1-D bf16 pass-through norms ride
+the Phase 2 RMSNorm kernel; attention/RoPE/SwiGLU/residual kernels
+untouched (spec scope). Internally one `MatrixRef` enum (bf16 byte offset
+vs q4 triplet byte offsets into the single whole-checkpoint GPUWeights
+buffer, bound three times per triplet as P3-4 anticipated); the bf16 path
+is the same code 1:1 and the full Phase 2 suite re-proves it unchanged.
+Wrong-format loads both directions fail with clear errors naming the right
+loader (edge 9, GPU side). Plumbing: CLI `--weights bf16|q4g64` (gpu OR
+cpu — cpu+q4g64 is the CPU-quant reference), `ModelDirectory`
+packed-artifact discovery (`packedCheckpointURL` /
+`requirePackedCheckpoint()`, loud missing/multiple errors), app weights
+toggle (bf16/q4g64 segmented control; **default q4g64** — P3-7 rows run
+packed; reversible one-line default), `BenchmarkReport` records the
+weights format (q4g64 rows export as "Phase 3 row export").
+
+**Gate outcomes (constants reused verbatim per the 2026-08-25 gates entry;
+none touched, all held FIRST RUN, release mode, live CPU-quant oracle):**
+
+- Tier M: embedding-gather fp16 EXACT bitwise vs fp16(CPU-quant fp32) on
+  the real packed triplet at real file offsets; layer-0 input RMSNorm at
+  2⁻⁸ (bf16 norm weights read from the PACKED file); layer-0 attention
+  module at 2⁻⁷ (quant matvecs for q/k/v/o + shared Phase 2 attention
+  kernels).
+- Tier E: full-stack slices at 2⁻⁵ (last_layer_output + final_norm_output,
+  5 tokens); teacher-forced 5×50-step logit suite vs live CPU-quant logits
+  — full-vocab checkpoints (steps {0,1,24,49}) at 2⁻⁵·M_step, float64
+  fingerprints at 2⁻⁵·M64 (std 2⁻⁴·M64), top-64 at CPU-quant indices at
+  2⁻⁵·M64, tie-aware top-1 at ε_tie = 2⁻⁴·M64 with margins from CPU-quant
+  logits. Teacher-forcing uses the committed reference fp32 argmax
+  sequences (identical prefixes, P1-5 premise; the P3-3 band suite
+  teacher-forces the same sequences). GPU-quant suite block: 18 tests,
+  847.8 s release (dominated by 250 live CPU-quant re-forwards).
+- **Free-running divergence (REPORTED, not gated): NONE on all 5 prompts ×
+  128 steps — GPU-quant and CPU-quant are token-identical** (the Phase 2
+  result carries to the quantized fork). Texts coherent per prompt
+  (short_english "…city of Paris…", chat_template a correct Rayleigh
+  answer with <|im_end|>). Report harness: QWEN_FREE_RUN_REPORT=1, and
+  QWEN_FREE_RUN_REPORT_FILE=<path> writes the report to a file — the
+  current swift-test runner captures in-test stdout and does NOT replay
+  it, so print-only reports are silently lost (cost one blind 30-min
+  re-run; Phase 2's FreeRunReportTests has the same fragility → DEV-2).
+
+**Measured (not derived):** dispatches/token on the packed path = **591**
+(DispatchCounter at the dispatchThreads call sites — unchanged from bf16;
+kernels replaced 1:1; tiny-model exact-count tests pin 22/24 at 1 layer).
+Mac dev-loop observation (PROVISIONAL, not a row): CLI gpu+q4g64 median
+GPU ~29 ms/token (debug host) vs bf16's 218.44 ms (P2-5) — the ~3.6×
+weight-byte drop already showing before any kernel optimization; wall−GPU
+~1.1 ms at 591 dispatches, consistent with P2-5.
+
+CLI verified end-to-end: gpu+q4g64 coherent text + per-token block;
+empty-prompt usage error, bad --weights value, and missing-packed-artifact
+errors all clear; bf16 default output unchanged (byte-stable paths
+untouched). iOS app target builds clean (Release, generic device,
+unsigned) with the weights toggle; deploy stays James's.
+
+Verification: **full suite minus the CPU logit gate, release: 316 tests,
+2 skipped (the two opt-in free-run harnesses), 0 failures (1416.2 s)** —
+including the complete Phase 2 bf16 GPU suites against the refactored
+GPUModel (bitwise/gate behavior preserved). Tiny-model packed wiring
+suite: 9 tests (incremental-replay bitwise, EOS/context stops, dispatch
+counts, load rejects). New tests this task: 34 (GPUQuantModelTests 9,
+GPUQuantTierM 3, GPUQuantTierE 1, GPUQuantLogitSuite 5, QuantFreeRunReport
+1 opt-in, ModelDirectory +3, BenchmarkReport +2, plus the free-run
+file-write path exercised by the report run).
+
+No new pins, no schema changes, no numeric-gate constants introduced or
+modified. Unblocks nothing new by itself (P3-7 waits on P3-6); next ready
+by rank is P3-6 (bandwidth microbench).

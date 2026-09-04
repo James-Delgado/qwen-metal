@@ -57,6 +57,7 @@ enum AppError: Error, CustomStringConvertible {
 struct LoadedEngine {
     let modelDirectoryName: String
     let residency: WeightsResidency
+    let weightsFormat: WeightsFormat
     let contextLimit: Int
     let gpuModel: GPUModel
     let tokenizer: TextTokenizer
@@ -71,6 +72,10 @@ final class AppModel: ObservableObject {
     nonisolated static let contextCap = 4096
 
     @Published var residency: WeightsResidency = .mmap
+    /// P3-5: q4g64 default — Phase 3 device rows (P3-7) run on the packed
+    /// artifact; a missing artifact fails with the clear noPackedCheckpoint
+    /// error, and the toggle drops back to bf16 for Phase 2-style rows.
+    @Published var weightsFormat: WeightsFormat = .q4g64
     @Published var isLoading = false
     @Published var isRunning = false {
         // A locked screen suspends the app mid-generation and ruins the
@@ -94,6 +99,15 @@ final class AppModel: ObservableObject {
     /// toggle drops the engine; the next run reloads in the new mode.
     func residencyChanged() {
         if let engine, engine.residency != residency {
+            self.engine = nil
+            loadSummary = nil
+        }
+    }
+
+    /// Same contract for the weights format (P3-5): the kernels and offsets
+    /// are resolved at load, so a toggle reloads.
+    func weightsFormatChanged() {
+        if let engine, engine.weightsFormat != weightsFormat {
             self.engine = nil
             loadSummary = nil
         }
@@ -183,7 +197,8 @@ final class AppModel: ObservableObject {
                 mode: .burst, promptName: prompt.rawValue,
                 promptTokenCount: metrics.promptTokenCount,
                 batteryNote: batteryNote, coldWarmNote: coldWarmNote,
-                residency: engine.residency, burst: metrics)
+                residency: engine.residency,
+                weightsFormat: engine.weightsFormat, burst: metrics)
             statusLine = stopFlag.isSet
                 ? "burst stopped early — report reflects the partial run"
                 : "burst complete"
@@ -234,7 +249,8 @@ final class AppModel: ObservableObject {
                 promptTokenCount:
                     result.generations.first?.promptTokenCount ?? 0,
                 batteryNote: batteryNote, coldWarmNote: coldWarmNote,
-                residency: engine.residency, sustained: result)
+                residency: engine.residency,
+                weightsFormat: engine.weightsFormat, sustained: result)
             statusLine = "sustained loop complete"
         } catch is CancellationError {
             statusLine = "sustained loop aborted by Stop — no report"
@@ -248,9 +264,12 @@ final class AppModel: ObservableObject {
     /// Loads (off the main thread) if there is no engine for the selected
     /// residency yet. Errors propagate to the caller's `show(_:)`.
     private func loadEngineIfNeeded() async throws -> LoadedEngine {
-        if let engine, engine.residency == residency { return engine }
+        if let engine, engine.residency == residency,
+           engine.weightsFormat == weightsFormat { return engine }
         let residency = self.residency
-        statusLine = "loading model (residency \(residency.rawValue))…"
+        let weightsFormat = self.weightsFormat
+        statusLine = "loading model (weights \(weightsFormat.rawValue), "
+            + "residency \(residency.rawValue))…"
         let loaded: LoadedEngine =
             try await Task.detached(priority: .userInitiated) {
                 let start = Date()
@@ -258,14 +277,26 @@ final class AppModel: ObservableObject {
                 let config = try ModelConfig.load(path: directory.configURL.path)
                 let contextLimit = min(
                     Self.contextCap, config.maxPositionEmbeddings)
-                let checkpoint = try SafetensorsFile(
-                    path: directory.checkpointURL.path)
                 // No Metal device → MetalHarnessError.noDevice, a clear
                 // error, not a crash (spec edge case 10).
                 let metal = try MetalContext()
-                let gpu = try GPUModel(
-                    checkpoint: checkpoint, config: config, context: metal,
-                    residency: residency, maxContext: contextLimit)
+                let gpu: GPUModel
+                switch weightsFormat {
+                case .bf16:
+                    let checkpoint = try SafetensorsFile(
+                        path: directory.checkpointURL.path)
+                    gpu = try GPUModel(
+                        checkpoint: checkpoint, config: config, context: metal,
+                        residency: residency, maxContext: contextLimit)
+                case .q4g64:
+                    // Missing artifact → the clear noPackedCheckpoint error
+                    // (P3-5 edge behavior — never a crash).
+                    let packed = try PackedCheckpoint(
+                        path: directory.requirePackedCheckpoint().path)
+                    gpu = try GPUModel(
+                        packed: packed, config: config, context: metal,
+                        residency: residency, maxContext: contextLimit)
+                }
                 let tokenizer = try await TextTokenizer(
                     modelFolder: directory.directoryURL)
                 let stops = try directory.stopTokenIds(
@@ -273,14 +304,16 @@ final class AppModel: ObservableObject {
                 return LoadedEngine(
                     modelDirectoryName:
                         directory.directoryURL.lastPathComponent,
-                    residency: residency, contextLimit: contextLimit,
+                    residency: residency, weightsFormat: weightsFormat,
+                    contextLimit: contextLimit,
                     gpuModel: gpu, tokenizer: tokenizer, stopTokenIds: stops,
                     loadSeconds: Date().timeIntervalSince(start))
             }.value
         engine = loaded
         loadSummary = String(
-            format: "%@ — loaded in %.1f s, residency %@, context %d",
+            format: "%@ — loaded in %.1f s, weights %@, residency %@, context %d",
             loaded.modelDirectoryName, loaded.loadSeconds,
+            loaded.weightsFormat.rawValue,
             loaded.residency.rawValue, loaded.contextLimit)
         return loaded
     }
@@ -336,7 +369,7 @@ final class AppModel: ObservableObject {
     private func report(
         mode: BenchmarkReport.Mode, promptName: String, promptTokenCount: Int,
         batteryNote: String, coldWarmNote: String,
-        residency: WeightsResidency,
+        residency: WeightsResidency, weightsFormat: WeightsFormat,
         burst: GenerationMetrics? = nil,
         sustained: SustainedLoopResult? = nil
     ) -> String {
@@ -345,7 +378,8 @@ final class AppModel: ObservableObject {
             deviceLabel: Self.deviceModelIdentifier(),
             osVersion: Self.osVersionString(),
             batteryHealthNote: batteryNote, coldOrWarmNote: coldWarmNote,
-            residency: residency, promptName: promptName,
+            residency: residency, weightsFormat: weightsFormat,
+            promptName: promptName,
             promptTokenCount: promptTokenCount, mode: mode,
             burst: burst, sustained: sustained,
             physFootprintBytes: MemoryFootprint.currentPhysFootprintBytes()

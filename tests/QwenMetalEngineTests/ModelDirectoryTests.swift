@@ -145,6 +145,45 @@ final class ModelDirectoryTests: XCTestCase {
         XCTAssertEqual(directory.checkpointURL.lastPathComponent, "model.safetensors")
     }
 
+    // MARK: - (P3-5) packed-artifact discovery
+
+    func testPackedCheckpointURLResolvedWhenPresent() throws {
+        try touch(Self.supportFiles
+            + ["model.safetensors", "model-q4g64.safetensors"])
+        let directory = try ModelDirectory(validating: tempDir)
+        XCTAssertEqual(
+            directory.packedCheckpointURL?.lastPathComponent,
+            "model-q4g64.safetensors")
+        XCTAssertEqual(
+            try directory.requirePackedCheckpoint().lastPathComponent,
+            "model-q4g64.safetensors")
+    }
+
+    func testPackedCheckpointURLNilWhenAbsentAndRequireThrows() throws {
+        try touch(Self.supportFiles + ["model.safetensors"])
+        let directory = try ModelDirectory(validating: tempDir)
+        XCTAssertNil(
+            directory.packedCheckpointURL,
+            "the packed artifact is optional — absence must not fail validation")
+        XCTAssertThrowsError(try directory.requirePackedCheckpoint()) { error in
+            XCTAssertEqual(
+                error as? ModelDirectoryError,
+                .noPackedCheckpoint(directory: tempDir.path))
+        }
+    }
+
+    func testMultiplePackedCheckpointsThrows() throws {
+        try touch(Self.supportFiles
+            + ["model.safetensors", "a-q4g64.safetensors", "b-q4g64.safetensors"])
+        XCTAssertThrowsError(try ModelDirectory(validating: tempDir)) { error in
+            XCTAssertEqual(
+                error as? ModelDirectoryError,
+                .multiplePackedCheckpoints(
+                    directory: tempDir.path,
+                    found: ["a-q4g64.safetensors", "b-q4g64.safetensors"]))
+        }
+    }
+
     func testNoCheckpointThrows() throws {
         try touch(Self.supportFiles)
         XCTAssertThrowsError(try ModelDirectory(validating: tempDir)) { error in
