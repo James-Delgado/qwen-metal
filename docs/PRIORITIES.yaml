@@ -1045,7 +1045,8 @@ tasks:
   - id: P3-6
     rank: 16.6
     title: "Dequant-matvec bandwidth microbench (one token's matvecs, aggregate + per-shape GB/s) + Mac sanity row"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-04T07:00:48Z
     depends_on: [P3-4]
     blocks: [P3-7]
     deliverable:
