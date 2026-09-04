@@ -2208,3 +2208,61 @@ file-write path exercised by the report run).
 No new pins, no schema changes, no numeric-gate constants introduced or
 modified. Unblocks nothing new by itself (P3-7 waits on P3-6); next ready
 by rank is P3-6 (bandwidth microbench).
+
+## 2026-09-04 — P3-6 landed: dequant-matvec bandwidth microbench (D7) + Mac sanity row
+
+Landed as Bench/QuantMatvecMicrobench.swift + CLI `microbench` subcommand +
+an app Benchmark-screen microbench mode (report text assembled engine-side
+via `exportText` so CLI and app print identical fields). The harness runs
+ONE command buffer of one token's worth of REAL packed matvecs — 197
+dispatches at the pinned dims (28 × {q,k,v,o,gate,up,down} + lm_head),
+weights-only by construction — through the P3-4 `QuantKernels.encodeMatvec`
+exactly as the decode pipeline binds them (fp16-store projections,
+fp32-store lm_head, tied embedding triplet as [out, in], whole-checkpoint
+GPUWeights buffer bound three times per triplet). No new kernels; no
+kernel changes; the D4 optimization license remains unexercised (kernel
+still naive) — this task builds the grader, P3-7 applies the gate.
+
+**Metric implementation (per the pinned D7 definition):** aggregate
+weight-stream rate = total packed bytes ÷ the aggregate command buffer's
+GPU duration. Byte accounting is pinned by test at exactly **967,753,728
+bytes** (= 0.5625 B/element × 1,720,451,072 matrix elements — the gates
+entry's "q + scales + biases ≈ 0.967 GB"); the 197-dispatch count is
+MEASURED via DispatchCounter, not derived. Dual timing everywhere (hard
+rule 7); wall−GPU at 197 dispatches recorded per iteration.
+
+**Conventions chosen (reversible, surfaced in-plan; NOT gates):**
+- In-run protocol default 2 warmup + 10 measured (triad P0B-4 shape);
+  the on-device gate consumes the BEST aggregate across the D8 repeats
+  protocol (≥3 same-session runs), independent of per-run iteration count.
+- Per-shape rates measured in separate per-role command buffers (8 roles)
+  and reported alongside; the aggregate figure comes only from the
+  197-dispatch single command buffer. Reported, never gated.
+- Each site writes its own output buffer (573 KB fp16 + 608 KB fp32
+  total) so Metal hazard tracking adds no false serialization; inputs are
+  deterministic fp16-exact synthetic activations shared per in-dim.
+- Pre-report spot check: layer-0 q_proj GPU output vs sgemm over
+  `dequantMatrix` (hard rule 8) at the REUSED Tier-K gate; failure throws
+  and withholds the figure (P0B-4 refuse-to-report precedent).
+
+**Mac sanity row (PROVISIONAL, benchmarks/results.md Phase 3 section):**
+M2 Pro, release, mmap, artifact d03b3fe3…: aggregate median **58.81 GB/s**
+(best 60.05, range 58.59–60.05 over 10 iterations), overhead ~0.4 ms @
+197 dispatches; spot check max |Δ| 0.000486 ≤ 0.0034. Observation: ~33%
+of the Mac triad figure vs the Phase 2 bf16 naive matvec's ~9% — ~3.7×
+closer to roofline before any optimization. Per-shape medians: q/o 46.3,
+k/v ~23.6, gate/up 75.4, down 49.2, lm_head 110.5 GB/s — the small
+per-layer matvecs individually underperform exactly as the gates entry
+anticipated. Mac fraction is NOT a device predictor (Phase 2 precedent:
+Mac 9% vs iPhone 50–70%); the 30.7 GB/s gate is decided only by P3-7.
+
+Verification: new tests 12 (byte-accounting pins incl. the real-artifact
+967,753,728/197 check, dual-timing sanity, per-shape/aggregate arithmetic
+on hand-built results, spot-check teeth, iteration/shape validation edges,
+untied/wrong-shape rejects, exportText fields). **Full suite minus the CPU
+logit gate, release: 328 tests, 2 skipped (opt-in free-run harnesses),
+0 failures (1672.5 s).** iOS app Release build verified (generic device,
+unsigned); device runs stay James's (P3-7).
+
+No pins, schema changes, or numeric-gate constants introduced or modified.
+Unblocks P3-7 (now ready: P3-3, P3-5, P3-6 all done — owner james).

@@ -225,6 +225,27 @@ Kept below for the record — they quantify the attached-run penalty at
 - **Prefill "before" (warm, detached): 8.2–10.7 tok/s** sequential
   (spec D6; Phase 5's target).
 
+## Phase 3 — dequant-matvec bandwidth microbench (D7, P3-6)
+
+Harness: one command buffer running one token's worth of REAL packed q4g64
+matvecs (28 layers × {q,k,v,o,gate,up,down} + lm_head = 197 dispatches,
+weights-only — no attention/norm/elementwise/KV), through the P3-4 fused
+kernels exactly as the decode pipeline binds them. Aggregate weight-stream
+rate = 967,753,728 packed bytes (q + scales + biases) ÷ command-buffer GPU
+time; per-shape rates from separate per-role command buffers, reported but
+never gated. 2 warmup discarded + 10 measured per run; dual timing per hard
+rule 7; a Tier-K spot check vs the CPU-quant oracle withholds the figure on
+failure. The pre-committed gate (aggregate ≥ 0.70 × 43.84 = 30.7 GB/s, best
+across the D8 repeats protocol) applies to the pinned iPhone ONLY (P3-7,
+James). Reproduce with:
+`swift run -c release qwen-metal-cli microbench --model-dir models`.
+
+### 2026-09-04 — Mac dev-loop sanity row, M2 Pro (P3-6)
+
+| Date | Device | OS | Toolchain | Aggregate median GB/s | Best | Min–max | Median overhead (wall−GPU) | Notes |
+|---|---|---|---|---|---|---|---|---|
+| 2026-09-04 | Apple M2 Pro (Mac, dev machine) | macOS 26.5.1 (25F80) | Xcode 26.6 (17F113), release | 58.81 | 60.05 | 58.59–60.05 | ~0.4 ms @ 197 dispatches | PROVISIONAL, dev-loop sanity only — never gated (gate is on-device, P3-7). mmap residency, artifact d03b3fe3…. Spot check max \|Δ\| 0.000486 ≤ Tier-K 0.0034. ~33% of the Mac triad figure (178.19 GB/s) vs Phase 2's ~9% — the fused kernel moves ~3.7× closer to the Mac roofline than the bf16 naive matvec, still naive-by-design (D4 optimization license is open, gated by P3-7). Per-shape medians: q/o 46.3, k/v ~23.6, gate/up 75.4, down 49.2, lm_head 110.5 GB/s — small per-layer matvecs individually underperform exactly as the gates entry anticipated; the aggregate is the roofline-relevant number. |
+
 ## Phase 0a — energy dry-run + corrections (PROVISIONAL)
 
 ### 2026-08-22 — sustained battery-delta cycles, iPhone 15 Pro (method VALIDATED)

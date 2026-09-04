@@ -1045,8 +1045,9 @@ tasks:
   - id: P3-6
     rank: 16.6
     title: "Dequant-matvec bandwidth microbench (one token's matvecs, aggregate + per-shape GB/s) + Mac sanity row"
-    status: in_progress
+    status: done
     started_at: 2026-09-04T07:00:48Z
+    completed_at: 2026-09-04T08:01:33Z
     depends_on: [P3-4]
     blocks: [P3-7]
     deliverable:
@@ -1058,11 +1059,22 @@ tasks:
       command buffer; aggregate weight-stream rate = packed bytes / summed
       GPU time. The 0.70 x 43.84 GB/s gate applies to the ON-DEVICE run
       (P3-7, James); Mac row is PROVISIONAL sanity, never gated.
+      2026-09-04 (done): landed as Bench/QuantMatvecMicrobench.swift + CLI
+      `microbench` + app Benchmark-screen microbench mode (shared
+      exportText). Byte accounting pinned by test at 967,753,728 B;
+      197 dispatches MEASURED (DispatchCounter); Tier-K spot check
+      withholds the figure on failure (P0B-4 precedent). Mac PROVISIONAL
+      row: aggregate median 58.81 GB/s (best 60.05, ~33% of Mac triad vs
+      Phase 2 bf16's ~9%); per-shape reported (k/v ~23.6 .. lm_head
+      110.5). +12 tests; full suite minus CPU logit gate, release: 328
+      tests, 2 opt-in skips, 0 failures (1672 s). Kernel still naive —
+      D4 optimization license unexercised; gate decided only by P3-7.
+      See DECISIONS.md 2026-09-04 P3-6 entry. Unblocks P3-7 (james).
 
   - id: P3-7
     rank: 16.7
     title: "On-device Phase 3 rows: microbench gate + memory drop + decode row + packed mmap-vs-wired interleaved re-test"
-    status: blocked
+    status: ready
     owner: james
     depends_on: [P3-3, P3-5, P3-6]
     blocks: [P3-EXEC]

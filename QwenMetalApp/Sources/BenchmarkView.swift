@@ -7,8 +7,16 @@ import QwenMetalEngine
 /// residency mmap/wired toggle, and displays + exports the row fields. The prompt picker on burst also
 /// serves the prefill row (prefill-summarize — prompts/README roles).
 struct BenchmarkView: View {
+    /// Screen-local run modes: the two BenchmarkReport generation modes plus
+    /// the P3-6 dequant-matvec microbench (weights-only, no generation).
+    private enum RunMode: String, CaseIterable {
+        case burst
+        case sustained
+        case microbench
+    }
+
     @EnvironmentObject private var model: AppModel
-    @State private var mode: BenchmarkReport.Mode = .burst
+    @State private var mode: RunMode = .burst
     @State private var burstPrompt: BundledPrompt = .decodeEssay
     @State private var batteryNote = ""
     @State private var coldWarmNote = ""
@@ -49,22 +57,29 @@ struct BenchmarkView: View {
 
                 Section("Protocol") {
                     Picker("Mode", selection: $mode) {
-                        Text("burst").tag(BenchmarkReport.Mode.burst)
-                        Text("sustained (≥5 min)")
-                            .tag(BenchmarkReport.Mode.sustained)
+                        Text("burst").tag(RunMode.burst)
+                        Text("sustained (≥5 min)").tag(RunMode.sustained)
+                        Text("microbench").tag(RunMode.microbench)
                     }
                     .pickerStyle(.segmented)
                     .disabled(model.isRunning)
-                    if mode == .burst {
+                    switch mode {
+                    case .burst:
                         Picker("Prompt", selection: $burstPrompt) {
                             ForEach(BundledPrompt.allCases) {
                                 Text($0.rawValue).tag($0)
                             }
                         }
                         .disabled(model.isRunning)
-                    } else {
+                    case .sustained:
                         Text("sustained is pinned to decode-essay "
                             + "(prompt role separation)")
+                            .font(.caption)
+                    case .microbench:
+                        Text("D7 dequant-matvec sweep (197 packed matvecs, "
+                            + "weights-only; q4g64 artifact required). Gate "
+                            + "30.7 GB/s = best of ≥3 same-session runs, "
+                            + "detached (D8).")
                             .font(.caption)
                     }
                     TextField(
@@ -89,6 +104,10 @@ struct BenchmarkView: View {
                                         coldWarmNote: coldWarm)
                                 case .sustained:
                                     await model.runSustained(
+                                        batteryNote: battery,
+                                        coldWarmNote: coldWarm)
+                                case .microbench:
+                                    await model.runMicrobench(
                                         batteryNote: battery,
                                         coldWarmNote: coldWarm)
                                 }

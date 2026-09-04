@@ -259,6 +259,47 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// P3-6 (spec D7): the standalone dequant-matvec microbench. Weights-only
+    /// by construction — it loads the packed artifact directly (no GPUModel,
+    /// no KV cache) and honors the residency toggle. The 30.7 GB/s gate is
+    /// evaluated by James over the D8 repeats protocol (≥3 same-session runs
+    /// of this button, detached); the app just reports each run's numbers.
+    func runMicrobench(batteryNote: String, coldWarmNote: String) async {
+        guard !isRunning, !isLoading else { return }
+        isRunning = true
+        errorMessage = nil
+        lastReport = nil
+        defer { isRunning = false }
+        do {
+            let residency = self.residency
+            statusLine = "microbench (197 packed matvecs, residency "
+                + "\(residency.rawValue))…"
+            let report: String =
+                try await Task.detached(priority: .userInitiated) {
+                    let directory = try Self.locateModelDirectory()
+                    let config = try ModelConfig.load(
+                        path: directory.configURL.path)
+                    let packed = try PackedCheckpoint(
+                        path: directory.requirePackedCheckpoint().path)
+                    let bench = try QuantMatvecMicrobench(
+                        packed: packed, config: config,
+                        context: try MetalContext(), residency: residency)
+                    let result = try bench.run()
+                    return result.exportText(
+                        dateStamp: Self.dateStamp(),
+                        deviceLabel: Self.deviceModelIdentifier(),
+                        osVersion: "iOS \(Self.osVersionString())",
+                        batteryHealthNote: batteryNote,
+                        coldOrWarmNote: coldWarmNote,
+                        residency: residency)
+                }.value
+            lastReport = report
+            statusLine = "microbench complete"
+        } catch {
+            show(error)
+        }
+    }
+
     // MARK: - Internals
 
     /// Loads (off the main thread) if there is no engine for the selected
