@@ -1140,7 +1140,8 @@ tasks:
   - id: SPEC-P4
     rank: 18
     title: "Write Phase 4 spec (fused attention + dispatch reduction) with pre-committed gates"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-05T20:24:41Z
     depends_on: [P3-EXEC]
     blocks: [P4-EXEC]
     deliverable:
