@@ -1140,10 +1140,11 @@ tasks:
   - id: SPEC-P4
     rank: 18
     title: "Write Phase 4 spec (fused attention + dispatch reduction) with pre-committed gates"
-    status: in_progress
+    status: done
     started_at: 2026-09-05T20:24:41Z
+    completed_at: 2026-09-05T20:30:24Z
     depends_on: [P3-EXEC]
-    blocks: [P4-EXEC]
+    blocks: [P4-EXEC, P4-1]
     deliverable:
       file: docs/phases/phase-4.md
       tests: "dispatch/latency/roofline targets committed pre-phase"
@@ -1164,18 +1165,134 @@ tasks:
       20.85 -> 17.14 across ~35 min, mode-independent) — any Phase 4
       before/after protocol should account for within-session drift, not
       just the D8 interleaving rule.
+      2026-09-05 (done): spec landed (docs/phases/phase-4.md, D1-D8) +
+      Phase 4 gates pre-committed in DECISIONS.md (fused-span tolerance
+      mapping reusing Phase 2/3 constants; dispatch gate <=300;
+      overhead gate <=1.2 ms/token; decode floor >=24.0 tok/s; 29.4
+      judged-not-gated with mandatory roofline decomposition; latency
+      variance reported; bookend drift protocol addendum). OV#10 covered;
+      both P3-7 obligations folded in. P4-1..P4-5 seeded below; P4-EXEC
+      re-pointed. NOTE for James: five judgment-derived items + the
+      29.4-as-judgment structure are flagged in the gates entry — veto
+      window is before P4-EXEC work starts.
+
+  # ---------- Phase 4 build tasks (seeded 2026-09-05 by SPEC-P4; spec: docs/phases/phase-4.md) ----------
+  - id: P4-1
+    rank: 18.1
+    title: "Per-stage GPU attribution harness (diagnostic mode) + latency-variance stats + Mac 'before' breakdown"
+    status: ready
+    depends_on: [SPEC-P4]
+    blocks: [P4-2]
+    deliverable:
+      file: "engine package (instrumentation) + CLI/app surfacing + benchmarks/results.md (Mac PROVISIONAL breakdown)"
+      tests: "attribution sanity (class times sum ~= token GPU time, wall >= GPU, production path untouched); variance stats (p50/p95/p99/max + stall count) on hand-built records"
+    est_complexity: medium
+    notes: |
+      Spec D1/D7: measure before fusing (PLAN "do not guess at
+      bottlenecks"). Per-kernel-class GPU time (quant-matvec / attention /
+      norm+elementwise / head-tail) via per-class command-buffer splits or
+      counter sampling — opt-in diagnostic mode, never a benchmark row,
+      production one-command-buffer path unchanged. Latency variance:
+      p50/p95/p99/max + stall count (>2x window median) from
+      TokenStepRecord, exported in BenchmarkReport + CLI. Mac "before"
+      (naive-path) breakdown row lands here; on-device breakdown is P4-5.
+
+  - id: P4-2
+    rank: 18.2
+    title: "Fused GQA SDPA decode kernel (online softmax, 1 dispatch/layer) + edge tests 1-5 + toggle wiring"
+    status: blocked
+    depends_on: [P4-1]
+    blocks: [P4-3]
+    deliverable:
+      file: "engine package (Metal kernels + GPUModel kernel-path option)"
+      tests: "p=0 exact (== V row), GQA mapping pattern, cache-boundary p=4095, adversarial online-softmax orderings, window-depth accumulation — all at the reused attention constant max(2^-7*M, 2^-11) vs CPU-quant; affected Tier suites re-passed"
+    est_complexity: large
+    notes: |
+      Spec D2/D4/D5: scores+softmax+PV in one kernel, online fp32 softmax
+      (no materialized scores/probs buffers), GQA mapping internal, fp16
+      cache reads/output. Hard rule 3: correctness tests BEFORE any
+      optimization iteration, re-passed per iteration. Naive attention
+      kernels stay selectable (engine flag) for the P4-5 in-session
+      before/after row — not deleted this phase.
+
+  - id: P4-3
+    rank: 18.3
+    title: "Folding set: qk-norm/RoPE/append cluster + residual/SwiGLU folds (+norm folds/matvec concat) to <=300 dispatches"
+    status: blocked
+    depends_on: [P4-2]
+    blocks: [P4-4]
+    deliverable:
+      file: "engine package (Metal kernels + GPUModel encode structure)"
+      tests: "fused cluster cache contents at the norm-species gate vs CPU-quant (RoPE positions {0,1,large}); residual/SwiGLU folds at Tier K vs unfused chain; tiny-model dispatch-count pins; real-dims measured count <= 300"
+    est_complexity: large
+    notes: |
+      Spec D3/D5/D6: mandated outcomes — 6-dispatch post-QKV elementwise
+      cluster -> <=2; standalone residual adds and SwiGLU eliminated
+      (folded into producer/consumer matvecs); further norm folds and/or
+      matvec concatenation (qkv -> 1, gate+up -> 1) applied as P4-1's
+      attribution says they pay, until the pre-committed <=300 gate is
+      met (structural floor ~227, mandated-folds-only ~311). k-side
+      append becomes computed -> exactness replaced by mapped tolerance
+      (gates entry). All folds keep fp16-boundary/fp32-accumulate
+      semantics.
+
+  - id: P4-4
+    rank: 18.4
+    title: "Fused path default + full Tier-M/E re-verification + free-run report + Mac 'after' rows + app finalization"
+    status: blocked
+    depends_on: [P4-3]
+    blocks: [P4-5]
+    deliverable:
+      file: "engine package (GPU decode path) + CLI/app"
+      tests: "Tier-M at surviving slices + Tier-E logit suite verbatim vs live CPU-quant on the fused path; both kernel paths pass shared smoke; edge behavior unchanged (empty prompt, >4K, no-Metal, missing model); free-run divergence REPORTED (file mechanism)"
+    est_complexity: medium
+    notes: |
+      Spec D4/D5 + edge tests 9-10. Fused becomes the default (CLI flag +
+      app toggle select naive for A/B); free-run report via
+      QWEN_FREE_RUN_REPORT_FILE (DEV-2 lesson). Mac PROVISIONAL rows:
+      fused decode sanity + "after" attribution breakdown. Run oracle
+      suites release-mode (DEV-1). Dispatches/token recorded via
+      DispatchCounter (measured, not derived).
+
+  - id: P4-5
+    rank: 18.5
+    title: "On-device Phase 4 rows: decode/overhead/dispatch gates + interleaved naive-vs-fused before/after + variance/attribution exports"
+    status: blocked
+    owner: james
+    depends_on: [P4-4]
+    blocks: [P4-EXEC]
+    deliverable:
+      file: "benchmarks/results.md rows + DECISIONS.md entries"
+      tests: "decode floor >=24.0 tok/s (warm-burst window median); overhead <=1.2 ms/token median; dispatches <=300; D8+bookend protocol (same-config session bookends, interleaved A/B, detached, validation OFF recorded)"
+    est_complexity: medium
+    notes: |
+      Spec D6/D7/D8 + gates entry. Rows: interleaved naive-vs-fused warm
+      burst (the before/after claim — directional only if interleaved
+      ranges don't overlap AND effect > bookend drift), fused sustained,
+      overhead @ new dispatch count, on-device attribution export,
+      latency-variance fields. These rows + the attribution feed the
+      P4-EXEC decode-vs-roofline judgment (29.4 met, or gap decomposed
+      with no unexplained slack). Agents prepare only.
 
   - id: P4-EXEC
     rank: 19
-    title: "Execute Phase 4 per spec (tasks seeded by SPEC-P4)"
+    title: "Phase 4 exit milestone (all P4 tasks done, exit criteria walked)"
     status: blocked
-    depends_on: [SPEC-P4]
+    depends_on: [P4-1, P4-2, P4-3, P4-4, P4-5]
     blocks: [SPEC-P5]
     deliverable:
       file: "per docs/phases/phase-4.md"
       tests: "Phase 4 exit criteria (PLAN.md table)"
     est_complexity: large
-    notes: "Milestone placeholder."
+    notes: |
+      2026-09-05: concrete tasks P4-1..P4-5 seeded by SPEC-P4; this became
+      the exit-criteria walk + DECISIONS close-out (was: milestone
+      placeholder). Close-out ALSO records the D6 decode-vs-roofline
+      judgment (29.4 met or decomposed) and regenerates
+      docs/architecture.pdf + refreshes README/newcomer docs per the
+      standing *-EXEC rules. Veto window on the five judgment-derived
+      Phase 4 gate items closes before work on this milestone's
+      dependencies starts (gates entry, 2026-09-05).
 
   - id: SPEC-P5
     rank: 20
@@ -1376,6 +1493,25 @@ tasks:
       byte-stable (P2-5 recorded cpu-backend output unchanged) and P2-6
       had no reason to risk it. Rides well with CLI-1 (same file). Filler:
       never blocks the phase chain.
+
+  - id: KP-1
+    rank: 30
+    title: "Remove (or keep, with a decision) the naive kernel-path toggle on the packed pipeline after the P4-5 before/after row"
+    status: blocked
+    depends_on: [P4-5]
+    blocks: []
+    deliverable:
+      file: "engine package (GPUModel kernel-path option) + CLI/app toggle"
+      tests: "remaining suites green; bf16 backend (permanently naive-structure) untouched"
+    est_complexity: small
+    notes: |
+      Seeded 2026-09-05 by SPEC-P4 (spec D4 scope clarification): the
+      naive kernels are NEVER deleted — the bf16 backend runs the naive
+      structure permanently as the Phase 2 correctness artifact. Once the
+      P4-5 interleaved before/after row lands, the naive selection on the
+      PACKED pipeline has served its purpose; this task removes the
+      toggle (or records a decision to keep it as a diagnostic, wired
+      like the mmap/wired toggle). Filler: never blocks the phase chain.
 
   - id: BW-1
     rank: 24

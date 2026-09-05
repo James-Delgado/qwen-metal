@@ -2413,3 +2413,111 @@ close-out, incl. architecture.pdf + README refresh per the standing
   basis → SPEC-P6, Phase 4 pointers → SPEC-P4) fold into existing SPEC
   tasks per the established pattern; existing fillers (BW-1, DEV-1, DEV-2,
   DK-1, CLI-1, CLI-2) stand.
+
+## 2026-09-05 — Phase 4 gates pre-committed: fused-span tolerances (reused) + dispatch/overhead/decode floors
+
+Set BEFORE any Phase 4 code or test exists (PLAN.md invariant 4; the eng
+review's SPEC-P4 obligation OV#10). Spec: docs/phases/phase-4.md.
+Grounding measurements (all recorded in the P3-5/P3-6/P3-7 entries above;
+nothing invented): decode warm-burst window median 20.61 tok/s ≈ 48.5
+ms/token at ≈49% of the 43.84 GB/s roofline; weights-only microbench
+35.29 GB/s best (≈80%; 967,753,728 B ⇒ ≈27.4 ms/token at that rate);
+≈17 ms/token non-matvec; 591 dispatches/token at 1.9–2.0 ms/token
+wall−GPU (≈3.3 µs/dispatch); warm-burst run-to-run spread ~2%;
+session-scale thermal drift 20.85 → 17.14 tok/s over ~35 min (P3-7).
+
+- **Correctness: NO new tolerance constants.** Every fused kernel diffs
+  against the CPU-quant oracle computing the SAME span, gated at the
+  loosest Phase 2/3 constant among the modules the span absorbs
+  (outermost species), floor 2⁻¹¹: matvec/elementwise-only spans
+  (residual, SwiGLU folds) at Tier K max(2⁻⁹·M, 2⁻¹¹); norm-inclusive
+  spans (norm+matvec, qk-norm/rope/append cluster) at max(2⁻⁸·M, 2⁻¹¹);
+  attention-inclusive spans (fused SDPA) at max(2⁻⁷·M, 2⁻¹¹). Surfaces
+  that remain pure copies/lookups stay EXACT (embedding gather; v-side
+  append while it remains a copy; fused-SDPA p=0 output == V row
+  bitwise). Tier-M constants verbatim at surviving module-output slices;
+  Tier-E suite (logit checkpoints/fingerprints/top-64/tie-aware top-1 at
+  ε_tie = 2⁻⁴·M64) verbatim on the fused path vs live CPU-quant.
+  Free-running divergence stays REPORTED, not gated (2026-08-23
+  rationale). Naive-vs-fused pipeline outputs are NOT required to match
+  bitwise (reduction order); both gate against the same oracle.
+- **Dispatch gate: dispatches/token ≤ 300**, MEASURED by DispatchCounter
+  (never derived). Derivation: the mandated D3 fold set alone lands
+  ≈11/layer ⇒ ≈311/token; ≤300 additionally forces at least one real
+  consolidation (norm fold or matvec concatenation, structural floor
+  ≈8/layer ⇒ ≈227), i.e. ~2× down from 591. Tripwire, not aspiration:
+  a fused implementation that can't clear 300 didn't land the fold set.
+- **Overhead gate (OV#10): median per-token wall−GPU ≤ 1.2 ms on-device**
+  (P4-5, D8 protocol, detached). Derivation: measured ≈3.3 µs/dispatch ×
+  ≤300 ⇒ ~1.0 ms expected; 1.2 allows per-dispatch variance without
+  admitting an encoder-cost regression (the metric this phase exists to
+  shrink — PLAN invariant 5 / OV#10).
+- **Decode floor: warm-burst canonical-window median ≥ 24.0 tok/s
+  on-device** (P4-5). Derivation: halving the recorded ≈17 ms non-matvec
+  slice ⇒ ≈40 ms/token ≈ 25.0 tok/s; committed floor 24.0 leaves ~4%
+  headroom against the ~2% observed warm-burst spread. A fused
+  attention + fold set that cannot halve naive attention + elementwise +
+  overhead time signals a defect, not a hard hardware limit (KV reads at
+  window depth are ≈46 MB/token ≈ 1 ms at roofline — attention has ample
+  room above its byte floor).
+- **The 29.4 tok/s success metric is JUDGED, not gated, in this phase:**
+  P4-EXEC must record a decode-vs-roofline judgment — target met, OR
+  every ms/token of the residual gap attributed to a measured component
+  (matvec stream rate, attention/KV, remaining elementwise, dispatch
+  overhead) from the D1 on-device attribution, with no unexplained
+  slack. Consistent with the 2026-08-26 veto entry: gates are bug
+  tripwires (floors); aspirations are reported and judged. PLAN's
+  success framing ("measuring, explaining, and narrowing the gap")
+  binds the judgment's form.
+- **Latency variance (PLAN exit criterion): REPORTED, not gated** —
+  per-token wall p50/p95/p99/max over the canonical window + stall
+  count (tokens > 2× window median) on every Phase 4 row.
+- **Protocol addendum (bookend rule, extends the Phase 3 D8 pins for all
+  Phase 4+ device rows):** any session making a directional A-vs-B claim
+  starts AND ends with the same configuration; a directional claim
+  requires non-overlapping interleaved ranges (existing D8 rule) AND an
+  effect size exceeding the measured bookend drift, else "unresolved
+  (drift-dominated)". The Phase 4 before/after row is naive-vs-fused via
+  the kernel-path toggle, interleaved in one session on one build.
+
+Honest flag (surfaced for James, veto window = before P4-EXEC work
+starts, the SPEC-P2/P3 precedent): the tier reuses are derivations, but
+FIVE items in this entry are judgment-derived — the ≤300 dispatch
+count, the ≤1.2 ms overhead ceiling, the ≥24.0 tok/s decode floor, the
+fused-span constant-mapping rule (loosest-absorbed-constant), and the
+bookend drift rule as a protocol pin. Also flagged as a structural
+decision: keeping 29.4 as a recorded judgment rather than a phase gate.
+Per hard rule 6, once P4 tests exist these numbers never loosen;
+failures are bug signals.
+
+## 2026-09-05 — SPEC-P4: Phase 4 spec written; P4 build tasks seeded
+
+- **Spec landed: docs/phases/phase-4.md** (fused attention + dispatch
+  reduction). The eng-review Part 4 obligation is covered: the
+  dispatch-overhead target consumes the wall−GPU delta metric (OV#10 —
+  overhead gate ≤1.2 ms/token, previous entry), and the P3-7 obligations
+  from the backlog notes are folded in (session-scale thermal drift →
+  the D8 bookend rule; the 49%-vs-80% roofline split and ≈17 ms
+  non-matvec figure are the phase's quantitative targets).
+- **Design decisions (D1–D8, rationale in the spec):** measure-first
+  per-kernel-class GPU attribution (diagnostic mode; production
+  one-command-buffer path untouched) before any fusion; fused GQA SDPA
+  decode kernel (one dispatch/layer, online fp32 softmax, no
+  materialized scores/probs); mandated fold set (qk-norm/RoPE/append
+  cluster → ≤2 dispatches, residual + SwiGLU standalone dispatches
+  eliminated, norm folds / matvec concatenation as attribution says
+  they pay); naive kernel path stays selectable (engine flag + CLI/app
+  toggle) so the before/after row is interleaved in-session — removal
+  deferred until that row lands; correctness via the fused-span mapping
+  rule (no new constants); latency-variance stats (p50/p95/p99/max +
+  stall count) reported on every row; KV cache, packed schema, packing
+  recipe, prefill structure, and both CPU oracles untouched.
+- **Backlog:** P4-1..P4-5 seeded at ranks 18.1–18.5 (P4-5 owner: james —
+  device rows); P4-EXEC re-pointed at them and becomes the
+  exit-criteria walk + close-out (architecture.pdf + README refresh per
+  the standing *-EXEC rule). Phase 5 (tiled prefill GEMM) is unchanged
+  downstream.
+- **NOTE for James (veto window before P4-EXEC work starts):** five
+  judgment-derived items + the 29.4-as-judgment structure are flagged
+  in the gates entry above and reported item-by-item in the session
+  report per AGENT_OPERATION.md step 11.
