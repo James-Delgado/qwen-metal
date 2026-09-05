@@ -17,10 +17,12 @@
 
 ## Project status
 
-Phase 0 (baselines + toy kernels) — not started. Plan solidified 2026-08-20 after full
-eng review (20 findings folded). No code yet; docs only. Blocking decision: pin the
-model (Qwen 2.5 vs Qwen 3 — architecture fork) in DECISIONS.md before Phase 0a.
-See PLAN.md phase table for the roadmap.
+Phases 0–3 exited (as of 2026-09-05); Phase 4 (fused attention + dispatch
+reduction) is next — SPEC-P4 is the open task. Pinned model: Qwen/Qwen3-1.7B
+@ 70d244cc on iPhone 15 Pro. The engine decodes end-to-end from the packed
+4-bit q4g64 format on-device at 20.6 tok/s warm-burst (target 29.4); every
+pre-committed gate to date has held unmodified on its first run. See PLAN.md
+phase table for the roadmap and DECISIONS.md for the measurement ledger.
 
 ## Codebase map
 
@@ -34,20 +36,21 @@ Package.swift               engine package manifest: QwenMetalEngine library +
 Sources/
   QwenMetalEngine/          engine core (shared library — all engine logic here)
   QwenMetalCLI/             macOS CLI entry point (thin; no engine logic)
+QwenMetalApp/               thin iOS SwiftUI shell (bench runner; James deploys)
 docs/
   AGENT_OPERATION.md        per-task SOP (authoritative for this repo)
   PRIORITIES.yaml           ranked task backlog (drift-tested)
   METHODOLOGY.md            binding standards
   PRD-phase-0.md            Phase 0 deliverables + acceptance criteria
-  phases/phase-0-1.md       engineering spec for Phases 0b and 1
-benchmarks/                 results.md + pinned prompt set (created when first row lands)
+  phases/                   per-phase engineering specs (phase-0-1, -2, -3)
+  architecture.pdf          rendered design snapshot (see upkeep rule below)
+benchmarks/                 results.md + pinned prompt set + device-shell/ + runbooks
+models/                     local-only pinned artifacts (gitignored; sha256s in DECISIONS)
 tests/                      test_priorities.py (backlog drift test) +
                             QwenMetalEngineTests/ (XCTest; explicit path in manifest —
                             repo test root is lowercase on a case-insensitive FS)
-tools/                      Python fixture/reference-dump scripts (Phase 1, pinned deps)
+tools/                      Python fixture/reference-dump scripts (Phase 1+, pinned deps)
 ```
-
-Planned (Phase 2): `QwenMetalApp/` — thin iOS SwiftUI shell.
 
 ## Environment & running
 

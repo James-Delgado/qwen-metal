@@ -2339,3 +2339,77 @@ on-device section); outcomes:
 P3-7 done ⇒ all P3-1..P3-7 complete; P3-EXEC (exit-criteria walk +
 close-out, incl. architecture.pdf + README refresh per the standing
 *-EXEC rule) flips to ready.
+
+## 2026-09-05 — P3-EXEC: Phase 3 exit criteria walked — Phase 3 EXITED
+
+- **Exit-criteria walk (PLAN.md phase table / phase-3.md §Exit criteria —
+  all five MET, evidence cited to the entries above):**
+  1. *~4× memory drop vs Phase 2* ✓ — packed artifact 968,083,288 B
+     (0.968 GB) vs 3.44 GB bf16: 3.56× weight-byte drop, the plan's "~4×"
+     stated honestly as the spec's operationalization (P3-1 entry); on-device
+     phys_footprint rows recorded in BOTH modes (P3-7): mmap 537.8 MB /
+     wired-copy 1.43 GB honest total vs Phase 2's 4.3 GB, in-app cross-check
+     within ~2% of the Xcode gauge, derived ~1.5 GB budget confirmed.
+  2. *Standalone dequant-matvec microbench ≥ 0.70 × 43.84 = 30.7 GB/s
+     on-device* ✓ — gate PASSED (P3-7): best aggregate 35.29 GB/s (80.5% of
+     roofline), median-of-medians 34.65, and every one of the 50 measured
+     iterations individually clears the gate (worst 33.08) — with the kernel
+     still naive; the D4 optimization license was never needed.
+  3. *Layered oracle passes* ✓ — layer 1 dequant-tile EXACT bitwise incl.
+     adversarial fixtures and the real-artifact spot check (P3-4); layer 2
+     fused matvec at the reused Tier-K gate vs the sgemm-over-dequant oracle
+     (P3-4); layer 3 adversarial packing fixtures (P3-1, all 11 enumerated
+     edge cases); layer 4 quality gate vs mlx-lm 4-bit IN-BAND on all three
+     pre-committed formulas (P3-3 close: A 218/250 = 0.872 ≥ 0.836; KL
+     0.115575 ≤ 0.172375, 1.006× mlx — parity; dppl 2.500193 ≤ 3.720882) on
+     artifact d03b3fe3…. The arc that got there is the phase's best evidence
+     the layering works: the first artifact measured OUT of band, layers 1–2
+     (passing) localized the fault to the D2 recipe rather than packer or
+     kernels, and two James-approved amendments (QR-1 A1, QR-3 snap-scale)
+     landed red-first with NO gate touched at any point (hard rule 6 held
+     under pressure — the exact scenario it exists for).
+  4. *Tier-M/E suites green vs CPU-quant at the reused Phase 2 constants;
+     free-run divergence reported* ✓ — all held first run against the live
+     CPU-quant oracle (P3-5); free-run divergence NONE (5 prompts × 128
+     steps token-identical); dispatches/token measured 591 (1:1 kernel
+     swap); on-device determinism note: 18/18 sustained generations stopped
+     at the identical token across residency modes and thermal states (P3-7).
+  5. *DECISIONS.md entries for everything decided/measured* ✓ — artifact
+     sha256 lineage (0feaa7ce → d073af49 → d03b3fe3), band-setters recorded
+     BEFORE our metrics (P3-3 part 1), every gate outcome, the residency
+     close-out (mmap stays default for Phase 4+, decided by James), the
+     capacity-basis correction (energy figures ×1.172; Phase 6 re-pins
+     basis from health-at-run-time — obligation now also in SPEC-P6 notes).
+- **Verification at exit:** full release suite minus the CPU logit gate
+  (`swift test -c release --skip LogitMatchSuiteTests`):
+  "Executed 328 tests, with 2 tests skipped and 0 failures (0 unexpected)
+  in 1654.296 (1654.334) seconds" — identical counts to the P3-6 baseline;
+  both skips are the opt-in free-run report harnesses (QWEN_FREE_RUN_REPORT
+  unset). Backlog drift test: 5 passed.
+- **Architecture PDF regenerated v1.5 → v1.6** per the upkeep rule: title/
+  footer 2026-09-05 (Phase 3 exit); §1 Phase 3 standing (20.61 tok/s window
+  median, 35.3 GB/s microbench); §4 packed footprint rows + residency
+  CLOSED; §5.2 the 80%-vs-49% roofline split and the ~17 ms/token
+  non-matvec Phase 4 target; §6 Phase 3 oracle outcome incl. the
+  out-of-band→amendment→parity arc; §8 roadmap P3 EXITED / P4 NEXT; §10
+  risk rows updated (memory CLOSED, thermal protocol MITIGATED, new
+  capacity-basis row CLOSED); lineage line + phase-3.md. Figure 3 carries
+  the measured packed footprints; Figure 5 gains the P3 measured point
+  (20.6 tok/s @ ~0.97 GB/token); Figure 7 marks P3 done and corrects the
+  P0 energy figures to the re-based 0.122/0.154 J/tok. Verified via pypdf
+  extraction: all v1.6 markers present, no stale v1.5 strings (13 pages).
+- **Newcomer-facing docs refreshed** per the 2026-08-26 standing rule:
+  README.md Status → Phases 0–3 exited / Phase 4 next with the Phase 3
+  numbers; CLAUDE.md Project status was STALE AT "Phase 0 not started"
+  (predating even Phase 0 exit — it had silently survived every close-out
+  because the refresh rule postdates P2-EXEC by a day) → rewritten to
+  current state, and its codebase map updated (QwenMetalApp/, models/,
+  docs/phases/, architecture.pdf, benchmarks layout).
+- **Phase 3 is EXITED.** SPEC-P4 flipped to ready (rank 18) — the next
+  action. Its notes now carry the measured Phase 4 inputs (49%-vs-80%
+  roofline split, ~17 ms/token non-matvec, 1.9–2.0 ms dispatch overhead @
+  591, session-scale thermal drift caveat for before/after protocols). No
+  new follow-up tasks seeded: both discoveries of the close-out (capacity
+  basis → SPEC-P6, Phase 4 pointers → SPEC-P4) fold into existing SPEC
+  tasks per the established pattern; existing fillers (BW-1, DEV-1, DEV-2,
+  DK-1, CLI-1, CLI-2) stand.

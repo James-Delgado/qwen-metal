@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-08-25
+last_updated: 2026-09-05
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -1108,8 +1108,9 @@ tasks:
   - id: P3-EXEC
     rank: 17
     title: "Phase 3 exit milestone (all P3 tasks done, exit criteria walked)"
-    status: in_progress
+    status: done
     started_at: 2026-09-05T18:58:33Z
+    completed_at: 2026-09-05T19:55:29Z
     depends_on: [P3-1, P3-2, P3-3, P3-4, P3-5, P3-6, P3-7]
     blocks: [SPEC-P4]
     deliverable:
@@ -1125,11 +1126,21 @@ tasks:
       any newcomer-facing docs (CLAUDE.md upkeep section; carries to all
       future *-EXEC milestones). Veto window on the Phase 3 gate constants
       + schema CLOSED 2026-08-26 — approved by James (DECISIONS entry).
+      2026-09-05 (done): all five exit criteria walked and MET — evidence
+      in DECISIONS.md 2026-09-05 P3-EXEC entry (3.56× byte drop + 1.43 GB
+      wired footprint; microbench 35.29 ≥ 30.7 gate; layered oracle incl.
+      quality band at KL parity after the QR arc, no gate touched; Tier-M/E
+      first-run green + free-run divergence NONE; ledger complete).
+      Verification: release suite minus CPU logit gate 328 tests, 2 opt-in
+      skips, 0 failures (1654 s). architecture.pdf regenerated v1.6
+      (pypdf-verified, no stale v1.5 strings); README + CLAUDE.md status
+      refreshed (CLAUDE.md had been stale at "Phase 0 not started").
+      Phase 3 EXITED; SPEC-P4 flipped to ready.
 
   - id: SPEC-P4
     rank: 18
     title: "Write Phase 4 spec (fused attention + dispatch reduction) with pre-committed gates"
-    status: blocked
+    status: ready
     depends_on: [P3-EXEC]
     blocks: [P4-EXEC]
     deliverable:
@@ -1143,6 +1154,15 @@ tasks:
       (judgment-derived gate constants, new pins/schemas) directly in the
       conversation, item by item — never only in DECISIONS.md
       (AGENT_OPERATION.md step 11).
+      2026-09-05 (from P3-7/P3-EXEC): Phase 4's quantitative target is now
+      measured — decode runs at ~49% of roofline while the same kernels'
+      weights-only microbench hits ~80%; the gap is ~17 ms/token of
+      non-matvec time (attention over the fp16 cache, elementwise kernels,
+      591-dispatch overhead at 1.9-2.0 ms/token). Also: P3-7's interleaved
+      comparison showed SESSION-SCALE thermal drift (first-gen windows
+      20.85 -> 17.14 across ~35 min, mode-independent) — any Phase 4
+      before/after protocol should account for within-session drift, not
+      just the D8 interleaving rule.
 
   - id: P4-EXEC
     rank: 19
@@ -1199,6 +1219,13 @@ tasks:
       measurement-limitations section (Issue 3).
       2026-08-26 (James): veto-flagged decisions reported directly in the
       conversation at spec write-out (AGENT_OPERATION.md step 11).
+      2026-09-05 (binding obligation, from the capacity-basis correction
+      entry in DECISIONS.md): re-pin the energy capacity basis from battery
+      HEALTH read at run time (all prior "health" fields were state of
+      charge; basis corrected to 453.6 J per 1% SoC); record health and
+      charge as SEPARATE fields in all future energy rows. Also: iOS
+      version drifted 26.5.2 -> 26.6.1 across Phase 2/3 rows — Phase 6
+      re-baselines everything same-session/same-OS per the staleness rule.
 
   - id: P6-EXEC
     rank: 23

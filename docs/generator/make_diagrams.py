@@ -165,8 +165,8 @@ plt.savefig(f"{OUT}/d2_dataflow.png", dpi=200, bbox_inches="tight"); plt.close()
 fig, ax = plt.subplots(figsize=(9.2, 3.4))
 # Sizes derive from the pinned Qwen3-1.7B config (DECISIONS.md PIN-1):
 # ~0.97 GB packed 4-bit group-64 weights incl. per-group scales/biases;
-# fp16 GQA KV @4K = 448 MiB. Derived, not yet measured — Phase 2/3 on-device
-# phys_footprint rows replace them.
+# fp16 GQA KV @4K = 448 MiB. Phase 3 measured the budget for real
+# (DECISIONS.md 2026-09-05 P3-7): wired-copy honest total 1.43 GB.
 segs = [("Weights + scales (4-bit g64, mmap)", 0.97, BLUE, BLUEF),
         ("KV cache @4K (fp16, GQA)", 0.44, PURPLE, PURPLEF),
         ("Activations + scratch", 0.10, GREEN, GREENF),
@@ -200,7 +200,7 @@ ax.text(ceiling+0.05, 1.2, "practical iOS\nmemory ceiling\n(jetsam; with\nIncrea
         fontsize=7.6, color=RED, va="center")
 ax.text(0, 0.45, "0 GB", fontsize=8, color=GRAY)
 ax.text(ceiling-0.12, 0.45, f"{ceiling} GB", fontsize=8, color=GRAY)
-ax.text(0, 0.1, "Budget rule: every allocation is accounted here before it is written. Weights are file-backed (mmap) — cheaper under iOS memory\naccounting than dirty heap pages. KV cache is preallocated at load; nothing grows at runtime. This is the Phase 3+ end state; the\nPhase 2 bf16 interim (~4.0 GB high-water) ran on-device without jetsam — measured phys_footprint: mmap ~536 MB vs wired ~4.3 GB.",
+ax.text(0, 0.1, "Budget rule: every allocation is accounted here before it is written. Weights are file-backed (mmap) — cheaper under iOS memory\naccounting than dirty heap pages. KV cache is preallocated at load; nothing grows at runtime. MEASURED at Phase 3 exit (packed\nengine): phys_footprint mmap ~538 MB / wired-copy 1.43 GB honest total, vs the Phase 2 bf16 interim's ~536 MB / 4.3 GB.",
         fontsize=7.8, color=INK)
 plt.savefig(f"{OUT}/d3_memory.png", dpi=200, bbox_inches="tight"); plt.close()
 
@@ -256,6 +256,9 @@ bpt = np.linspace(0.4, 3.7, 300)  # GB per token
 # figure (read-mostly traffic exceeds 2R+1W triad — BW-1 will bound it).
 # Phase 2 (2026-08-25): our naive bf16 'before' point added — 3.44 GB/token,
 # measured 6.7–8.6 tok/s on-device (50–70% of roofline; DECISIONS.md P2-7).
+# Phase 3 (2026-09-05): packed q4g64 point added — ~0.97 GB/token weights,
+# warm-burst window median 20.61 tok/s (range 20.47–20.88); ~49% of roofline
+# end-to-end while the weights-only microbench runs at ~80% (DECISIONS.md P3-7).
 for bw, c, ls, lab in [
     (43.84, BLUE, "-", "43.84 GB/s (MEASURED triad, iPhone 15 Pro)"),
     (51.2, "#93c5fd", "--", "51.2 GB/s (A17 Pro rated)"),
@@ -278,8 +281,12 @@ ax.annotate("llama.cpp (MEASURED, P0): 32.4\n(Q4_K_M, 5.03 BPW → more bytes/to
             arrowprops=dict(arrowstyle="->", color=ORANGE))
 ax.scatter([3.44], [7.5], s=80, color=RED, marker="D", zorder=6)
 ax.annotate("qwen-metal P2 naive bf16 (MEASURED):\n6.7–8.6 tok/s 'before' @ 3.44 GB/token\n(50–70% of roofline; Phases 3–5 close it)", (3.44, 7.5),
-            xytext=(0.62, 5.5), fontsize=8.5, color=RED,
+            xytext=(1.8, 1.5), fontsize=8.5, color=RED,
             arrowprops=dict(arrowstyle="->", color=RED))
+ax.scatter([0.97], [20.61], s=90, color=BLUE, marker="D", zorder=6)
+ax.annotate("qwen-metal P3 packed 4-bit (MEASURED):\n20.6 tok/s warm @ ~0.97 GB/token — 49% of\nroofline (weights-only microbench: 80%)", (0.97, 20.61),
+            xytext=(0.5, 6), fontsize=8.5, color=BLUE,
+            arrowprops=dict(arrowstyle="->", color=BLUE))
 ax.set_xlabel("Bytes read per generated token (GB)  ≈  packed weights + scales + KV reads", fontsize=9)
 ax.set_ylabel("Decode tokens / second (ceiling)", fontsize=9)
 ax.set_ylim(0, 130); ax.set_xlim(0.4, 3.7)
@@ -319,7 +326,7 @@ box(ax, 3.3, 2.6, 2.5, 0.85, "CPU-quant reference (P3)", BLUEF, BLUE, 8.8,
 arrow(ax, 4.55, 3.95, 4.55, 3.45, color=BLUE)
 arrow(ax, 6.9, 3.95, 5.6, 3.3, color=PURPLE)
 box(ax, 6.3, 2.6, 2.6, 0.85, "Quality gate", PURPLEF, PURPLE, 8.5,
-    sub="top-1 agreement + KL vs mlx-lm\n4-bit; perplexity recorded")
+    sub="top-1 agreement + KL + Δppl slice,\nbanded vs mlx-lm 4-bit (P3: in-band)")
 arrow(ax, 6.3, 3.03, 5.8, 3.03, color=PURPLE, ls="--")
 
 box(ax, 0.3, 1.3, 2.7, 0.85, "GPU dequant tile test", ORANGEF, ORANGE, 8.5,
@@ -342,11 +349,11 @@ plt.savefig(f"{OUT}/d6_oracle.png", dpi=200, bbox_inches="tight"); plt.close()
 # ----------------------------------------------------------------------------
 fig, ax = plt.subplots(figsize=(9.4, 4.9))
 phases = [
-    ("0", "Baselines + toy kernels — DONE 2026-08-22", "measured: 43.84 GB/s; MLX 39.2 / llama.cpp 32.4 tok/s; target 29.4; energy 0.104/0.131 J/tok", 0, 1.5, GREEN, GREENF),
+    ("0", "Baselines + toy kernels — DONE 2026-08-22", "measured: 43.84 GB/s; MLX 39.2 / llama.cpp 32.4 tok/s; target 29.4; energy 0.122/0.154 J/tok (corrected basis)", 0, 1.5, GREEN, GREENF),
     ("1", "CPU fp32 reference (macOS) — DONE 2026-08-23", "logit suite ≤1e-3, all 5 prompts, first run; tokenizer id-identical; 118 tests; post-phase audit hardening", 1.0, 2.5, GREEN, GREENF),
     ("2", "Naive Metal port + minimal KV cache — DONE 2026-08-25", "all fp16 gates held first run; free-run divergence none; 'before' 6.7–8.6 tok/s on-device; mmap default", 3.0, 2.0, GREEN, GREENF),
-    ("3", "4-bit quant + fused dequant-matvec — NEXT (spec pending)", "CPU-quant oracle; tile test exact; matvec GB/s microbench; quality gate; roofline check", 4.5, 2.5, BLUE, BLUEF),
-    ("4", "Fused attention + kernel fusion", "GQA SDPA kernel; fold norm/RoPE; dispatches/token down", 6.5, 2.5, ORANGE, ORANGEF),
+    ("3", "4-bit quant + fused dequant-matvec — DONE 2026-09-05", "all gates in-band; microbench 35.3 GB/s ≥ 30.7 gate; decode 20.6 tok/s (3.0×); mmap default", 4.5, 2.5, GREEN, GREENF),
+    ("4", "Fused attention + kernel fusion — NEXT (spec pending)", "GQA SDPA kernel; fold norm/RoPE; dispatches/token down; target: the ~17 ms/token non-matvec time", 6.5, 2.5, BLUE, BLUEF),
     ("5", "Tiled prefill GEMM", "threadgroup memory + simdgroup_matrix; prefill vs MLX", 8.5, 2.0, PURPLE, PURPLEF),
     ("6", "Benchmark writeup", "full cross-engine table; thermal + J/tok (battery-delta); roofline analysis", 10.0, 1.5, INK, "#e2e8f0"),
 ]

@@ -65,7 +65,7 @@ def footer(canvas, doc):
     canvas.setFont("Helvetica", 7.5)
     canvas.setFillColor(GRAY)
     canvas.drawString(0.75 * inch, 0.45 * inch,
-                      "qwen-metal — Architecture & System Design  ·  v1.5  ·  2026-08-25")
+                      "qwen-metal — Architecture & System Design  ·  v1.6  ·  2026-09-05")
     canvas.drawRightString(letter[0] - 0.75 * inch, 0.45 * inch, f"Page {doc.page}")
     canvas.setStrokeColor(colors.HexColor("#e2e8f0"))
     canvas.line(0.75 * inch, 0.62 * inch, letter[0] - 0.75 * inch, 0.62 * inch)
@@ -86,7 +86,7 @@ S.append(Paragraph("Architecture &amp; System Design Document", ParagraphStyle(
 S.append(Paragraph("A from-scratch, single-model LLM inference engine in Swift + Metal for iPhone — "
                    "Qwen ~1.5–2B, 4-bit quantized — benchmarked head-to-head against MLX Swift and "
                    "llama.cpp on the same physical device.", SUB))
-S.append(Paragraph("Version 1.5 · August 25, 2026 (Phase 2 exit: naive GPU engine measured on-device) · Companion to PLAN.md, CLAUDE.md, DECISIONS.md, and the phase specs. "
+S.append(Paragraph("Version 1.6 · September 5, 2026 (Phase 3 exit: packed 4-bit engine measured on-device) · Companion to PLAN.md, CLAUDE.md, DECISIONS.md, and the phase specs. "
                    "Where this document and DECISIONS.md disagree, DECISIONS.md (the append-only log) wins.", CAP))
 S.append(HRFlowable(width="100%", color=INK, thickness=1.2, spaceAfter=10))
 
@@ -106,10 +106,14 @@ S.append(Paragraph(
     "which sits essentially at the measured memory-bandwidth roofline (§5). Matching it is therefore not required for "
     "success. The committed target is absolute and now pinned (DECISIONS.md, Phase 0 exit): decode ≥ 0.75 × MLX's "
     "measured decode tok/s = <b>29.4 tok/s</b>, both sides measured in the same session at the canonical measurement "
-    "window (generated tokens 128–512). Being able to account for the remaining gap is the point. As of Phase 2 exit "
-    "(2026-08-25) the deliberately naive engine runs on the device and measures <b>6.7–8.6 tok/s</b> decode at bf16 "
-    "weights (the 'before' row, PROVISIONAL) — 50–70% of its own bandwidth roofline; Phases 3–5 own the gap from "
-    "there.", BODY))
+    "window (generated tokens 128–512). Being able to account for the remaining gap is the point. Phase 2 (exited "
+    "2026-08-25) put the deliberately naive bf16 engine on the device at <b>6.7–8.6 tok/s</b> decode (the 'before' row, "
+    "PROVISIONAL). Phase 3 (exited 2026-09-05) packed the weights to 4-bit and fused dequantization into every "
+    "weight-consuming kernel: measured decode is now <b>20.61 tok/s</b> warm-burst at the canonical window (range "
+    "20.47–20.88) — ~3.0× the Phase 2 row on a 3.56× weight-byte drop, 70% of the target — and the standalone "
+    "dequant-matvec microbench sustains <b>35.3 GB/s</b> (80.5% of measured DRAM bandwidth), clearing its pre-committed "
+    "30.7 GB/s gate with the kernel still naive. Phases 4–5 own the remaining gap: the ~17 ms/token of non-matvec time "
+    "(attention, elementwise kernels, dispatch overhead) is Phase 4's explicit target.", BODY))
 S.append(Paragraph("1.1 · Non-goals (scope is a feature)", H2))
 S.append(Paragraph(
     "Breadth is where mature engines spend most of their engineering, and it teaches little per hour invested. Each "
@@ -187,15 +191,19 @@ S.append(Paragraph(
     "carved out in full at model load. Phase 2 measured the accounting asymmetry directly (DECISIONS.md 2026-08-25): "
     "the full bf16 engine shows an on-device phys_footprint of <b>~536 MB under mmap</b> — the 3.44 GB of clean "
     "file-backed weight pages largely escape the metric — versus <b>~4.3 GB</b> with the wired-copy variant, at load "
-    "times of 1.5 s vs 9.7 s. Speed between the two residency modes did not separate from device-state noise "
-    "(both directions observed), so the recorded default for Phase 3+ is mmap, with the comparison re-run "
-    "interleaved on the packed weights before the question is treated as closed.", BODY))
+    "times of 1.5 s vs 9.7 s. Phase 3 re-measured the budget on the packed engine (DECISIONS.md 2026-09-05): "
+    "phys_footprint <b>537.8 MB mmap / 1.43 GB wired-copy</b> (the honest total-resident number, vs Phase 2's 4.3 GB — "
+    "the exit criterion's memory drop, measured), loads 0.5 s vs 2.6 s, and the in-app phys_footprint cross-check "
+    "agrees with the Xcode gauge within ~2% in both modes. The residency question is now <b>closed</b>: an interleaved "
+    "sustained comparison on the packed weights left speed unresolved at n=3 (session-scale thermal drift dominates any "
+    "residency effect; no mmap page-fault bimodality on the 0.97 GB working set), so mmap — ~1 GB lighter and 5× faster "
+    "to load — stays the default for Phase 4+, with wired-copy retained in the app only as a diagnostic toggle.", BODY))
 S += fig(f"{D}/d3_memory.png", CW,
          "Figure 3 — Static memory budget against the practical iOS ceiling (with the Increased Memory Limit "
          "entitlement). Figures derive from the pinned Qwen3-1.7B config (DECISIONS.md PIN-1): ~0.97 GB packed "
-         "4-bit weights incl. scales, 448 MiB fp16 GQA KV at 4K (Phase 2 allocates exactly this, verified by test). "
-         "The Phase 2 bf16 interim was the ~4.0 GB high-water mark and is now measured: on-device phys_footprint "
-         "mmap ~536 MB vs wired-copy ~4.3 GB (DECISIONS.md 2026-08-25).")
+         "4-bit weights incl. scales, 448 MiB fp16 GQA KV at 4K (verified by test). MEASURED at Phase 3 exit "
+         "(packed engine, DECISIONS.md 2026-09-05): phys_footprint mmap ~538 MB / wired-copy 1.43 GB honest total, "
+         "vs the Phase 2 bf16 interim's ~536 MB / 4.3 GB — the derived ~1.5 GB budget confirmed on-device.")
 
 S.append(PageBreak())
 
@@ -234,19 +242,25 @@ S.append(Paragraph(
     "when it exceeds it.", BODY))
 S += fig(f"{D}/d5_roofline.png", CW * 0.92,
          "Figure 5 — Decode roofline with measured values: the 43.84 GB/s sustained triad curve, the measured "
-         "MLX and llama.cpp rows, the committed 29.4 tok/s target, the fp16 counterfactual, and the Phase 2 "
-         "naive bf16 'before' point (6.7–8.6 tok/s measured on-device, 2026-08-25).")
+         "MLX and llama.cpp rows, the committed 29.4 tok/s target, the fp16 counterfactual, the Phase 2 naive "
+         "bf16 'before' point (6.7–8.6 tok/s, 2026-08-25), and the Phase 3 packed 4-bit point (20.6 tok/s at "
+         "~0.97 GB/token, 2026-09-05).")
 S.append(Paragraph(
     "Phase 2 put the first of our own points on this chart (PROVISIONAL, naive by design — no kernel has been "
     "optimized yet, per the correctness-first rule). The bf16 engine reads ~3.44 GB per token, a ~12.7 tok/s "
     "ceiling, and measured <b>6.7–8.6 tok/s</b> on-device — 50–70% of the bandwidth roofline, with a further ~1.4× "
-    "run-to-run device-state variance band observed at identical settings (the Phase 3 spec must pin a "
-    "repeats/interleaving protocol in response). Dispatch overhead — the Phase 4 metric — measured "
-    "<b>1.9–2.0 ms/token at 591 dispatches/token</b> (~3.4 µs/dispatch), stable across every run, session, and "
-    "residency mode. Projecting the observed 50–70% efficiency onto the Phase 3 packed size (~0.97 GB/token, "
-    "45.2 tok/s ceiling) lands at ~22–32 tok/s — bracketing the 29.4 target, which is the quantitative statement "
-    "that Phases 4–5 remain load-bearing, not optional. Sequential prefill measured 8.2–10.7 tok/s (Phase 5's "
-    "'before' number).", BODY))
+    "run-to-run device-state variance band observed at identical settings (Phase 3 pinned a repeats/interleaving "
+    "protocol in response: ≥3 same-session repeats reported as median + range; A/B comparisons interleaved; detached "
+    "launches mandatory). Dispatch overhead — the Phase 4 metric — measured <b>1.9–2.0 ms/token at 591 "
+    "dispatches/token</b> (~3.4 µs/dispatch), stable across every run, session, residency mode, and now weight format. "
+    "Phase 3 (2026-09-05) moved the engine's point to the packed curve: warm-burst decode <b>20.61 tok/s</b> median "
+    "(20.47–20.88) at ~0.97 GB/token — just under the projected ~22–32 band, at ~49% of the 45.2 tok/s packed ceiling — "
+    "while the weights-only dequant-matvec microbench sustains <b>35.3 GB/s ≈ 80% of roofline</b> through the very same "
+    "kernel. That 80%-vs-49% split is the phase's diagnostic gift: the matvecs are no longer the bottleneck; the "
+    "~17 ms/token of non-matvec time (attention over the fp16 cache, elementwise kernels, and the 591-dispatch "
+    "overhead) is, and it is exactly what Phase 4 exists to attack. Sustained decode settles at ~16.8–17.1 tok/s at "
+    "thermal equilibrium (sustained/burst ≈ 0.82); sequential prefill measured 8.2–10.7 tok/s (Phase 5's 'before' "
+    "number).", BODY))
 S.append(Paragraph(
     "Prefill obeys different physics: processing the whole prompt at once is matrix-matrix work in which each weight "
     "read is reused across all prompt positions, so it is compute-bound and rewards classical GEMM engineering — "
@@ -332,6 +346,20 @@ S.append(Paragraph(
     "engine (ModelDirectory), closing the audit's EOS finding at its final home. The two judgment-derived Tier-E "
     "constants flagged at gate-commit time were never needed as slack — the veto window closed with every gate "
     "untouched.", BODY))
+S.append(Paragraph(
+    "<b>Phase 3 outcome (2026-09-05) — the layered quant oracle earned its keep.</b> The dequant-tile layer was "
+    "bit-exact and the fused-matvec, Tier-M, and Tier-E layers all held at the reused Phase 2 constants on the first "
+    "run, against the CPU-quant reference computed live; the GPU-quant free-running trajectory is again "
+    "token-identical to its oracle (5 prompts × 128 steps), and greedy decode proved byte-stable across residency "
+    "modes and 35 minutes of thermal drift on-device (18/18 sustained generations stopped at the identical token). "
+    "The quality gate is where the layering paid off: the first packed artifact measured OUT of band (KL 3.1× the "
+    "mlx-lm comparator), and the layer-1/layer-2 tests — all passing — localized the fault to the packing "
+    "<i>recipe</i>, not the packer or kernels, exactly per the diagnosis rule. The pinned min/max selection lacked "
+    "zero-point alignment; two James-approved amendments later (A1 zero-alignment, then snap-scale — each landed "
+    "red-first with the artifact repacked and re-verified), the recipe measures <b>KL at 1.006× mlx-lm's</b> (parity), "
+    "agreement 0.872 vs gate 0.836, and Δppl 2.50 vs gate 3.72 — in-band on all three pre-committed formulas with "
+    "no gate touched at any point in the arc. The bandwidth microbench gate (0.70 × measured roofline) passed with "
+    "the naive kernel: every one of 50 on-device iterations individually cleared 30.7 GB/s.", BODY))
 
 S.append(PageBreak())
 
@@ -385,8 +413,8 @@ S.append(table([
     ["0", "MLX + llama.cpp baseline rows recorded on-phone; toy MSL kernels (saxpy, naive matmul) passing tests on macOS with a GPU-timing workflow"],
     ["1", "Full CPU fp32 forward pass; logits ≤1e-3 vs fp32 HF oracle on all fixture prompts, no loosening; mlx-lm sanity check recorded — EXITED 2026-08-23, all gates held first run"],
     ["2", "Incremental decode on the physical iPhone via preallocated cache + naive attention kernel; pre-committed fp16 gate vs CPU reference; 'before' row; mmap vs wired-copy comparison — EXITED 2026-08-25: all gates held first run, free-run divergence none, 'before' 6.7–8.6 tok/s, mmap default recorded"],
-    ["3", "CPU-quant oracle exists; dequant tile test bit-exact; matvec within tolerance; quality gate passed; ~4× memory drop; matvec GB/s microbench; short-context decode near roofline with bandwidth-limited counters — NEXT (spec SPEC-P3 pending)"],
-    ["4", "Fused GQA SDPA replaces naive attention; norm/RoPE folded into neighbors; dispatches-per-token reduced; latency-vs-context measured"],
+    ["3", "CPU-quant oracle exists; dequant tile test bit-exact; matvec within tolerance; quality gate passed; ~4× memory drop; matvec GB/s microbench — EXITED 2026-09-05: all gates in-band (quality at KL parity with mlx-lm after two recipe amendments), microbench 35.3 GB/s ≥ 30.7 gate, decode 20.6 tok/s (3.0× Phase 2), wired footprint 1.43 GB vs 4.3, mmap default closed"],
+    ["4", "Fused GQA SDPA replaces naive attention; norm/RoPE folded into neighbors; dispatches-per-token reduced; latency-vs-context measured — NEXT (spec SPEC-P4 pending)"],
     ["5", "Tiled prefill GEMM (threadgroup memory + simdgroup_matrix); prefill benchmarked separately vs MLX"],
     ["6", "Full cross-engine table (incl. optional Core ML column), sustained-thermal chart, J/tok with error bars, roofline analysis, honest gaps"],
 ], [0.55 * inch, 6.45 * inch]))
@@ -426,19 +454,20 @@ S.append(Paragraph(
     "first-contact point where it gets measured rather than assumed.", BODY))
 S.append(table([
     ["Risk", "Exposure", "First contact / mitigation"],
-    ["Actual device bandwidth and jetsam ceiling differ from planning estimates", "Roofline targets and memory budget shift", "CLOSED for bandwidth: Phase 0 measured 43.84 GB/s (2026-08-22). Memory: Phase 2 ran the ~4.0 GB bf16 high-water mark on-device without jetsam; phys_footprint asymmetry measured (mmap ~536 MB vs wired ~4.3 GB)"],
+    ["Actual device bandwidth and jetsam ceiling differ from planning estimates", "Roofline targets and memory budget shift", "CLOSED: Phase 0 measured 43.84 GB/s (2026-08-22); Phase 3 measured the packed budget on-device (phys_footprint mmap ~538 MB / wired 1.43 GB honest total — the derived ~1.5 GB plan confirmed, ample jetsam headroom)"],
     ["MLX/llama.cpp baseline numbers off published figures (different device, model rev, thermal state)", "Gap-closing target mis-calibrated", "CLOSED: Phase 0 measured both on-device (39.2 / 32.4 tok/s warm-burst, PROVISIONAL); target 29.4 committed from local rows"],
     ["Tokenizer or chat-template mismatch vs HF reference", "Phase 1 logit test fails for non-engine reasons", "CLOSED: Phase 1 verified swift-transformers (pinned exact 1.3.3) id-identical to Python on all 5 fixture prompts; tokenizer artifacts sha256-pinned (TOK-1)"],
     ["swift-transformers / mlx-swift API drift by build time", "Integration friction", "swift-transformers pinned exact 1.3.3; agent instructed to log and surface conflicts (CLAUDE.md), never silently work around"],
-    ["Thermal throttling makes sustained numbers device-state-sensitive", "Noisy benchmark rows", "Protocol pins starting temperature and reports burst/sustained separately; spread published, not hidden. Phase 2 measured ~1.4× run-to-run device-state variance (detached, identical settings; cold/warm not the driver) — SPEC-P3 must pin repeats/interleaving and range reporting"],
+    ["Thermal throttling makes sustained numbers device-state-sensitive", "Noisy benchmark rows", "MITIGATED: Phase 3 pinned the D8 protocol (≥3 same-session repeats as median + range; A/B interleaved with non-overlapping ranges required for directional claims; detached launches). First application resolved the microbench/decode rows cleanly and showed session-scale thermal drift dominating the residency comparison — recorded as 'unresolved at n=3' rather than forced"],
+    ["Battery 'health' readings were actually state-of-charge; energy capacity basis wrong", "Absolute J/token figures off ×1.172", "CLOSED (2026-09-05 correction entry): basis re-based to 100% health (453.6 J per 1% SoC); corrected table appended, no rows overwritten; relative MLX-vs-llama.cpp result unchanged. Phase 6 re-pins the basis from health read at run time, with health and charge as separate fields"],
     ["Scope temptation (extra quant formats, samplers, models)", "Schedule and depth erosion", "Non-goals are contractual; agent flags additions in DECISIONS.md instead of implementing"],
 ], [1.95 * inch, 1.6 * inch, 3.45 * inch]))
 S.append(Spacer(1, 10))
 S.append(HRFlowable(width="100%", color=colors.HexColor("#e2e8f0"), thickness=0.8, spaceAfter=6))
 S.append(Paragraph(
     "Document lineage: this PDF renders the state of PLAN.md, CLAUDE.md, docs/phases/phase-0-1.md, "
-    "docs/phases/phase-2.md, DECISIONS.md, and benchmarks/results.md as of 2026-08-25 (Phase 2 exit) into "
-    "one navigable artifact. It is a snapshot: when the build produces new "
+    "docs/phases/phase-2.md, docs/phases/phase-3.md, DECISIONS.md, and benchmarks/results.md as of 2026-09-05 "
+    "(Phase 3 exit) into one navigable artifact. It is a snapshot: when the build produces new "
     "measurements or decisions, DECISIONS.md is updated first and this document is regenerated from it, not edited "
     "independently.", CAP))
 

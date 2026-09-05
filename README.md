@@ -19,17 +19,20 @@ assumed.
 
 ## Status
 
-**Phases 0–2 exited; Phase 3 (4-bit quantization + fused dequant-matvec) is
-next** (as of 2026-08-26). The engine decodes Qwen3-1.7B end-to-end on CPU
-(fp32 reference, logit-matched to HF transformers ≤ 1e-3) and GPU (naive Metal,
-incremental KV-cache decode, on-device) — every pre-committed correctness gate
-has held unmodified on its first run, and the GPU free-running trajectory is
-token-identical to the CPU reference on all fixture prompts. Measured so far
-(iPhone 15 Pro, PROVISIONAL rows): DRAM bandwidth 43.84 GB/s; MLX baseline
-39.2 tok/s decode (committed target: 29.4 = 0.75×); naive bf16 "before" decode
-6.7–8.6 tok/s at 50–70% of its 3.44 GB/token roofline. Phase 3 packs weights to
-~0.97 GB, lifting the roofline to ~45 tok/s. Ledger: `DECISIONS.md`; rows:
-`benchmarks/results.md`.
+**Phases 0–3 exited; Phase 4 (fused attention + dispatch reduction) is
+next** (as of 2026-09-05). The engine decodes Qwen3-1.7B end-to-end from its
+own packed 4-bit format (q4g64, ~0.97 GB) with dequantization fused into every
+weight-consuming kernel — every pre-committed correctness gate across all four
+phases has held unmodified on its first run, the packing recipe measures at KL
+parity with mlx-lm's 4-bit (quality gate in-band), and the GPU free-running
+trajectory is token-identical to its CPU oracle on all fixture prompts.
+Measured so far (iPhone 15 Pro, PROVISIONAL rows): DRAM bandwidth 43.84 GB/s;
+MLX baseline 39.2 tok/s decode (committed target: 29.4 = 0.75×); packed decode
+**20.6 tok/s** warm-burst (~3.0× the Phase 2 bf16 "before" row, 70% of target)
+at 1.43 GB resident (wired; 538 MB mmap phys_footprint); the weights-only
+dequant-matvec microbench sustains 35.3 GB/s (80% of roofline, clearing its
+pre-committed gate). The remaining gap is non-matvec time — Phase 4's target.
+Ledger: `DECISIONS.md`; rows: `benchmarks/results.md`.
 
 ## Documents
 
