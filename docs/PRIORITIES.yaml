@@ -1108,7 +1108,8 @@ tasks:
   - id: P3-EXEC
     rank: 17
     title: "Phase 3 exit milestone (all P3 tasks done, exit criteria walked)"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-05T18:58:33Z
     depends_on: [P3-1, P3-2, P3-3, P3-4, P3-5, P3-6, P3-7]
     blocks: [SPEC-P4]
     deliverable:
