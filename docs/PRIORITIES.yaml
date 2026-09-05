@@ -1074,7 +1074,8 @@ tasks:
   - id: P3-7
     rank: 16.7
     title: "On-device Phase 3 rows: microbench gate + memory drop + decode row + packed mmap-vs-wired interleaved re-test"
-    status: ready
+    status: done
+    completed_at: 2026-09-05T18:54:07Z
     owner: james
     depends_on: [P3-3, P3-5, P3-6]
     blocks: [P3-EXEC]
@@ -1090,11 +1091,24 @@ tasks:
       progress check vs 29.4 (P2-7 projection ~22-32 tok/s). Residency
       question closes here with a DECISIONS.md entry (mmap stays default
       unless it says otherwise). Agents prepare only.
+      2026-09-04/05 (done, James on-device, one detached session):
+      microbench gate PASSED — best aggregate 35.29 GB/s >= 30.7 (80.5%
+      of roofline; all 50 iterations individually clear). Decode warm
+      burst window median 20.61 (range 20.47-20.88) = ~3.0x Phase 2,
+      70% of the 29.4 target; sustained thermal equilibrium ~16.8-17.1.
+      Memory criterion MET (Xcode gauge mmap 537.8 MB / wired 1.43 GB
+      vs Phase 2's 4.3 GB; in-app cross-check agrees ~2%). Residency
+      DECIDED (James): mmap stays default — speed unresolved at n=3
+      (thermal drift dominates; no mmap bimodality), mmap ~1 GB lighter,
+      5x faster load. ALSO surfaced: battery fields were state-of-charge
+      all along -> capacity-basis correction entry (energy figures x1.172;
+      Phase 6 re-pins basis). Rows in benchmarks/results.md Phase 3
+      on-device section; DECISIONS.md 2026-09-05 entries. P3-EXEC ready.
 
   - id: P3-EXEC
     rank: 17
     title: "Phase 3 exit milestone (all P3 tasks done, exit criteria walked)"
-    status: blocked
+    status: ready
     depends_on: [P3-1, P3-2, P3-3, P3-4, P3-5, P3-6, P3-7]
     blocks: [SPEC-P4]
     deliverable:

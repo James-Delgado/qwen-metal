@@ -246,6 +246,101 @@ James). Reproduce with:
 |---|---|---|---|---|---|---|---|---|
 | 2026-09-04 | Apple M2 Pro (Mac, dev machine) | macOS 26.5.1 (25F80) | Xcode 26.6 (17F113), release | 58.81 | 60.05 | 58.59–60.05 | ~0.4 ms @ 197 dispatches | PROVISIONAL, dev-loop sanity only — never gated (gate is on-device, P3-7). mmap residency, artifact d03b3fe3…. Spot check max \|Δ\| 0.000486 ≤ Tier-K 0.0034. ~33% of the Mac triad figure (178.19 GB/s) vs Phase 2's ~9% — the fused kernel moves ~3.7× closer to the Mac roofline than the bf16 naive matvec, still naive-by-design (D4 optimization license is open, gated by P3-7). Per-shape medians: q/o 46.3, k/v ~23.6, gate/up 75.4, down 49.2, lm_head 110.5 GB/s — small per-layer matvecs individually underperform exactly as the gates entry anticipated; the aggregate is the roofline-relevant number. |
 
+### 2026-09-04 — On-device Phase 3 rows, iPhone 15 Pro (P3-7, James)
+
+One session, detached launches (home-screen, no debugger), Metal API
+validation OFF (recorded), greedy, pinned prompts, weights q4g64 (artifact
+d03b3fe3…), iOS 26.6.1 (earlier rows: 26.5.2), Xcode 26.6 (17F113).
+Battery health "Normal" / 100% max capacity per iOS (see the 2026-09-05
+DECISIONS correction: the reports' battery fields carried state-of-charge,
+not health — charge ran 77% → 56% across the session). All rows under the
+D8 protocol: ≥3 same-session repeats, median AND range, A/B interleaved.
+Memory rows only are Xcode-attached (not timing rows).
+
+#### Microbench gate (D7): **PASS — best aggregate 35.29 GB/s ≥ 30.7**
+
+5 detached repeats (run 1 cold, 2–5 same-session), mmap, 2+10 iterations
+each; spot check passed identically on every run (max |Δ| 0.000486 ≤
+0.0034, deterministic inputs).
+
+| Run | Aggregate median GB/s | Best | Min–max | Overhead (wall−GPU) @197 |
+|---|---|---|---|---|
+| 1 (cold) | 34.84 | 35.29 | 33.10–35.29 | 0.8–1.5 ms |
+| 2 | 34.71 | 34.98 | 34.49–34.98 | 0.7–1.6 ms |
+| 3 | 34.15 | 34.43 | 33.08–34.43 | 0.7–1.6 ms |
+| 4 | 34.65 | 35.02 | 34.30–35.02 | 0.7–1.5 ms |
+| 5 | 34.40 | 35.03 | 33.92–35.03 | 0.7–1.6 ms |
+
+Gate basis: best across repeats = **35.29 GB/s = 80.5% of the 43.84 GB/s
+roofline** (median-of-medians 34.65 = 79%). Robust pass: every one of the
+50 measured iterations (worst 33.08) individually clears 30.7. Run-to-run
+median spread ~2% — far tighter than decode's ~1.4× device variance.
+Per-shape medians across runs: k/v ~24–26, q/o ~29–32, lm_head ~31–32,
+down ~34–35.5, gate/up ~35–37 GB/s (reported, never gated). Kernel still
+naive — D4 optimization license unexercised.
+
+#### Packed decode, warm burst (decode-essay 84, cap 640, mmap, ×3)
+
+| Repeat | Window tok/s (128–512) | Overall | Median GPU ms/tok | Wall−GPU ms | Dispatches | Prefill tok/s |
+|---|---|---|---|---|---|---|
+| 1 | 20.88 | 20.78 | 45.01 | 1.990 | 591 | 23.79 |
+| 2 | 20.61 | 20.61 | 45.74 | 1.972 | 591 | 28.64 |
+| 3 | 20.47 | 20.45 | 45.37 | 1.998 | 591 | 28.42 |
+
+**Window median 20.61 tok/s, range 20.47–20.88** — ~3.0× the Phase 2
+"before" (6.74–6.92) against a 3.56× weight-byte drop; 70% of the 29.4
+target; just below the P2-7 projection band (~22–32). Effective weight
+stream during full decode ≈ 0.968 GB ÷ 45.4 ms ≈ **21.3 GB/s ≈ 49% of
+roofline** vs the microbench's ~79–80% for matvecs alone — the ~17 ms/token
+gap (attention, norms/elementwise, inter-dispatch time at 591
+dispatches/token) is Phase 4's named target. Stop = maxNewTokens all runs.
+
+#### Sustained 5-min loops, mmap vs wired INTERLEAVED (D8: A,B,A,B,A,B)
+
+Canonical-window tok/s of completed generations (1297 tokens each, every
+one stopping at EOS at exactly token 1297 — greedy determinism held
+bitwise across modes and 35 min of thermal drift):
+
+| # | Mode | Gen windows (tok/s) | In-app footprint | Charge at start |
+|---|---|---|---|---|
+| 1 | mmap | 20.85, 19.21, 16.21 | 551.0 MB | 74% |
+| 2 | wired | 20.60, 17.60, 17.68 | 1476.5 MB | 70% |
+| 3 | mmap | 20.58, 17.80, 17.45 | 559.4 MB | 66% |
+| 4 | wired | 18.12, 16.70, 16.64 | 1483.8 MB | 63% |
+| 5 | mmap | 17.00, 16.85, 16.80 | 562.9 MB | 59% |
+| 6 | wired | 17.14, 16.86, 16.77 | 1473.7 MB | 56% |
+
+Per-side stats (9 completed gens each): mmap median 17.45, range
+16.21–20.85; wired median 17.14, range 16.64–20.60. **Ranges overlap ⇒
+speed unresolved at n=3** (the D8 rule). The interleaving shows why:
+first-gen windows decline monotonically across the session (20.85 → 17.14)
+regardless of mode — session-scale thermal drift dominates any residency
+effect, settling at a **~16.8–17.1 tok/s equilibrium** (sustained/burst
+≈ 0.82). **No mmap bimodality**: no generation shows a page-fault-stall
+signature; the 0.97 GB packed working set stays resident. Overhead steady
+~1.9 ms/token throughout (last-gen outliers are 1–30-token samples; run
+5's 68.3 ms last-gen median is the thermal trough, mode-independent).
+
+#### Memory rows (attached — Xcode gauge is the metric of record) + load
+
+| Residency | Xcode gauge (steady, decoding) | In-app phys_footprint | Load (fresh instance) |
+|---|---|---|---|
+| mmap | 537.8 MB | 539.3 MB | 0.5 s |
+| wiredCopy | **1.43 GB** | 1463.1 MB | 2.6 s |
+
+Gauge vs in-app agree within ~2% in both modes (validates the in-app
+cross-check for detached sessions). **Memory-drop criterion met**: wired
+(honest total-resident) 1.43 GB vs Phase 2's 4.3 GB (3.0× whole-process;
+weight bytes 3.44 GB → 0.968 GB = 3.56×, the plan's "~4×" stated
+honestly), landing on the derived ~1.5 GB budget. mmap's 538 MB
+under-reports file-backed weights per the Phase 2 annotation precedent
+(≈ KV 448 MiB + activations + app).
+
+**Residency close-out (decided by James, 2026-09-05 — DECISIONS entry):
+mmap stays the default for Phase 4+.** Speed unresolved at n=3 under the
+interleaved protocol; mmap is ~1 GB lighter and loads 5× faster; wired
+stays available via the app toggle for diagnostics.
+
 ## Phase 0a — energy dry-run + corrections (PROVISIONAL)
 
 ### 2026-08-22 — sustained battery-delta cycles, iPhone 15 Pro (method VALIDATED)
@@ -296,3 +391,29 @@ difference, not harness; note llama.cpp's end-state 18.17 t/s is below the
   MLX's earlier decline was substantially harness load (debugger/radio/
   brightness); llama.cpp's is genuinely thermal. Sustained rows must be
   measured detached.
+
+### 2026-09-05 — capacity-basis correction (battery fields were state-of-charge)
+
+Correction, not an overwrite (METHODOLOGY rule 7; the 2026-08-22 rows above
+stand as recorded). Established during the P3-7 session (James): the
+device's battery HEALTH has read "Normal" / 100% max capacity the whole
+project — the "battery health 85%" recorded on 2026-08-22 (and the battery
+fields in all app reports to date) was actually the state of charge at
+measurement time. The energy dry-run's capacity basis (12.6 Wh × 0.85 ⇒
+387 J per 1% SoC) is therefore wrong; the correct basis is **12.6 Wh ×
+1.00 ⇒ 453.6 J per 1% SoC** (×1.172 on every absolute energy figure):
+
+| Figure (2026-08-22 rows) | As recorded | Corrected |
+|---|---|---|
+| MLX net J/token | 0.104 | **~0.122** |
+| llama.cpp net J/token | 0.131 | **~0.154** |
+| MLX gross / net W | 3.67 / 3.24 | ~4.30 / ~3.80 |
+| llama.cpp gross / net W | 3.66 / 3.23 | ~4.29 / ~3.79 |
+| Idle baseline | ~0.43 W | ~0.50 W |
+
+Unchanged: the method VALIDATION (both cycles rescale identically and stay
+inside the 3–9 W plausibility window), the relative result (MLX ~25% more
+tokens/joule), all SoC bands, the ±12% quantization estimate (relative),
+and every timing/bandwidth/decode/memory row (none uses capacity). Phase 6
+obligation (for SPEC-P6): re-pin the capacity basis from battery health
+read at run time, and record health and charge as separate fields.

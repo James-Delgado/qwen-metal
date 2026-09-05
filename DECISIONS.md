@@ -2266,3 +2266,76 @@ unsigned); device runs stay James's (P3-7).
 
 No pins, schema changes, or numeric-gate constants introduced or modified.
 Unblocks P3-7 (now ready: P3-3, P3-5, P3-6 all done — owner james).
+
+## 2026-09-05 — CORRECTION: battery fields were state-of-charge; energy capacity basis re-based
+
+Surfaced by James during the P3-7 session (METHODOLOGY: measurement
+contradicting an assumption gets logged, not worked around). The pinned
+iPhone 15 Pro's battery HEALTH has read "Normal" / 100% max capacity for
+the entire project; every "battery health" value recorded to date — the
+2026-08-22 "85%" and all app-report battery fields — was actually the
+STATE OF CHARGE at measurement time.
+
+- **Wrong:** P0A-1 energy capacity basis 12.6 Wh × 0.85 ⇒ 387 J per 1% SoC.
+- **Corrected basis: 12.6 Wh × 1.00 ⇒ 453.6 J per 1% SoC** (×1.172 on all
+  absolute 2026-08-22 energy figures): MLX net ~0.122 J/token (was 0.104),
+  llama.cpp net ~0.154 (was 0.131); gross ~4.30 / ~4.29 W; idle ~0.50 W.
+  Corrected table appended to benchmarks/results.md (rows not overwritten).
+- **Unchanged:** energy-method VALIDATION (uniform rescale, still inside
+  the 3–9 W plausibility window), the relative MLX-vs-llama.cpp result
+  (~25% more tokens/joule), SoC-band pins, and every timing / bandwidth /
+  decode / memory row (none consumes capacity).
+- **Phase 6 obligation (binds SPEC-P6):** re-pin the capacity basis from
+  battery health read at run time; record health and charge as SEPARATE
+  fields in all future energy rows.
+
+## 2026-09-05 — P3-7 close-out: on-device Phase 3 rows (James; measurements 2026-09-04)
+
+One detached session (validation OFF, home-screen launches; memory rows
+only Xcode-attached), iPhone 15 Pro, iOS 26.6.1, q4g64 artifact d03b3fe3…,
+D8 protocol throughout. Full tables in benchmarks/results.md (Phase 3
+on-device section); outcomes:
+
+- **Microbench gate PASSED: best aggregate 35.29 GB/s ≥ 30.7** (0.70 ×
+  43.84) across 5 repeats — 80.5% of roofline at the best, 79% at the
+  median-of-medians (34.65), and every one of the 50 measured iterations
+  individually clears the gate (worst 33.08). Run-to-run median spread
+  ~2%. The last pre-committed Phase 3 gate is closed IN-BAND; the naive
+  kernel needed none of the D4 optimization license.
+- **Packed decode row (warm burst): window median 20.61 tok/s, range
+  20.47–20.88** — ~3.0× the Phase 2 "before" (6.74–6.92) on a 3.56×
+  byte drop; 70% of the 29.4 target, just under the P2-7 projection band
+  (~22–32). Effective decode weight-stream ≈ 21.3 GB/s ≈ 49% of roofline
+  vs the microbench's ~80% — the ~17 ms/token of non-matvec time
+  (attention, elementwise, 591-dispatch overhead) is Phase 4's explicit
+  target, as planned. Sustained thermal equilibrium ~16.8–17.1 tok/s
+  (sustained/burst ≈ 0.82). Overhead ~1.9 ms/token @ 591 (stable).
+- **Memory-drop criterion MET:** Xcode gauge (metric of record) mmap
+  537.8 MB / wired 1.43 GB steady during decode; in-app phys_footprint
+  agrees within ~2% in both modes (cross-check validated for future
+  detached sessions). Wired honest-total 1.43 GB vs Phase 2's 4.3 GB;
+  weight bytes 3.56× (the plan's "~4×" stated honestly); ~1.5 GB derived
+  budget confirmed. Loads: mmap 0.5 s / wired 2.6 s (fresh instance).
+- **Residency close-out (DECIDED by James, 2026-09-05): mmap stays the
+  default for Phase 4+.** Interleaved sustained comparison (mmap/wired
+  A,B,A,B,A,B, 3×≥5 min per side, one session): per-side ranges overlap
+  (mmap median 17.45, range 16.21–20.85; wired 17.14, 16.64–20.60) ⇒
+  speed **unresolved at n=3** per the D8 rule — and the interleaving shows
+  session-scale thermal drift (first-gen windows 20.85 → 17.14, mode-
+  independent) dominating any residency effect. NO mmap bimodality: zero
+  page-fault-stall signatures on the 0.97 GB packed working set. With no
+  wired speed advantage demonstrable, mmap wins on footprint (~1 GB
+  lighter) and load (5×). Wired stays in the app toggle for diagnostics.
+  This closes the question P2-7 left open.
+- **Determinism note:** every completed sustained generation (18 across
+  both modes, 35 min of thermal drift) stopped at EOS at exactly token
+  1297 — greedy decode is byte-stable across residency modes and thermal
+  states.
+- Session records: iOS 26.6.1 (rows to 08-25 were 26.5.2 — PROVISIONAL
+  staleness rule already covers re-baselining at Phase 6); battery charge
+  77% → 56% across the session; health "Normal"/100% (see the correction
+  entry above).
+
+P3-7 done ⇒ all P3-1..P3-7 complete; P3-EXEC (exit-criteria walk +
+close-out, incl. architecture.pdf + README refresh per the standing
+*-EXEC rule) flips to ready.
