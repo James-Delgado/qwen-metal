@@ -2596,3 +2596,52 @@ just-in-time pattern), and P7-EXEC (23.3 — milestone placeholder).
 P6-EXEC now blocks CAMP-1, so the chain flips live automatically at
 Phase 6 exit. Nothing about Phases 4–6 changes; the charter remains
 James's decision at CAMP-1 time.
+
+## 2026-09-08 — P4-1 attribution-harness sanity bounds pre-committed (before any P4-1 test exists)
+
+Written BEFORE the attribution harness or its tests exist (the
+METHODOLOGY rule 2 discipline applied to instrumentation: bars before
+results). These are HARNESS SANITY bounds for the D1 diagnostic
+attribution mode — they check that the measurement apparatus accounts
+for the token's GPU time; they are not oracle tolerances and gate no
+model output. Design context: attribution uses per-class command-buffer
+splits (spec D1's first-listed option) — one command buffer per
+contiguous same-class dispatch run (~10 segments/layer × 28 + head +
+tail ≈ 282/token at real dims), committed back-to-back on the serial
+queue, one wait at the end, per-segment GPU timestamps summed by class.
+
+- **Bookkeeping (exact):** per-class GPU sums must equal the sum over
+  that class's segments, and per-class dispatch counts must sum to the
+  token's total measured DispatchCounter count — exact integer/fp
+  arithmetic, no tolerance.
+- **Bracketing (structural, hard rule 7):** diagnostic-run wall ≥ span
+  (first segment gpuStart → last segment gpuEnd) and span ≥ each
+  per-class sum; every segment has gpuEnd ≥ gpuStart.
+- **Coverage:** total class-time sum ≥ 0.5 × span (inter-buffer
+  scheduling gaps must not swallow the majority of the token's GPU
+  window), and total class-time sum ≤ 1.01 × span + 1 µs (sums cannot
+  exceed the window they occurred in, small slack for timestamp
+  granularity).
+- **Production cross-check:** median attributed class-time total within
+  [0.5×, 2.0×] of the median production single-command-buffer GPU time
+  at adjacent cache depths on the same synthetic model (band is wide
+  deliberately: per-buffer kickoff cost inflates split-mode sums and is
+  itself part of what the diagnostic exposes; the check catches
+  order-of-magnitude accounting bugs, not µs drift).
+- **Production-path invariance (exact):** attributed logits bitwise ==
+  production `step` logits for the same token at the same cache state
+  (same kernels, same order — splitting command buffers must not change
+  arithmetic), and the production path's dispatch counts / one-command-
+  buffer structure stay pinned by the existing P2-5 tests unmodified.
+- **Variance stats (D7) conventions pinned:** per-token latency =
+  completion-to-completion wall span between consecutive TokenStepRecord
+  wallEnds (the canonical-window rate's semantics); percentiles by
+  nearest-rank on the sorted spans (p50/p95/p99 = value at index
+  ceil(q·n)−1; max = last); stall = span strictly > 2 × the same
+  distribution's nearest-rank p50; canonical-window scope = the 384
+  spans between tokens 128→512, all-tokens scope labeled explicitly
+  when the window is unavailable. Structural tests use hand-built
+  records with exactly known expected values — no numeric bounds.
+
+Per hard rule 6 these bounds never loosen once the tests exist; a
+failure is investigated as a harness bug, not tuned away.
