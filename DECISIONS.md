@@ -2521,3 +2521,65 @@ failures are bug signals.
   judgment-derived items + the 29.4-as-judgment structure are flagged
   in the gates entry above and reported item-by-item in the session
   report per AGENT_OPERATION.md step 11.
+
+## 2026-09-07 — Phase 4 veto window CLOSED: gates approved (decided by James)
+
+James reviewed the flagged items from the 2026-09-05 gates entry
+item-by-item in conversation (detailed walkthrough of derivations,
+risks in both directions, and alternatives) and approved them
+explicitly — window closed early by decision, the Phase 3 precedent:
+
+- **All five judgment-derived items stand as committed:** the ≤300
+  dispatches/token gate, the ≤1.2 ms/token median wall−GPU overhead
+  gate, the ≥24.0 tok/s warm-burst decode floor, the fused-span
+  tolerance-mapping rule (loosest-absorbed-constant, incl. the k-side
+  append moving from exact to the norm-species gate), and the bookend
+  drift rule as a protocol pin for all Phase 4+ device rows.
+- **The 29.4-as-judgment structure stands.** Discussed and resolved:
+  insurance loosenings for the overhead gate (1.2 → 1.5 ms) and decode
+  floor (24.0 → 23.0) were offered against the pre-attribution
+  uncertainty (both the ≈17 ms non-matvec figure and the per-dispatch
+  overhead scaling are derived by subtraction/extrapolation, not yet
+  attributed) and DECLINED — floors are meant to bite; P4-1's
+  attribution lands before any fused row is graded. The optional
+  strengthening on a 29.4 miss (forcing a recorded proceed-vs-iterate
+  decision) was offered and not adopted as a binding rule; as already
+  structured, a miss surfaces the decomposed gap to James at P4-EXEC
+  and the proceed/iterate call is his, made with the data in hand.
+
+Hard rule 6 now binds all of the above unmodified. P4-1 may proceed
+with no open questions on the gates.
+
+## 2026-09-07 — North star recorded: post-charter optimization campaign (decided by James)
+
+James stated the project's larger intent in conversation, recorded here
+so it survives into every future spec session: **the end goal is to
+push the engine as far as it can go — decode tok/s as high as
+possible, output quality as high as possible, memory footprint as low
+as possible — because the learnings feed real iPhone local-LLM
+products/apps he intends to build.**
+
+What this does and does NOT change:
+
+- **PLAN v2 is unchanged.** The committed success metric (29.4 tok/s),
+  every pre-committed gate, the non-goals list, and the
+  satisficing-plus-explaining phase structure all stand. Mid-phase goal
+  drift was considered and rejected — the methodology's credibility
+  rests on unmovable targets (the OV#1 lesson), and the current
+  charter's floors-and-decomposition discipline is itself the learning
+  engine the products need.
+- **It binds future judgment calls:** SPEC-P5/P6 sessions and the
+  Phase 6 writeup should quantify remaining headroom per component,
+  not just report the head-to-head; the P4-EXEC decode decomposition
+  explicitly doubles as the campaign's measured target menu (levers
+  left unexercised in Phase 4 — matvec internals, deeper folds — get
+  quantified there, not forgotten).
+- **A post-Phase-6 optimization campaign is the intended vehicle**,
+  chartered via the just-in-time pattern (scope decision + spec + gates
+  in DECISIONS.md when Phase 6 closes). Its three axes and candidate
+  levers are captured in TODOS.md (extended this session from the
+  existing quant-quality item): speed (P4 leftovers, quantized KV,
+  speculative-decode stretch), quality (beat mlx-4bit — the 2026-08-30
+  GPTQ-style item), memory (quantized KV cache, footprint work). Each
+  axis re-enters scope only through a recorded DECISIONS charter, per
+  the non-goals discipline.

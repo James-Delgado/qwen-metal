@@ -19,7 +19,36 @@
   2026-08-20 eng review (D10).
 - **Depends on / blocked by:** Phase 1 test suite existing; repo scaffold (/project-init).
 
+## Post-Phase-6 optimization campaign: speed + quality + memory (three axes)
+
+- **What:** A chartered optimization campaign after Phase 6 that pushes all
+  three product-relevant axes as far as they can go: decode tok/s up, output
+  quality up, memory footprint down. North star recorded in DECISIONS.md
+  2026-09-07 (decided by James): the learnings feed real iPhone local-LLM
+  products/apps.
+- **Axes and candidate levers:**
+  - **Speed:** the measured leftovers from the P4-EXEC decode decomposition
+    (dequant-matvec kernel internals — still naive as of Phase 3 exit —
+    deeper folds, unexercised P4-3 levers), quantized KV cache (also a
+    memory lever), speculative decoding with a 0.5B draft (the PLAN stretch
+    item).
+  - **Quality:** the quant-quality section below (beat mlx-4bit; GPTQ-style
+    error-compensated rounding first).
+  - **Memory:** quantized KV cache (fp16 448 MiB today), further footprint
+    work surfaced by the Phase 6 rows.
+- **Why not now:** PLAN v2's charter is satisficing-plus-explaining with
+  unmovable pre-committed targets; mid-phase goal drift was considered and
+  rejected (OV#1 lesson). Phase 6's head-to-head + the P4-EXEC decomposition
+  produce the *measured* target menu a maximization campaign needs —
+  optimizing against measured gaps beats optimizing speculatively.
+- **Depends on / blocked by:** Phase 6 exit; a scope decision + spec + gates
+  recorded in DECISIONS.md per the just-in-time pattern (each axis re-enters
+  scope only through a recorded charter, per the non-goals discipline).
+
 ## Quant-quality optimization phase: beat mlx-4bit, not just match it
+
+> 2026-09-07: folded into the post-Phase-6 optimization campaign above as
+> its quality axis (north-star entry in DECISIONS.md). Details below stand.
 
 - **What:** A future optimization phase implementing quality mechanisms from
   the DECISIONS.md 2026-08-29 suggestion entry — GPTQ-style
