@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-09-05
+last_updated: 2026-09-07
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -1350,7 +1350,7 @@ tasks:
     title: "Execute Phase 6: final same-session benchmark round (james) + writeup"
     status: blocked
     depends_on: [SPEC-P6]
-    blocks: []
+    blocks: [CAMP-1]
     deliverable:
       file: "writeup + benchmarks/results.md final rows"
       tests: "Phase 6 exit criteria (PLAN.md table)"
@@ -1358,6 +1358,61 @@ tasks:
     notes: |
       Milestone placeholder. Heavy James involvement: interleaved re-runs of all
       three engines on one OS build; full energy rounds (budget real days).
+
+  # ---------- Post-Phase-6 optimization campaign (seeded 2026-09-07; north star: DECISIONS.md 2026-09-07) ----------
+  - id: CAMP-1
+    rank: 23.1
+    title: "Charter the optimization campaign: axes, ordering, non-goal re-entries — decision in DECISIONS.md"
+    status: blocked
+    owner: james
+    depends_on: [P6-EXEC]
+    blocks: [SPEC-P7]
+    deliverable:
+      file: DECISIONS.md
+      tests: "n/a (decision entry; PLAN.md amendment lands here if the phase table is extended)"
+    est_complexity: small
+    notes: |
+      Seeded 2026-09-07 from the north-star entry (decided by James:
+      max tok/s, max quality, min memory — learnings feed real iPhone
+      local-LLM products/apps). Owner james because the charter touches
+      the non-goals list (quantized KV, GPTQ-style selection, speculative
+      decoding each need a recorded scope decision) and may extend the
+      PLAN phase table — the PIN-1 pattern: agent prepares the charter
+      brief (candidate axes/levers from TODOS.md "Post-Phase-6
+      optimization campaign", the P4-EXEC decode decomposition menu, and
+      the Phase 6 head-to-head gaps), James decides.
+
+  - id: SPEC-P7
+    rank: 23.2
+    title: "Write campaign spec (per the CAMP-1 charter) with pre-committed gates"
+    status: blocked
+    depends_on: [CAMP-1]
+    blocks: [P7-EXEC]
+    deliverable:
+      file: docs/phases/phase-7.md
+      tests: "campaign gates committed in DECISIONS.md BEFORE P7-EXEC starts"
+    est_complexity: medium
+    notes: |
+      Seeded 2026-09-07. Standard just-in-time SPEC pattern: seeds the
+      campaign build tasks, pre-commits gates (measured baselines exist
+      by then: Phase 6 rows + P4-EXEC decomposition), reports
+      veto-flagged decisions in-conversation per AGENT_OPERATION step 11.
+      Scope = whatever CAMP-1 chartered, nothing more.
+
+  - id: P7-EXEC
+    rank: 23.3
+    title: "Campaign exit milestone (tasks seeded by SPEC-P7, exit criteria walked)"
+    status: blocked
+    depends_on: [SPEC-P7]
+    blocks: []
+    deliverable:
+      file: "per docs/phases/phase-7.md"
+      tests: "campaign exit criteria (per the CAMP-1 charter)"
+    est_complexity: large
+    notes: |
+      Milestone placeholder (seeded 2026-09-07). Close-out follows the
+      standing *-EXEC rules (architecture.pdf regen + README/newcomer-doc
+      refresh).
 
   # ---------- Follow-ups (seeded from measurements) ----------
   - id: DEV-1

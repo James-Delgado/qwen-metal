@@ -2583,3 +2583,16 @@ What this does and does NOT change:
   GPTQ-style item), memory (quantized KV cache, footprint work). Each
   axis re-enters scope only through a recorded DECISIONS charter, per
   the non-goals discipline.
+
+## 2026-09-07 — Campaign chain seeded in the backlog (CAMP-1 → SPEC-P7 → P7-EXEC)
+
+Follow-through on the north-star entry above, so the campaign is
+reachable by the standing pick-procedure instead of living only in
+TODOS.md prose: docs/PRIORITIES.yaml gains CAMP-1 (rank 23.1, owner
+james — the charter decision; agent prepares the brief per the PIN-1
+pattern; PLAN phase-table amendment lands with it if chartered),
+SPEC-P7 (23.2 — campaign spec + pre-committed gates, standard
+just-in-time pattern), and P7-EXEC (23.3 — milestone placeholder).
+P6-EXEC now blocks CAMP-1, so the chain flips live automatically at
+Phase 6 exit. Nothing about Phases 4–6 changes; the charter remains
+James's decision at CAMP-1 time.
