@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-09-07
+last_updated: 2026-09-08
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -1180,7 +1180,8 @@ tasks:
   - id: P4-1
     rank: 18.1
     title: "Per-stage GPU attribution harness (diagnostic mode) + latency-variance stats + Mac 'before' breakdown"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-08T03:57:54Z
     depends_on: [SPEC-P4]
     blocks: [P4-2]
     deliverable:
