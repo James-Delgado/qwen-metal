@@ -300,6 +300,51 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// P4-1 (phase-4.md D1): the diagnostic per-kernel-class attribution
+    /// run — decode-essay prompt, interleaved attributed/production
+    /// forwards via the engine's AttributionRunner. DIAGNOSTIC ONLY: the
+    /// export is never a benchmark row (the P4-5 on-device breakdown James
+    /// records comes from this button, labeled as diagnostic).
+    func runAttribution() async {
+        guard !isRunning, !isLoading else { return }
+        isRunning = true
+        errorMessage = nil
+        lastReport = nil
+        stopFlag.reset()
+        defer { isRunning = false }
+        do {
+            let engine = try await loadEngineIfNeeded()
+            let promptText = try BundledPrompt.decodeEssay.text()
+            let stopFlag = self.stopFlag
+            statusLine = "attribution run (DIAGNOSTIC, "
+                + "\(BenchDefaults.attributionDecodeTokens) forwards)…"
+            let report: String =
+                try await Task.detached(priority: .userInitiated) {
+                    let promptIds = engine.tokenizer.encode(promptText)
+                    let runner = AttributionRunner(
+                        gpuModel: engine.gpuModel,
+                        maxContext: engine.contextLimit,
+                        eosTokenIds: engine.stopTokenIds)
+                    let result = try runner.run(
+                        promptIds: promptIds,
+                        decodeTokens: BenchDefaults.attributionDecodeTokens,
+                        shouldStop: { stopFlag.isSet },
+                        onStep: { step in self.postProgress(step) })
+                    return result.exportText(
+                        dateStamp: Self.dateStamp(),
+                        deviceLabel: Self.deviceModelIdentifier(),
+                        osVersion: "iOS \(Self.osVersionString())",
+                        residency: engine.residency)
+                }.value
+            lastReport = report
+            statusLine = stopFlag.isSet
+                ? "attribution stopped early — partial diagnostic"
+                : "attribution complete"
+        } catch {
+            show(error)
+        }
+    }
+
     // MARK: - Internals
 
     /// Loads (off the main thread) if there is no engine for the selected

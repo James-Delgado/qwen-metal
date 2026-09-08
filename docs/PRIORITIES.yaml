@@ -1180,8 +1180,9 @@ tasks:
   - id: P4-1
     rank: 18.1
     title: "Per-stage GPU attribution harness (diagnostic mode) + latency-variance stats + Mac 'before' breakdown"
-    status: in_progress
+    status: done
     started_at: 2026-09-08T03:57:54Z
+    completed_at: 2026-09-08T05:01:37Z
     depends_on: [SPEC-P4]
     blocks: [P4-2]
     deliverable:
@@ -1197,11 +1198,27 @@ tasks:
       p50/p95/p99/max + stall count (>2x window median) from
       TokenStepRecord, exported in BenchmarkReport + CLI. Mac "before"
       (naive-path) breakdown row lands here; on-device breakdown is P4-5.
+      2026-09-08 (done): landed as GPUModel.attributedStep (per-class
+      command-buffer splits; encodeForward now takes a class-annotated
+      encoder provider so the pipeline exists once) +
+      Metal/KernelAttribution.swift + Bench/AttributionHarness.swift
+      (interleaved runner + DIAGNOSTIC exportText) + LatencyVarianceStats
+      (nearest-rank, completion-to-completion spans, stall > 2x p50) in
+      CLI/BenchmarkReport/GenerationMetrics + CLI `attribute` subcommand
+      + app attribution mode. ALL pre-committed sanity bounds held first
+      run (production cross-check ratio measured 1.00 on the real model).
+      Production-path invariance test-pinned bitwise. +25 tests
+      (release suite 353, 2 opt-in skips, 0 failures). Mac
+      PROVISIONAL rows in results.md Phase 4 section: breakdown
+      14.95/2.45/11.12/1.77 ms (matvec/attn/elem/head-tail) @ depth
+      83-146; decode 28.32 tok/s window, variance p50-max
+      35.18-38.93 ms, 0 stalls. See DECISIONS.md 2026-09-08 P4-1
+      entries. Unblocks P4-2. Seeded CLI-3.
 
   - id: P4-2
     rank: 18.2
     title: "Fused GQA SDPA decode kernel (online softmax, 1 dispatch/layer) + edge tests 1-5 + toggle wiring"
-    status: blocked
+    status: ready
     depends_on: [P4-1]
     blocks: [P4-3]
     deliverable:
@@ -1549,6 +1566,24 @@ tasks:
       byte-stable (P2-5 recorded cpu-backend output unchanged) and P2-6
       had no reason to risk it. Rides well with CLI-1 (same file). Filler:
       never blocks the phase chain.
+
+  - id: CLI-3
+    rank: 29.5
+    title: "Dedupe CLI model-loading boilerplate (GenerateCommand vs AttributeCommand)"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: "engine package (CLI)"
+      tests: "existing CLI behavior preserved (both subcommands load/error identically)"
+    est_complexity: small
+    notes: |
+      Seeded 2026-09-08 from P4-1: AttributeCommand.swift repeats
+      GenerateCommand's model-directory/checkpoint/tokenizer/stop-set
+      loading sequence (~40 lines, deliberately copied to keep P4-1's
+      diff additive). Same species as CLI-2 (shared wiring extracted
+      engine- or CLI-side); rides well with CLI-1/CLI-2 in one pass.
+      Filler: never blocks the phase chain.
 
   - id: KP-1
     rank: 30

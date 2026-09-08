@@ -3,11 +3,12 @@ import QwenMetalEngine
 
 // Thin CLI entry point — all engine logic lives in QwenMetalEngine.
 // Subcommands arrive with their phases; P0B-4 added `bandwidth`,
-// P1-5 added `generate`, P3-1 added `pack`, P3-6 added `microbench`.
+// P1-5 added `generate`, P3-1 added `pack`, P3-6 added `microbench`,
+// P4-1 added `attribute` (diagnostic per-kernel-class GPU attribution).
 let arguments = CommandLine.arguments.dropFirst()
 switch arguments.first {
 case nil:
-    print("\(EngineInfo.name) v\(EngineInfo.version) — subcommands: bandwidth, generate, pack, microbench")
+    print("\(EngineInfo.name) v\(EngineInfo.version) — subcommands: bandwidth, generate, pack, microbench, attribute")
 case "bandwidth":
     exit(runBandwidthCommand())
 case "generate":
@@ -16,9 +17,11 @@ case "pack":
     exit(runPackCommand(Array(arguments.dropFirst())))
 case "microbench":
     exit(runMicrobenchCommand(Array(arguments.dropFirst())))
+case "attribute":
+    exit(await runAttributeCommand(Array(arguments.dropFirst())))
 case let unknown?:
     FileHandle.standardError.write(
-        Data("unknown subcommand '\(unknown)' — available: bandwidth, generate, pack, microbench\n".utf8)
+        Data("unknown subcommand '\(unknown)' — available: bandwidth, generate, pack, microbench, attribute\n".utf8)
     )
     exit(2)
 }

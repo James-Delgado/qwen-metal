@@ -203,6 +203,12 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
                 "decode rate: overall \(overall), canonical window (tokens "
                 + "\(CanonicalDecodeWindow.firstToken)-"
                 + "\(CanonicalDecodeWindow.lastToken)) \(windowed)")
+            // P4-1 (phase-4.md D7): latency variance — window scope when
+            // the run covers it, all-tokens scope (labeled) otherwise.
+            if let variance = collector.canonicalWindowLatencyVariance()
+                ?? collector.allTokensLatencyVariance() {
+                printStderr(variance.summaryLine)
+            }
         }
         return 0
     } catch {

@@ -2645,3 +2645,62 @@ queue, one wait at the end, per-segment GPU timestamps summed by class.
 
 Per hard rule 6 these bounds never loosen once the tests exist; a
 failure is investigated as a harness bug, not tuned away.
+
+## 2026-09-08 — P4-1: attribution harness + latency-variance stats landed; Mac "before" breakdown recorded
+
+Deliverable (phase-4.md D1/D7; task P4-1): the measure-before-fusing
+apparatus. All pre-committed sanity bounds from the 2026-09-08 entry above
+held unmodified on their first run.
+
+- **Attribution mode (D1)** landed as `GPUModel.attributedStep` +
+  `KernelAttribution.swift` types + `Bench/AttributionHarness.swift`
+  (AttributionRunner/AttributionRunResult). Mechanism: per-class
+  command-buffer splits — `encodeForward` now takes a class-annotated
+  encoder provider, so the pipeline structure exists ONCE; production
+  `step` passes a constant provider (one command buffer, unchanged),
+  diagnostic mode rolls a fresh buffer per class transition (282
+  segments/token at real dims; tiny-model pins: 12 segments with the
+  logits tail, 11 without; per-class dispatch pins 7/3/11/3 at 1 layer).
+  Buffers commit back-to-back, one wait at the end, whole-run
+  wall-bracketed (hard rule 7). Production-path invariance is test-pinned:
+  attributed logits bitwise == production logits, interleaved decode
+  bitwise == pure production decode, and a production step after a
+  diagnostic step still measures 24/591 in one command buffer.
+- **Latency variance (D7)** landed in DecodeInstrumentation
+  (LatencyScope/LatencyVarianceStats + collector methods) and is reported
+  in the CLI per-token block, BenchmarkReport rows (burst + sustained
+  last-generation), and GenerationMetrics. Conventions as pre-committed:
+  completion-to-completion spans, nearest-rank percentiles, stall = span
+  > 2× the distribution's p50, window scope with labeled all-tokens
+  fallback.
+- **Surfacing:** CLI subcommand `attribute` (+ variance line in
+  `generate`); app Benchmark screen gains an `attribution` mode
+  (decode-essay, 64 interleaved forwards, exportText share/copy —
+  the P4-5 on-device breakdown export). App release build verified
+  (generic iOS, unsigned).
+- **Mac "before" rows (PROVISIONAL, benchmarks/results.md Phase 4
+  section):** attribution at depth 83–146 on the q4g64 naive path —
+  matvec 14.95 ms (49.4%), attention 2.45 ms (8.1%), norm+elementwise
+  11.12 ms (36.7%), head/tail 1.77 ms (5.9%); class-sum 30.29 ms vs
+  production 30.27 ms @ 591 ⇒ **sanity ratio 1.00** (band 0.50–2.00) —
+  split-mode buffer cost is ≈ 0 on M2 Pro. Cross-check: matvec +
+  head/tail = 16.72 ms ≈ the P3-6 microbench-implied 16.5 ms for the
+  197 weight-streaming dispatches. Decode row with variance fields:
+  median GPU 34.74 ms / wall−GPU 0.360 ms @ 591, window 28.32 tok/s,
+  latency p50/p95/p99/max = 35.18/38.36/38.73/38.93 ms, stalls 0
+  (n=384). First Mac q4g64 decode row; Mac fractions stay
+  non-predictive for device (Phase 2 precedent) — the claim-grade
+  breakdown is P4-5's on-device export.
+- **Observation for P4-2/P4-3 (Mac-visible only):** at shallow depth the
+  elementwise class is ~37% of token GPU time on Mac while attention is
+  ~8% — on-device the split may differ substantially; no design decision
+  is taken from the Mac fractions (PLAN "do not guess at bottlenecks" is
+  exactly why the on-device attribution exists).
+- **Verification:** full release suite minus the CPU logit gate
+  (`swift test -c release --skip LogitMatchSuiteTests`): "Executed 353
+  tests, with 2 tests skipped and 0 failures (0 unexpected) in 1802.386
+  (1802.446) seconds" — +25 tests over the P3-EXEC baseline (328); both
+  skips are the opt-in free-run harnesses. Backlog drift test: 5 passed.
+  App release build (generic iOS, unsigned): BUILD SUCCEEDED. No new
+  compiler warnings (the DK-1 setScalar pair and the cblas_sgemm
+  deprecation are pre-existing).

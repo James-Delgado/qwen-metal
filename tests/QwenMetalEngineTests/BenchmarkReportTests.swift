@@ -28,7 +28,9 @@ final class BenchmarkReportTests: XCTestCase {
             timing: collector.summary(),
             overallTokensPerSecond: collector.overallTokensPerSecond(),
             canonicalWindowTokensPerSecond:
-                collector.canonicalWindowTokensPerSecond())
+                collector.canonicalWindowTokensPerSecond(),
+            latencyVariance: collector.canonicalWindowLatencyVariance()
+                ?? collector.allTokensLatencyVariance())
     }
 
     private func report(
@@ -100,6 +102,24 @@ final class BenchmarkReportTests: XCTestCase {
         XCTAssertTrue(text.contains("weights q4g64"))
         XCTAssertTrue(text.contains("q4g64 fused-dequant GPU"))
         XCTAssertTrue(text.contains("residency mmap"))
+    }
+
+    // MARK: - (P4-1) latency-variance line (spec D7 — every Phase 4 row)
+
+    func testBurstExportReportsWindowLatencyVariance() throws {
+        // Completion-to-completion spans are 1.0 s throughout (records at
+        // i + 0.25), so every percentile is 1000 ms with zero stalls.
+        let text = report(
+            mode: .burst, burst: syntheticMetrics(tokens: 640)).exportText()
+        XCTAssertTrue(text.contains(
+            "latency (window tokens 128-512): p50 1000.00 ms, "
+            + "p95 1000.00 ms, p99 1000.00 ms, max 1000.00 ms, stalls 0"), text)
+    }
+
+    func testBurstExportLabelsAllTokensVarianceBelow512() throws {
+        let text = report(
+            mode: .burst, burst: syntheticMetrics(tokens: 64)).exportText()
+        XCTAssertTrue(text.contains("latency (all tokens): p50 1000.00 ms"), text)
     }
 
     func testBurstExportLabelsWindowUnavailableBelow512() throws {

@@ -7,12 +7,14 @@ import QwenMetalEngine
 /// residency mmap/wired toggle, and displays + exports the row fields. The prompt picker on burst also
 /// serves the prefill row (prefill-summarize — prompts/README roles).
 struct BenchmarkView: View {
-    /// Screen-local run modes: the two BenchmarkReport generation modes plus
-    /// the P3-6 dequant-matvec microbench (weights-only, no generation).
+    /// Screen-local run modes: the two BenchmarkReport generation modes, the
+    /// P3-6 dequant-matvec microbench (weights-only, no generation), and the
+    /// P4-1 diagnostic attribution run (never a benchmark row).
     private enum RunMode: String, CaseIterable {
         case burst
         case sustained
         case microbench
+        case attribution
     }
 
     @EnvironmentObject private var model: AppModel
@@ -60,6 +62,7 @@ struct BenchmarkView: View {
                         Text("burst").tag(RunMode.burst)
                         Text("sustained (≥5 min)").tag(RunMode.sustained)
                         Text("microbench").tag(RunMode.microbench)
+                        Text("attribution").tag(RunMode.attribution)
                     }
                     .pickerStyle(.segmented)
                     .disabled(model.isRunning)
@@ -80,6 +83,12 @@ struct BenchmarkView: View {
                             + "weights-only; q4g64 artifact required). Gate "
                             + "30.7 GB/s = best of ≥3 same-session runs, "
                             + "detached (D8).")
+                            .font(.caption)
+                    case .attribution:
+                        Text("P4 D1 per-kernel-class GPU attribution "
+                            + "(DIAGNOSTIC — never a benchmark row). "
+                            + "decode-essay, 64 interleaved forwards; feeds "
+                            + "the P4-EXEC roofline decomposition.")
                             .font(.caption)
                     }
                     TextField(
@@ -110,6 +119,8 @@ struct BenchmarkView: View {
                                     await model.runMicrobench(
                                         batteryNote: battery,
                                         coldWarmNote: coldWarm)
+                                case .attribution:
+                                    await model.runAttribution()
                                 }
                             }
                         }

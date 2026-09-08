@@ -144,6 +144,10 @@ public struct BenchmarkReport: Sendable {
             "decode rate: overall \(overall), canonical window (tokens "
                 + "\(CanonicalDecodeWindow.firstToken)-"
                 + "\(CanonicalDecodeWindow.lastToken)) \(windowed)")
+        // P4-1 (spec D7): the latency-variance line on every Phase 4 row.
+        if let variance = m.latencyVariance {
+            lines.append(variance.summaryLine)
+        }
         return lines
     }
 
@@ -176,6 +180,10 @@ public struct BenchmarkReport: Sendable {
                     + "wall %.2f ms, median wall-GPU %.3f ms, %@ dispatches/token",
                 t.medianGPUSeconds * 1000, t.medianWallSeconds * 1000,
                 t.medianOverheadSeconds * 1000, dispatches))
+        }
+        // P4-1 (spec D7): variance for the last (steady-state) generation.
+        if let variance = result.generations.last?.latencyVariance {
+            lines.append("last generation " + variance.summaryLine)
         }
         return lines
     }

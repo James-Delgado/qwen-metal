@@ -112,6 +112,32 @@ final class BenchHarnessTests: XCTestCase {
             "window rate needs ≥ 512 generated tokens")
     }
 
+    /// P4-1 (spec D7): the runner reports latency-variance stats — window
+    /// scope when ≥512 tokens exist, all-tokens scope (labeled) otherwise.
+    func testRunnerPopulatesAllTokensLatencyVarianceOnShortRuns() throws {
+        let source = ScriptedSource(vocabSize: 4) { _ in self.peaked(1) }
+        var calls = 0
+        let runner = BenchGenerationRunner(
+            model: source, maxContext: 100, eosTokenIds: [3],
+            stepRecord: {
+                defer { calls += 1 }
+                let base = Double(calls)
+                return TokenStepRecord(
+                    timing: DispatchTiming(
+                        wallStart: base, wallEnd: base + 1.5,
+                        gpuStart: base, gpuEnd: base + 1.0),
+                    dispatchCount: 24)
+            })
+        let result = try runner.run(promptIds: [0, 0], maxNewTokens: 3)
+        // Completions at 1.5, 2.5, 3.5 → spans [1, 1] s.
+        let variance = try XCTUnwrap(result.metrics.latencyVariance)
+        XCTAssertEqual(variance.scope, .allTokens)
+        XCTAssertEqual(variance.spanCount, 2)
+        XCTAssertEqual(variance.p50Seconds, 1.0, accuracy: 1e-12)
+        XCTAssertEqual(variance.maxSeconds, 1.0, accuracy: 1e-12)
+        XCTAssertEqual(variance.stallCount, 0)
+    }
+
     func testRunnerInfersEOSEvenAtMaxTokensBoundary() throws {
         // Third token is EOS, and maxNewTokens is also 3 — EOS wins.
         let source = ScriptedSource(vocabSize: 4) { ids in

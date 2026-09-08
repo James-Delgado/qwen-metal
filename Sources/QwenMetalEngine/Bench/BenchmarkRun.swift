@@ -12,6 +12,10 @@ import Foundation
 public enum BenchDefaults {
     public static let burstMaxNewTokens = 640
     public static let sustainedMinDurationSeconds: Double = 300
+    /// P4-1 diagnostic attribution runs: total interleaved decode forwards
+    /// (half attributed, half production reference). 64 keeps a run under a
+    /// minute at Phase 3 rates while giving 32 samples per mode.
+    public static let attributionDecodeTokens = 64
 }
 
 /// Why one generation ended. Inferred from the decode outcome — `DecodeLoop`
@@ -44,12 +48,17 @@ public struct GenerationMetrics: Sendable {
     public let timing: DecodeTimingSummary?
     public let overallTokensPerSecond: Double?
     public let canonicalWindowTokensPerSecond: Double?
+    /// P4-1 (spec D7): per-token latency distribution — canonical-window
+    /// scope when the run covers it, all-tokens scope (labeled) otherwise.
+    /// Reported on every Phase 4 row, never gated.
+    public let latencyVariance: LatencyVarianceStats?
 
     public init(
         promptTokenCount: Int, generatedTokenCount: Int, wallSeconds: Double,
         prefillSeconds: Double? = nil,
         stopReason: GenerationStopReason, timing: DecodeTimingSummary?,
-        overallTokensPerSecond: Double?, canonicalWindowTokensPerSecond: Double?
+        overallTokensPerSecond: Double?, canonicalWindowTokensPerSecond: Double?,
+        latencyVariance: LatencyVarianceStats? = nil
     ) {
         self.promptTokenCount = promptTokenCount
         self.generatedTokenCount = generatedTokenCount
@@ -59,6 +68,7 @@ public struct GenerationMetrics: Sendable {
         self.timing = timing
         self.overallTokensPerSecond = overallTokensPerSecond
         self.canonicalWindowTokensPerSecond = canonicalWindowTokensPerSecond
+        self.latencyVariance = latencyVariance
     }
 }
 
@@ -151,6 +161,8 @@ public struct BenchGenerationRunner {
                 timing: collector.summary(),
                 overallTokensPerSecond: collector.overallTokensPerSecond(),
                 canonicalWindowTokensPerSecond:
-                    collector.canonicalWindowTokensPerSecond()))
+                    collector.canonicalWindowTokensPerSecond(),
+                latencyVariance: collector.canonicalWindowLatencyVariance()
+                    ?? collector.allTokensLatencyVariance()))
     }
 }

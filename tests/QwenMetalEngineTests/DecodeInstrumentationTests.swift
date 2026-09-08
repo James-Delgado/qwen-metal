@@ -152,4 +152,113 @@ final class DecodeInstrumentationTests: XCTestCase {
         let c = collector([completionAt(5), completionAt(5)])
         XCTAssertNil(c.overallTokensPerSecond())
     }
+
+    // MARK: - P4-1 latency-variance stats (spec D7 / edge test 12)
+    // Conventions pinned in DECISIONS.md 2026-09-08 (P4-1 sanity bounds):
+    // spans = consecutive completion-to-completion wallEnd deltas,
+    // nearest-rank percentiles, stall = span strictly > 2 × p50.
+
+    func testVarianceNearestRankPercentilesOn100DistinctSpans() throws {
+        // Spans 1..99 ms plus one 250 ms outlier, shuffled: nearest-rank
+        // p50 = 50 ms, p95 = 95 ms, p99 = 99 ms, max = 250 ms; the stall
+        // threshold is 2 × 50 = 100 ms, so exactly the outlier stalls.
+        var spans = (1...99).map { Double($0) / 1000 } + [0.250]
+        spans.shuffle()
+        let s = try XCTUnwrap(
+            LatencyVarianceStats.compute(interTokenSeconds: spans, scope: .allTokens))
+        XCTAssertEqual(s.spanCount, 100)
+        XCTAssertEqual(s.p50Seconds, 0.050, accuracy: 1e-12)
+        XCTAssertEqual(s.p95Seconds, 0.095, accuracy: 1e-12)
+        XCTAssertEqual(s.p99Seconds, 0.099, accuracy: 1e-12)
+        XCTAssertEqual(s.maxSeconds, 0.250, accuracy: 1e-12)
+        XCTAssertEqual(s.stallCount, 1)
+    }
+
+    func testVarianceAllEqualDegenerateCase() throws {
+        // All-equal spans: every percentile equals the value, zero stalls
+        // (2× median is never strictly exceeded).
+        let s = try XCTUnwrap(LatencyVarianceStats.compute(
+            interTokenSeconds: Array(repeating: 0.048, count: 384),
+            scope: .canonicalWindow))
+        XCTAssertEqual(s.p50Seconds, 0.048, accuracy: 1e-12)
+        XCTAssertEqual(s.p95Seconds, 0.048, accuracy: 1e-12)
+        XCTAssertEqual(s.p99Seconds, 0.048, accuracy: 1e-12)
+        XCTAssertEqual(s.maxSeconds, 0.048, accuracy: 1e-12)
+        XCTAssertEqual(s.stallCount, 0)
+    }
+
+    func testVarianceStallThresholdIsStrictlyGreater() throws {
+        // Spans (ms): [1, 1, 1, 2] → nearest-rank p50 = sorted[ceil(.5·4)−1]
+        // = 1 ms; threshold 2 ms. A span exactly AT 2× the median is not a
+        // stall; one epsilon above is.
+        let exact = try XCTUnwrap(LatencyVarianceStats.compute(
+            interTokenSeconds: [0.001, 0.001, 0.001, 0.002], scope: .allTokens))
+        XCTAssertEqual(exact.p50Seconds, 0.001, accuracy: 1e-15)
+        XCTAssertEqual(exact.stallCount, 0)
+        let above = try XCTUnwrap(LatencyVarianceStats.compute(
+            interTokenSeconds: [0.001, 0.001, 0.001, 0.0021], scope: .allTokens))
+        XCTAssertEqual(above.stallCount, 1)
+    }
+
+    func testVarianceSingleSpanCollapsesAllPercentiles() throws {
+        let s = try XCTUnwrap(LatencyVarianceStats.compute(
+            interTokenSeconds: [0.033], scope: .allTokens))
+        XCTAssertEqual(s.spanCount, 1)
+        XCTAssertEqual(s.p50Seconds, 0.033, accuracy: 1e-12)
+        XCTAssertEqual(s.p95Seconds, 0.033, accuracy: 1e-12)
+        XCTAssertEqual(s.p99Seconds, 0.033, accuracy: 1e-12)
+        XCTAssertEqual(s.maxSeconds, 0.033, accuracy: 1e-12)
+        XCTAssertEqual(s.stallCount, 0)
+    }
+
+    func testVarianceEmptyAndNonPositiveSpansReturnNil() {
+        XCTAssertNil(LatencyVarianceStats.compute(
+            interTokenSeconds: [], scope: .allTokens))
+        // A non-positive span means the records are not one monotonic
+        // generation — fail loudly with nil, never report garbage stats.
+        XCTAssertNil(LatencyVarianceStats.compute(
+            interTokenSeconds: [0.01, 0.0, 0.01], scope: .allTokens))
+        XCTAssertNil(LatencyVarianceStats.compute(
+            interTokenSeconds: [0.01, -0.01], scope: .allTokens))
+    }
+
+    func testCollectorWindowVarianceUsesExactlyTheWindowSpans() throws {
+        // Tokens 1...128 complete 1 s apart; window spans (128→512) are
+        // 2 s each except one 10 s stall; post-window spans (3 s) must not
+        // leak in. 384 window spans → p50 = 2 s, max = 10 s, 1 stall.
+        var completions: [Double] = []
+        var t = 0.0
+        for i in 1...600 {
+            if i <= 128 { t += 1 } else if i <= 512 { t += (i == 300 ? 10 : 2) } else { t += 3 }
+            completions.append(t)
+        }
+        let c = collector(completions.map { completionAt($0) })
+        let s = try XCTUnwrap(c.canonicalWindowLatencyVariance())
+        XCTAssertEqual(s.scope, .canonicalWindow)
+        XCTAssertEqual(s.spanCount, CanonicalDecodeWindow.tokenSpan)
+        XCTAssertEqual(s.p50Seconds, 2.0, accuracy: 1e-9)
+        XCTAssertEqual(s.maxSeconds, 10.0, accuracy: 1e-9)
+        XCTAssertEqual(s.stallCount, 1)
+    }
+
+    func testCollectorWindowVarianceNilBelow512Records() {
+        let c = collector((1...511).map { completionAt(Double($0)) })
+        XCTAssertNil(c.canonicalWindowLatencyVariance())
+    }
+
+    func testCollectorAllTokensVarianceFromCompletionDeltas() throws {
+        // Completions at 1, 2, 4 s → spans [1, 2]: nearest-rank p50 =
+        // sorted[ceil(.5·2)−1] = 1 s, max = 2 s, no stall (2 is not > 2).
+        let c = collector([1.0, 2.0, 4.0].map { completionAt($0) })
+        let s = try XCTUnwrap(c.allTokensLatencyVariance())
+        XCTAssertEqual(s.scope, .allTokens)
+        XCTAssertEqual(s.spanCount, 2)
+        XCTAssertEqual(s.p50Seconds, 1.0, accuracy: 1e-12)
+        XCTAssertEqual(s.maxSeconds, 2.0, accuracy: 1e-12)
+        XCTAssertEqual(s.stallCount, 0)
+    }
+
+    func testCollectorAllTokensVarianceNilBelow2Records() {
+        XCTAssertNil(collector([completionAt(1)]).allTokensLatencyVariance())
+    }
 }

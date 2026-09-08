@@ -47,6 +47,79 @@ public struct DecodeTimingSummary: Sendable {
     public let maxDispatchCount: Int
 }
 
+/// Which slice of a generation a `LatencyVarianceStats` describes (P4-1,
+/// phase-4.md D7). Canonical-window stats are the row-reportable form; the
+/// all-tokens form exists for short runs and is always labeled as such.
+public enum LatencyScope: String, Sendable {
+    case canonicalWindow
+    case allTokens
+
+    /// Human-readable scope label for CLI/report lines.
+    public var label: String {
+        switch self {
+        case .canonicalWindow:
+            return "window tokens \(CanonicalDecodeWindow.firstToken)-"
+                + "\(CanonicalDecodeWindow.lastToken)"
+        case .allTokens:
+            return "all tokens"
+        }
+    }
+}
+
+/// P4-1 (phase-4.md D7): per-token wall-clock latency distribution — reported
+/// on every Phase 4 row, never gated. Conventions pinned in the DECISIONS.md
+/// 2026-09-08 P4-1 sanity-bounds entry:
+/// - a span is the completion-to-completion wall delta between consecutive
+///   `TokenStepRecord.timing.wallEnd`s (the canonical-window rate's
+///   semantics — host work between command buffers is included);
+/// - percentiles are nearest-rank on the sorted spans (an observed value,
+///   index ⌈q·n⌉−1), so p50 here may differ minutely from the
+///   mean-of-middle-two `DecodeTimingSummary` median on even counts;
+/// - a stall is a span strictly greater than 2 × the same distribution's
+///   p50 — the page-fault/preemption signature detector.
+public struct LatencyVarianceStats: Sendable {
+    public let scope: LatencyScope
+    public let spanCount: Int
+    public let p50Seconds: Double
+    public let p95Seconds: Double
+    public let p99Seconds: Double
+    public let maxSeconds: Double
+    public let stallCount: Int
+
+    /// nil when `interTokenSeconds` is empty or contains a non-positive span
+    /// (records not from one monotonic generation — fail loudly, never
+    /// report garbage statistics).
+    public static func compute(
+        interTokenSeconds: [Double], scope: LatencyScope
+    ) -> LatencyVarianceStats? {
+        guard !interTokenSeconds.isEmpty,
+              interTokenSeconds.allSatisfy({ $0 > 0 }) else { return nil }
+        let sorted = interTokenSeconds.sorted()
+        let n = sorted.count
+        func nearestRank(_ q: Double) -> Double {
+            sorted[max(0, Int((q * Double(n)).rounded(.up)) - 1)]
+        }
+        let p50 = nearestRank(0.50)
+        return LatencyVarianceStats(
+            scope: scope,
+            spanCount: n,
+            p50Seconds: p50,
+            p95Seconds: nearestRank(0.95),
+            p99Seconds: nearestRank(0.99),
+            maxSeconds: sorted[n - 1],
+            stallCount: sorted.count(where: { $0 > 2 * p50 }))
+    }
+
+    /// The one-line report form the CLI, BenchmarkReport, and the app share.
+    public var summaryLine: String {
+        String(
+            format: "latency (%@): p50 %.2f ms, p95 %.2f ms, p99 %.2f ms, "
+                + "max %.2f ms, stalls %d (spans > 2x p50, n = %d)",
+            scope.label, p50Seconds * 1000, p95Seconds * 1000,
+            p99Seconds * 1000, maxSeconds * 1000, stallCount, spanCount)
+    }
+}
+
 /// Collects `TokenStepRecord`s during a generation (the CLI/app hook them in
 /// via `DecodeLoop`'s `onStep`) and computes the P2-5 aggregates.
 public struct DecodeTimingCollector: Sendable {
@@ -97,6 +170,35 @@ public struct DecodeTimingCollector: Sendable {
         let elapsed = last.timing.wallEnd - first.timing.wallEnd
         guard elapsed > 0 else { return nil }
         return Double(records.count - 1) / elapsed
+    }
+
+    /// P4-1 (spec D7): latency-variance stats over the canonical window —
+    /// the 384 completion-to-completion spans between generated tokens 128
+    /// and 512. nil when fewer than 512 tokens were generated, or when the
+    /// window's spans are not strictly positive (corrupt sequence).
+    public func canonicalWindowLatencyVariance() -> LatencyVarianceStats? {
+        guard records.count >= CanonicalDecodeWindow.lastToken else { return nil }
+        let window = records[
+            (CanonicalDecodeWindow.firstToken - 1)..<CanonicalDecodeWindow.lastToken]
+        return LatencyVarianceStats.compute(
+            interTokenSeconds: Self.interTokenSpans(Array(window)),
+            scope: .canonicalWindow)
+    }
+
+    /// The all-tokens fallback for runs too short for the canonical window —
+    /// always reported with its scope label, never passed off as the window
+    /// form. nil below 2 records or on non-positive spans.
+    public func allTokensLatencyVariance() -> LatencyVarianceStats? {
+        LatencyVarianceStats.compute(
+            interTokenSeconds: Self.interTokenSpans(records), scope: .allTokens)
+    }
+
+    /// Consecutive completion-to-completion wall deltas (n − 1 spans).
+    private static func interTokenSpans(_ records: [TokenStepRecord]) -> [Double] {
+        guard records.count >= 2 else { return [] }
+        return (1..<records.count).map {
+            records[$0].timing.wallEnd - records[$0 - 1].timing.wallEnd
+        }
     }
 
     /// Median with the even-count convention: mean of the two middle values.

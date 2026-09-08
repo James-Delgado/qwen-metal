@@ -341,6 +341,45 @@ mmap stays the default for Phase 4+.** Speed unresolved at n=3 under the
 interleaved protocol; mmap is ~1 GB lighter and loads 5× faster; wired
 stays available via the app toggle for diagnostics.
 
+## Phase 4 — per-stage GPU attribution + latency variance, Mac dev-loop (P4-1, PROVISIONAL)
+
+Harness (P4-1, phase-4.md D1/D7): the diagnostic attribution mode replays
+the SAME encode sequence split into one command buffer per class-contiguous
+dispatch run (282 segments/token at real dims; classes matvec / attention /
+norm+elementwise / head-tail), buffers committed back-to-back on the serial
+queue, per-class GPU time from the buffers' own timestamps; every other
+decode token runs the untouched production single-command-buffer step as the
+cross-check reference (pre-committed sanity band 0.5–2.0×, DECISIONS.md
+2026-09-08). DIAGNOSTIC — never a benchmark row; production-path invariance
+is test-pinned (bitwise-identical logits, 591 dispatches). Latency variance
+(D7, reported never gated): nearest-rank p50/p95/p99/max of
+completion-to-completion per-token wall spans over the canonical window +
+stall count (spans > 2× window p50). Reproduce:
+`swift run -c release qwen-metal-cli attribute --model-dir models --prompt "$(cat benchmarks/prompts/rendered/decode-essay.rendered.txt)"$'\n\n'`
+(and `generate … --max-tokens 640` for the variance row; note the `$(cat)`
+trailing-newline restore, P2-5 annotation).
+
+### 2026-09-08 — Mac "before" (naive-path) attribution breakdown, M2 Pro (P4-1)
+
+Session: macOS 26.5.1 (25F80), release build, weights q4g64 (artifact
+d03b3fe3…), residency mmap, prompt decode-essay (84 tokens), 32 attributed
++ 32 production forwards interleaved at cache depth 83–146. Mac fractions
+do NOT predict device fractions (Phase 2 precedent) — the claim-grade
+"before" breakdown is the on-device P4-5 export.
+
+| Date | Device | matvec | attention | norm+elementwise | head/tail | Class-sum (median ms/tok) | Production GPU ms/tok @ dispatches | Sanity ratio | Notes |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-08 | Apple M2 Pro (Mac, dev machine) | 14.95 ms (49.4%) | 2.45 ms (8.1%) | 11.12 ms (36.7%) | 1.77 ms (5.9%) | 30.29 (span 30.52, wall 30.69) | 30.27 @ 591 | 1.00 (band 0.50–2.00) | PROVISIONAL, DIAGNOSTIC. Shallow-depth attention (83–146) — the on-device row at window depth will weight attention higher. Elementwise at 36.7% of token GPU time is the Mac-visible headline for the D3 fold set; matvec + head/tail (the class split puts lm_head in head/tail) ≈ 16.7 ms, matching the P3-6 microbench expectation for all 197 weight-streaming dispatches (0.968 GB at ~58.8 GB/s ≈ 16.5 ms). Split-mode overhead ≈ 0 on Mac (class-sum ≈ span ≈ production). |
+
+### 2026-09-08 — Mac decode sanity row with D7 variance fields, M2 Pro (P4-1)
+
+First Mac q4g64 decode row (the P2-5 Mac row was bf16); same session and
+settings as above, burst cap 640.
+
+| Date | Device | Prompt (tokens) | Generated | Median GPU ms/tok | Median wall ms/tok | Median wall−GPU ms | Dispatches/tok | Window tok/s (128–512) | Latency p50/p95/p99/max ms (window) | Stalls | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-08 | Apple M2 Pro (Mac, dev machine) | decode-essay (84) | 640 (cap) | 34.74 | 35.09 | 0.360 | 591 | 28.32 (overall 28.23) | 35.18 / 38.36 / 38.73 / 38.93 | 0 (n=384) | PROVISIONAL, burst, warm, dev-loop sanity only. Tight distribution (max/p50 ≈ 1.11, zero stalls) — the D7 stall detector's clean-baseline shape. Median GPU 34.74 ms at 640-token depths vs 30.27 ms at depth ~146 in the attribution row: the depth-dependent attention/append cost, consistent measured twice. Output coherent (computing-history essay). |
+
 ## Phase 0a — energy dry-run + corrections (PROVISIONAL)
 
 ### 2026-08-22 — sustained battery-delta cycles, iPhone 15 Pro (method VALIDATED)

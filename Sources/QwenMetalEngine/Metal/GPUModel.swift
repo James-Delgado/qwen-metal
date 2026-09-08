@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import QuartzCore
 
 /// P2-4 (docs/phases/phase-2.md D5): the full GPU decode pipeline — the
 /// P2-1/P2-2/P2-3 pieces (whole-checkpoint residency buffer, naive decode
@@ -306,6 +307,110 @@ public final class GPUModel {
     /// the last prompt position, not per prompt token), else nil.
     @discardableResult
     public func step(token: Int, computeLogits: Bool) throws -> [Float]? {
+        let position = try validateStep(token: token)
+        dispatchCounter.reset()
+        lastStepTiming = try context.timedDispatch { encoder in
+            try encodeForward(
+                token: token, position: position,
+                computeLogits: computeLogits) { _ in encoder }
+        }
+        lastStepDispatchCount = dispatchCounter.count
+        cachedTokens.append(token)
+        return computeLogits ? readLogits() : nil
+    }
+
+    /// P4-1 (phase-4.md D1): the DIAGNOSTIC attribution step. Runs the same
+    /// forward — same kernels, same encode order, arithmetic bitwise
+    /// identical to `step` — but splits the encoding into one command buffer
+    /// per class-contiguous dispatch run, so per-class GPU time can be read
+    /// from the buffers' own timestamps. Buffers commit back-to-back on the
+    /// serial queue (no wait between segments) and the whole run is
+    /// wall-bracketed (hard rule 7). Opt-in only: the production decode path
+    /// (`step` / `lastPositionLogits`) never calls this, and its numbers are
+    /// never benchmark rows. Advances the cache exactly like `step`;
+    /// `lastStepTiming`/`lastStepDispatchCount` are cleared, not populated —
+    /// there is no production single-buffer timing for a diagnostic step.
+    public func attributedStep(
+        token: Int, computeLogits: Bool
+    ) throws -> (attribution: TokenAttribution, logits: [Float]?) {
+        let position = try validateStep(token: token)
+        dispatchCounter.reset()
+
+        var committed: [(kernelClass: KernelClass, buffer: MTLCommandBuffer, dispatchCount: Int)] = []
+        var currentClass: KernelClass?
+        var currentBuffer: MTLCommandBuffer?
+        var currentEncoder: MTLComputeCommandEncoder?
+        var dispatchesAtSegmentStart = 0
+
+        func closeCurrentSegment() {
+            guard let buffer = currentBuffer, let encoder = currentEncoder,
+                  let kernelClass = currentClass else { return }
+            encoder.endEncoding()
+            buffer.commit()
+            committed.append((
+                kernelClass, buffer,
+                dispatchCounter.count - dispatchesAtSegmentStart))
+            currentBuffer = nil
+            currentEncoder = nil
+            currentClass = nil
+        }
+
+        let wallStart = CACurrentMediaTime()
+        do {
+            try encodeForward(
+                token: token, position: position, computeLogits: computeLogits
+            ) { kernelClass in
+                if kernelClass == currentClass, let encoder = currentEncoder {
+                    return encoder
+                }
+                closeCurrentSegment()
+                guard let buffer = self.context.queue.makeCommandBuffer() else {
+                    throw MetalHarnessError.commandBufferCreationFailed
+                }
+                guard let encoder = buffer.makeComputeCommandEncoder() else {
+                    throw MetalHarnessError.encoderCreationFailed
+                }
+                currentClass = kernelClass
+                currentBuffer = buffer
+                currentEncoder = encoder
+                dispatchesAtSegmentStart = dispatchCounter.count
+                return encoder
+            }
+        } catch {
+            // Already-committed segments run to completion; the token is NOT
+            // appended, so any partial KV write at `position` stays
+            // unreachable (attention spans 0...position of APPENDED tokens
+            // only) and is overwritten by the next append at this position.
+            currentEncoder?.endEncoding()
+            throw error
+        }
+        closeCurrentSegment()
+
+        var segments: [TokenAttribution.Segment] = []
+        segments.reserveCapacity(committed.count)
+        for (kernelClass, buffer, dispatchCount) in committed {
+            buffer.waitUntilCompleted()
+            guard buffer.status == .completed else {
+                throw MetalHarnessError.gpuExecutionFailed(
+                    status: buffer.status, underlying: buffer.error)
+            }
+            segments.append(TokenAttribution.Segment(
+                kernelClass: kernelClass, gpuStart: buffer.gpuStartTime,
+                gpuEnd: buffer.gpuEndTime, dispatchCount: dispatchCount))
+        }
+        let wallEnd = CACurrentMediaTime()
+
+        lastStepTiming = nil
+        lastStepDispatchCount = nil
+        cachedTokens.append(token)
+        return (
+            TokenAttribution(
+                position: position, wallSeconds: wallEnd - wallStart,
+                segments: segments),
+            computeLogits ? readLogits() : nil)
+    }
+
+    private func validateStep(token: Int) throws -> Int {
         let position = cachedTokens.count
         guard position < maxContext else {
             throw KVCacheError.contextFull(position: position, maxContext: maxContext)
@@ -313,15 +418,10 @@ public final class GPUModel {
         guard token >= 0, token < config.vocabSize else {
             throw ModelError.tokenIdOutOfRange(id: token, vocabSize: config.vocabSize)
         }
-        dispatchCounter.reset()
-        lastStepTiming = try context.timedDispatch { encoder in
-            try encodeForward(
-                into: encoder, token: token, position: position,
-                computeLogits: computeLogits)
-        }
-        lastStepDispatchCount = dispatchCounter.count
-        cachedTokens.append(token)
-        guard computeLogits else { return nil }
+        return position
+    }
+
+    private func readLogits() -> [Float] {
         let vocab = config.vocabSize
         return logitsBuf.contents().withMemoryRebound(
             to: Float.self, capacity: vocab
@@ -398,9 +498,16 @@ public final class GPUModel {
 
     // MARK: - The forward encoding (one command buffer per token, spec D5)
 
+    /// Encodes one token's forward pass. `encoderFor` supplies the encoder
+    /// for each dispatch, keyed by the dispatch's `KernelClass` (P4-1 D1):
+    /// the production `step` passes a constant provider (every dispatch into
+    /// the ONE command buffer — path unchanged), while the diagnostic
+    /// `attributedStep` rolls to a fresh command buffer on each class
+    /// transition. The pipeline structure lives here exactly once, so the
+    /// two modes cannot drift.
     private func encodeForward(
-        into encoder: MTLComputeCommandEncoder, token: Int, position: Int,
-        computeLogits: Bool
+        token: Int, position: Int, computeLogits: Bool,
+        encoderFor: (KernelClass) throws -> MTLComputeCommandEncoder
     ) throws {
         let hidden = config.hiddenSize
         let headDim = config.headDim
@@ -409,89 +516,105 @@ public final class GPUModel {
         let intermediate = config.intermediateSize
         let eps = Float(config.rmsNormEps)
 
-        try encodeEmbedding(into: encoder, token: token, output: hiddenA)
+        try encodeEmbedding(
+            into: try encoderFor(.headTail), token: token, output: hiddenA)
 
         for (layer, refs) in layerRefs.enumerated() {
             // h = hiddenA on entry. Attention half: hiddenB = h + attn(norm(h)).
             try decodeKernels.encodeRMSNorm(
-                into: encoder, input: hiddenA, weight: weights.buffer,
+                into: try encoderFor(.normElementwise), input: hiddenA,
+                weight: weights.buffer,
                 weightByteOffset: refs.inputNorm, rows: 1, dim: hidden,
                 eps: eps, output: normed)
             try encodeMatvec(
-                refs.qProj, into: encoder, input: normed,
+                refs.qProj, into: try encoderFor(.matvec), input: normed,
                 outDim: numHeads * headDim, inDim: hidden, output: qRaw)
             try encodeMatvec(
-                refs.kProj, into: encoder, input: normed,
+                refs.kProj, into: try encoderFor(.matvec), input: normed,
                 outDim: kvHeads * headDim, inDim: hidden, output: kRaw)
             try encodeMatvec(
-                refs.vProj, into: encoder, input: normed,
+                refs.vProj, into: try encoderFor(.matvec), input: normed,
                 outDim: kvHeads * headDim, inDim: hidden, output: vVec)
             // Family order (PIN-1): per-head Q/K RMSNorm, THEN RoPE.
             try decodeKernels.encodeRMSNorm(
-                into: encoder, input: qRaw, weight: weights.buffer,
+                into: try encoderFor(.normElementwise), input: qRaw,
+                weight: weights.buffer,
                 weightByteOffset: refs.qNorm, rows: numHeads, dim: headDim,
                 eps: eps, output: qVec)
             try decodeKernels.encodeRMSNorm(
-                into: encoder, input: kRaw, weight: weights.buffer,
+                into: try encoderFor(.normElementwise), input: kRaw,
+                weight: weights.buffer,
                 weightByteOffset: refs.kNorm, rows: kvHeads, dim: headDim,
                 eps: eps, output: kVec)
             try decodeKernels.encodeRoPE(
-                into: encoder, vector: qVec, cosTable: cosTable, sinTable: sinTable,
+                into: try encoderFor(.normElementwise), vector: qVec,
+                cosTable: cosTable, sinTable: sinTable,
                 position: position, positions: maxContext, heads: numHeads,
                 headDim: headDim)
             try decodeKernels.encodeRoPE(
-                into: encoder, vector: kVec, cosTable: cosTable, sinTable: sinTable,
+                into: try encoderFor(.normElementwise), vector: kVec,
+                cosTable: cosTable, sinTable: sinTable,
                 position: position, positions: maxContext, heads: kvHeads,
                 headDim: headDim)
             try attentionKernels.encodeKVAppend(
-                into: encoder, cache: kvCache, layer: layer, component: .key,
+                into: try encoderFor(.normElementwise), cache: kvCache,
+                layer: layer, component: .key,
                 position: position, vector: kVec)
             try attentionKernels.encodeKVAppend(
-                into: encoder, cache: kvCache, layer: layer, component: .value,
+                into: try encoderFor(.normElementwise), cache: kvCache,
+                layer: layer, component: .value,
                 position: position, vector: vVec)
             try attentionKernels.encodeAttentionScores(
-                into: encoder, cache: kvCache, layer: layer, position: position,
+                into: try encoderFor(.attention), cache: kvCache, layer: layer,
+                position: position,
                 query: qVec, numHeads: numHeads, scores: scores)
             try attentionKernels.encodeSoftmaxRows(
-                into: encoder, input: scores, rows: numHeads, count: position + 1,
+                into: try encoderFor(.attention), input: scores, rows: numHeads,
+                count: position + 1,
                 rowStride: maxContext, output: probs)
             try attentionKernels.encodeAttentionPV(
-                into: encoder, cache: kvCache, layer: layer, position: position,
+                into: try encoderFor(.attention), cache: kvCache, layer: layer,
+                position: position,
                 probs: probs, numHeads: numHeads, output: attnOut)
             try encodeMatvec(
-                refs.oProj, into: encoder, input: attnOut,
+                refs.oProj, into: try encoderFor(.matvec), input: attnOut,
                 outDim: hidden, inDim: numHeads * headDim, output: projOut)
             try decodeKernels.encodeResidualAdd(
-                into: encoder, a: hiddenA, b: projOut, count: hidden, output: hiddenB)
+                into: try encoderFor(.normElementwise), a: hiddenA, b: projOut,
+                count: hidden, output: hiddenB)
 
             // MLP half: hiddenA = hiddenB + mlp(norm(hiddenB)).
             try decodeKernels.encodeRMSNorm(
-                into: encoder, input: hiddenB, weight: weights.buffer,
+                into: try encoderFor(.normElementwise), input: hiddenB,
+                weight: weights.buffer,
                 weightByteOffset: refs.postAttentionNorm, rows: 1, dim: hidden,
                 eps: eps, output: normed)
             try encodeMatvec(
-                refs.gateProj, into: encoder, input: normed,
+                refs.gateProj, into: try encoderFor(.matvec), input: normed,
                 outDim: intermediate, inDim: hidden, output: gateBuf)
             try encodeMatvec(
-                refs.upProj, into: encoder, input: normed,
+                refs.upProj, into: try encoderFor(.matvec), input: normed,
                 outDim: intermediate, inDim: hidden, output: upBuf)
             try decodeKernels.encodeSwiGLU(
-                into: encoder, gate: gateBuf, up: upBuf, count: intermediate,
+                into: try encoderFor(.normElementwise), gate: gateBuf,
+                up: upBuf, count: intermediate,
                 output: actBuf)
             try encodeMatvec(
-                refs.downProj, into: encoder, input: actBuf,
+                refs.downProj, into: try encoderFor(.matvec), input: actBuf,
                 outDim: hidden, inDim: intermediate, output: projOut)
             try decodeKernels.encodeResidualAdd(
-                into: encoder, a: hiddenB, b: projOut, count: hidden, output: hiddenA)
+                into: try encoderFor(.normElementwise), a: hiddenB, b: projOut,
+                count: hidden, output: hiddenA)
         }
 
         guard computeLogits else { return }
         try decodeKernels.encodeRMSNorm(
-            into: encoder, input: hiddenA, weight: weights.buffer,
+            into: try encoderFor(.headTail), input: hiddenA,
+            weight: weights.buffer,
             weightByteOffset: finalNormOffset, rows: 1, dim: hidden,
             eps: eps, output: normed)
         try encodeMatvec(
-            lmHeadRef, into: encoder, input: normed,
+            lmHeadRef, into: try encoderFor(.headTail), input: normed,
             outDim: config.vocabSize, inDim: hidden, output: logitsBuf,
             fp32Output: true)
     }
