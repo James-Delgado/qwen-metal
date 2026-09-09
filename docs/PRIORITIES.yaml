@@ -1218,7 +1218,8 @@ tasks:
   - id: P4-2
     rank: 18.2
     title: "Fused GQA SDPA decode kernel (online softmax, 1 dispatch/layer) + edge tests 1-5 + toggle wiring"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-09T22:06:20Z
     depends_on: [P4-1]
     blocks: [P4-3]
     deliverable:
