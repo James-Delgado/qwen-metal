@@ -2704,3 +2704,13 @@ held unmodified on their first run.
   App release build (generic iOS, unsigned): BUILD SUCCEEDED. No new
   compiler warnings (the DK-1 setScalar pair and the cblas_sgemm
   deprecation are pre-existing).
+
+## 2026-09-09 — SOP amendment: task reports carry a file manifest (decided by James)
+
+Surfaced from the P4-1 report review: the report named the deliverable
+components but not the file paths — those appeared only in the commit's
+`git status` tool output, which scrolls by unread. AGENT_OPERATION.md
+step 11 now requires every task report to list each file CREATED by path
+plus a one-line note of what else was modified. The same rule was pushed
+upstream to the agent-harness template repo (templates/project-init/
+AGENT_OPERATION.md), so future /project-init scaffolds inherit it.

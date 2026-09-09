@@ -33,11 +33,15 @@
 10. **Session log:** if the session decided or measured anything, append the dated
     entry to DECISIONS.md (this repo's session-log mechanism — see CLAUDE.md).
 11. **Report.** One scannable message: what shipped, commits, test status,
-    follow-ups, what's next. For SPEC-Pn (phase spec) tasks additionally
-    (decided by James, 2026-08-26): report every veto-flagged decision —
-    judgment-derived gate constants, new pins/schemas — directly in the
-    conversation, item by item with the chosen value and its rationale,
-    never only as a pointer into DECISIONS.md.
+    follow-ups, what's next — including a file manifest: every file
+    CREATED, listed by path, plus a one-line note of what else was
+    modified (decided by James, 2026-09-09; commit output scrolls by —
+    the report is the surface he reads). For SPEC-Pn (phase spec) tasks
+    additionally (decided by James, 2026-08-26): report every
+    veto-flagged decision — judgment-derived gate constants, new
+    pins/schemas — directly in the conversation, item by item with the
+    chosen value and its rationale, never only as a pointer into
+    DECISIONS.md.
 
 ## When to pause
 
