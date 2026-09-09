@@ -2705,6 +2705,75 @@ held unmodified on their first run.
   compiler warnings (the DK-1 setScalar pair and the cblas_sgemm
   deprecation are pre-existing).
 
+## 2026-09-09 — P4-2: fused GQA SDPA decode kernel landed (edge tests 1-5, D4 toggle wiring)
+
+Deliverable (phase-4.md D2/D4/D5; task P4-2): the one-dispatch-per-layer
+attention replacement. ALL pre-committed gates held unmodified on their
+first run (the p=0 bitwise gate after one honest kernel fix, below —
+no gate was touched).
+
+- **Kernel** landed as Metal/FusedSDPAKernel.swift (`sdpa_decode_f16`):
+  scores + softmax + PV in one dispatch, online fp32 softmax (running
+  max / denominator / rescaled accumulator — no scores/probs buffer
+  materialized), GQA mapping internal, fp16 cache/query reads and fp16
+  store, fp32 arithmetic throughout. Parallelization (D2 task's-choice,
+  the spec's own sketch): one threadgroup per query head (128 threads),
+  simdgroups stride positions each with an independent online-softmax
+  state, per-position scores reduced with `simd_sum` (no barrier in the
+  position loop), states merged once at the end through threadgroup
+  memory in fixed simdgroup order — bitwise deterministic across runs
+  (test-pinned; the pipeline's incremental-replay contract stays
+  bitwise). headDim ≤ 128 register bound validated at encode AND at
+  model load; device-shape assumptions (SIMD width ≥ 32) checked, named
+  errors (KVCacheError gains two cases).
+- **p=0 exactness finding:** the accumulate form `0 + 1.0·(−0.0)` flips
+  −0.0 to +0.0 — caught by the edge-1 bitwise test's fp16 boundary
+  values. Fixed structurally: at p=0 the softmax weight is exactly 1.0,
+  so the kernel copies the V row (exact for EVERY bit pattern, NaN
+  payloads included — strictly stronger than the naive chain, whose
+  attn_pv has the same latent flip on a surface its P2-3 test never
+  probes with −0.0). Follow-up NK-1 seeded for the naive side; the
+  fused test now pins −0.0 and a NaN payload.
+- **Toggle (D4):** `GPUModel.KernelPath` (.naive/.fused) on the packed
+  init only; bf16 backend has no fused option (permanent naive
+  structure, spec D4). Default stays .naive until P4-4 flips it. The
+  fused path allocates NO scores/probs buffers (D2's memory win, ~256 KB
+  ×2 at real dims). Dispatch count MEASURED via DispatchCounter: tiny
+  1-layer model 22→20 (24→22 with logits tail), i.e. 21→19/layer ⇒ real
+  dims 591→535 when fused is selected (the ≤300 gate is P4-3's fold set).
+- **Tests (+14, all first-run green after the −0 fix):**
+  FusedSDPAKernelTests (8) — edge 1 p=0 bitwise incl. −0/NaN-payload/
+  ±inf/subnormal; edge 2 GQA mapping (V-side exact at p=0, K-side gated
+  with an explicit wrong-mapping teeth check ~0.5 abs vs gate ~0.005 —
+  an exact K-side observation is impossible by construction, the fused
+  kernel has no pre-softmax surface); edge 3 p=4095 full-depth vs oracle
+  + context-limit encode/append rejected pre-dispatch with cache
+  untouched; edge 4 adversarial orderings (max-first, max-last,
+  large-negative tail, all-equal ties); edge 5 window-depth p=511 at
+  headDim 128; odd shapes (headDim 19, 67); determinism; input
+  rejection. Oracle: sgemm QK^T/PV (hard rule 8) + the reference softmax
+  formula, at the pre-committed attention-span constant max(2⁻⁷·M,
+  2⁻¹¹). GPUQuantModelTests (+5) — path default/reporting, fused
+  full-stack agreement vs live CPU-quant at the committed 2⁻⁵·M species,
+  measured dispatch drop, bitwise incremental replay, load-time headDim
+  reject. FusedPathRealArtifactSmokeTests (1) — real 1.7B artifact on
+  the fused path: fused-vs-naive last-position logits within the
+  DERIVED 2× full-stack triangle-inequality bound (sanity, not a new
+  constant; the binding fused Tier-M/E run is P4-4), free-run smoke
+  coherent (" in the city of Paris, and the" — same ids as the CPU-quant
+  smoke).
+- **Mutation check (P3-4 precedent):** dropping the accumulator rescale
+  (`acc·corr` → `acc`) failed 4 tests decisively (adversarial orderings,
+  odd shapes, window depth; |Δ| up to 1.007 vs gates ~0.004). Reverted;
+  teeth confirmed.
+- **Verification:** full release suite minus the CPU logit gate
+  (`swift test -c release --skip LogitMatchSuiteTests`): "Executed 367
+  tests, with 2 tests skipped and 0 failures (0 unexpected) in 1719.943
+  (1719.985) seconds" — +14 over the P4-1 baseline (353); both skips are
+  the opt-in free-run harnesses. Backlog drift test: 5 passed. New
+  compiler warnings: none beyond the known DK-1 setScalar species (the
+  fused kernel shares the pattern; DK-1's notes now include it).
+
 ## 2026-09-09 — SOP amendment: task reports carry a file manifest (decided by James)
 
 Surfaced from the P4-1 report review: the report named the deliverable

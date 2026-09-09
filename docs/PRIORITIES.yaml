@@ -1218,8 +1218,9 @@ tasks:
   - id: P4-2
     rank: 18.2
     title: "Fused GQA SDPA decode kernel (online softmax, 1 dispatch/layer) + edge tests 1-5 + toggle wiring"
-    status: in_progress
+    status: done
     started_at: 2026-09-09T22:06:20Z
+    completed_at: 2026-09-09T22:52:13Z
     depends_on: [P4-1]
     blocks: [P4-3]
     deliverable:
@@ -1233,11 +1234,24 @@ tasks:
       optimization iteration, re-passed per iteration. Naive attention
       kernels stay selectable (engine flag) for the P4-5 in-session
       before/after row — not deleted this phase.
+      2026-09-09 (done): landed as Metal/FusedSDPAKernel.swift
+      (threadgroup-per-head, simdgroups stride positions with independent
+      online-softmax states merged deterministically; p=0 = exact V-row
+      copy) + GPUModel.KernelPath toggle on the packed init (naive stays
+      default until P4-4; fused path allocates no scores/probs buffers) +
+      14 tests (edge 1-5, odd shapes, determinism, rejects, 5 pipeline
+      toggle tests, real-artifact fused smoke). ALL pre-committed gates
+      held; mutation check confirmed teeth (4 tests fail on a dropped
+      rescale). Dispatch count measured 21 -> 19/layer (591 -> 535 real
+      dims). Release suite minus CPU logit gate: 367 tests, 2 opt-in
+      skips, 0 failures (1720 s). Seeded NK-1 (naive attn-pv -0.0 flip);
+      DK-1 notes extended. See DECISIONS.md 2026-09-09 P4-2 entry.
+      Unblocks P4-3.
 
   - id: P4-3
     rank: 18.3
     title: "Folding set: qk-norm/RoPE/append cluster + residual/SwiGLU folds (+norm folds/matvec concat) to <=300 dispatches"
-    status: blocked
+    status: ready
     depends_on: [P4-2]
     blocks: [P4-4]
     deliverable:
@@ -1528,6 +1542,31 @@ tasks:
       UInt64/Float, so behavior is correct; fix is to constrain T (e.g.
       overloads per scalar type or T: BitwiseCopyable) so the warning cannot
       mask a real one later. Filler: never blocks the phase chain.
+      2026-09-09 (from P4-2): FusedSDPAKernel.setScalar<T> shares the same
+      generic pattern (same warning species) — include it in the fix.
+
+  - id: NK-1
+    rank: 27.5
+    title: "Naive attn-pv p=0 flips -0.0 to +0.0 (latent hole in the claimed-exact surface)"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: "engine package (Metal kernels) + tests"
+      tests: "naive p=0 boundary-value coverage incl. -0.0 (mirror the fused kernel's p=0 test)"
+    est_complexity: small
+    notes: |
+      Seeded 2026-09-09 by P4-2: the fused kernel's p=0 bitwise test with
+      fp16 boundary values exposed that the accumulate form 0 + 1.0·(-0.0)
+      = +0.0 flips negative zero — the fused kernel got an explicit p=0
+      copy branch (exact for every bit pattern incl. NaN payloads), but
+      the naive attn_pv has the same latent flip and its P2-3 "p=0 output
+      bitwise == V" test never feeds -0.0, so the claimed-exact surface
+      has an untested hole. Numerically harmless (-0 == +0); fix is either
+      the same copy-branch treatment in attn_pv_f16 + extended test, or a
+      recorded decision documenting the exclusion. The naive path is the
+      permanent bf16 correctness artifact, so its exactness claims should
+      be airtight. Filler: never blocks the phase chain.
 
   - id: CLI-1
     rank: 28

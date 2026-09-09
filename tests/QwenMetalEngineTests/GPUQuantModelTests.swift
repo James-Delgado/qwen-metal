@@ -108,14 +108,14 @@ final class GPUQuantModelTests: XCTestCase {
         return tensors
     }
 
-    private func tinyConfig(vocabSize: Int = 32, tieWordEmbeddings: Bool = true)
-        throws -> ModelConfig
-    {
+    private func tinyConfig(
+        vocabSize: Int = 32, tieWordEmbeddings: Bool = true, headDim: Int = 16
+    ) throws -> ModelConfig {
         try ModelConfig(jsonData: Data("""
         {
           "attention_bias": false,
           "eos_token_id": 2,
-          "head_dim": 16,
+          "head_dim": \(headDim),
           "hidden_size": 64,
           "intermediate_size": 128,
           "max_position_embeddings": 64,
@@ -147,11 +147,13 @@ final class GPUQuantModelTests: XCTestCase {
         return try PackedCheckpoint(path: out)
     }
 
-    private func makeTinyPackedModel(maxContext: Int = 16) throws -> GPUModel {
+    private func makeTinyPackedModel(
+        maxContext: Int = 16, kernelPath: GPUModel.KernelPath = .naive
+    ) throws -> GPUModel {
         let context = try makeContextOrSkip()
         return try GPUModel(
             packed: try makePackedCheckpoint(), config: try tinyConfig(),
-            context: context, maxContext: maxContext)
+            context: context, maxContext: maxContext, kernelPath: kernelPath)
     }
 
     // MARK: - Load-time validation (packed path)
@@ -304,5 +306,98 @@ final class GPUQuantModelTests: XCTestCase {
         XCTAssertEqual(
             generated.count, 3,
             "prompt 3 + generated 3 fills the 6-token context — clean stop")
+    }
+
+    // MARK: - P4-2 kernel-path toggle (phase-4.md D4; edge tests at pipeline level)
+
+    /// Naive stays the default until P4-4 flips it; both formats report
+    /// their path, and the bf16 initializer has no fused option at all.
+    func testKernelPathDefaultsToNaiveAndReportsSelection() throws {
+        XCTAssertEqual(try makeTinyPackedModel().kernelPath, .naive)
+        XCTAssertEqual(
+            try makeTinyPackedModel(kernelPath: .fused).kernelPath, .fused)
+
+        let context = try makeContextOrSkip()
+        let source = try makeSourceFile(tensors: tinyTensors())
+        let bf16 = try GPUModel(
+            checkpoint: try SafetensorsFile(path: source),
+            config: try tinyConfig(), context: context, maxContext: 16)
+        XCTAssertEqual(bf16.kernelPath, .naive,
+                       "the bf16 backend runs the naive structure permanently")
+    }
+
+    /// Fused-path full-stack sanity vs the CPU-quant reference at the
+    /// committed full-stack species bound (2⁻⁵·M, floor 2⁻¹¹) — the same
+    /// gate the naive path passes; both paths diff against the SAME oracle
+    /// (spec D5: naive-vs-fused bitwise equality is NOT required).
+    func testFusedPathAgreesWithCPUQuantReferenceOnSyntheticModel() throws {
+        let context = try makeContextOrSkip()
+        let packed = try makePackedCheckpoint()
+        let gpu = try GPUModel(
+            packed: packed, config: try tinyConfig(), context: context,
+            maxContext: 16, kernelPath: .fused)
+        let cpu = try QwenModel(
+            weights: packed, config: try tinyConfig(), maxSequenceLength: 16)
+
+        let ids = [1, 2, 3, 4, 5]
+        let cpuLogits = try cpu.lastPositionLogits(ids: ids)
+        let gpuLogits = try gpu.lastPositionLogits(ids: ids)
+        XCTAssertEqual(gpuLogits.count, cpuLogits.count)
+
+        let m = cpuLogits.map(abs).max() ?? 0
+        let tolerance = max(exp2(-5) * m, exp2(-11))
+        for i in 0..<cpuLogits.count {
+            XCTAssertLessThanOrEqual(
+                abs(gpuLogits[i] - cpuLogits[i]), tolerance,
+                "logit \(i): fused GPU \(gpuLogits[i]) vs CPU-quant \(cpuLogits[i])")
+        }
+    }
+
+    /// The fused path replaces 3 attention dispatches/layer with 1, and the
+    /// count is MEASURED (P2-5 rule): 1 layer → naive 22/24 becomes fused
+    /// 20/22 (embedding 1 + layer 19 + logits tail 2).
+    func testFusedPathDispatchCountMeasuredTwoLowerPerLayer() throws {
+        let model = try makeTinyPackedModel(kernelPath: .fused)
+        try model.step(token: 1, computeLogits: false)
+        XCTAssertEqual(model.lastStepDispatchCount, 20)
+        for token in [2, 3] {
+            try model.step(token: token, computeLogits: true)
+            XCTAssertEqual(model.lastStepDispatchCount, 22)
+        }
+        let timing = try XCTUnwrap(model.lastStepTiming)
+        XCTAssertGreaterThan(timing.gpuDuration, 0)
+        XCTAssertGreaterThanOrEqual(timing.wallDuration, timing.gpuDuration)
+    }
+
+    /// The incremental-prefix contract holds bitwise on the fused path (the
+    /// fused kernel is deterministic; FusedSDPAKernelTests pins that at the
+    /// kernel level).
+    func testFusedPathIncrementalMatchesFreshReplayBitwise() throws {
+        let model = try makeTinyPackedModel(kernelPath: .fused)
+        _ = try model.lastPositionLogits(ids: [1, 2, 3])
+        let incremental = try model.lastPositionLogits(ids: [1, 2, 3, 4])
+        XCTAssertEqual(model.cachedTokens, [1, 2, 3, 4])
+
+        let fresh = try makeTinyPackedModel(kernelPath: .fused)
+        let replay = try fresh.lastPositionLogits(ids: [1, 2, 3, 4])
+        XCTAssertEqual(
+            incremental, replay,
+            "incremental fused decode must be bitwise identical to a full replay")
+    }
+
+    /// A fused-path load with headDim beyond the kernel's register budget
+    /// fails AT LOAD with the named error, never mid-decode.
+    func testFusedPathRejectsOversizedHeadDimAtLoad() throws {
+        let context = try makeContextOrSkip()
+        let packed = try makePackedCheckpoint()
+        XCTAssertThrowsError(
+            try GPUModel(
+                packed: packed, config: try tinyConfig(headDim: 130),
+                context: context, maxContext: 16, kernelPath: .fused)
+        ) { error in
+            XCTAssertEqual(
+                error as? KVCacheError,
+                .headDimExceedsFusedLimit(headDim: 130, limit: 128))
+        }
     }
 }

@@ -29,6 +29,17 @@ import QuartzCore
 /// not Qwen3-shaped (QK-norm, no attention biases), and each format's loader
 /// refuses the other format's file with a clear error.
 public final class GPUModel {
+    /// P4-2 (phase-4.md D4): which attention kernel structure the packed
+    /// pipeline runs. `.naive` is the Phase 2/3 three-kernel chain
+    /// (scores → softmax → PV); `.fused` is the one-dispatch online-softmax
+    /// SDPA kernel. Selectable ONLY on the packed (q4g64) pipeline — the
+    /// bf16 backend runs the naive structure permanently (it is the Phase 2
+    /// correctness artifact). Naive stays the default until P4-4 flips it;
+    /// both paths gate against the same CPU-quant oracle (D5).
+    public enum KernelPath: String, CaseIterable, Sendable {
+        case naive
+        case fused
+    }
     /// Where a weight matrix's bytes live inside `weights.buffer`: a bf16
     /// tensor's byte offset (Phase 2 kernels) or the q4g64 triplet's three
     /// byte offsets (P3-4 kernels — the whole-checkpoint buffer bound three
@@ -62,6 +73,9 @@ public final class GPUModel {
     /// Which weight encoding this pipeline consumes (P3-5) — benchmark rows
     /// and reports record it alongside residency.
     public let weightsFormat: WeightsFormat
+    /// Which attention kernel structure this pipeline runs (P4-2, spec D4).
+    /// Always `.naive` on the bf16 backend.
+    public let kernelPath: KernelPath
 
     /// Dual timing of the most recent `step` (hard rule 7). Aggregation into
     /// medians/rates is `DecodeTimingCollector`'s job (P2-5).
@@ -84,6 +98,8 @@ public final class GPUModel {
     private let attentionKernels: AttentionKernels
     /// Present exactly on the packed path (created iff any `.q4` ref exists).
     private let quantKernels: QuantKernels?
+    /// Present exactly on the fused kernel path (P4-2, spec D4).
+    private let fusedSDPA: FusedSDPAKernel?
     private let dispatchCounter = DispatchCounter()
 
     private let embeddingRef: MatrixRef
@@ -107,8 +123,10 @@ public final class GPUModel {
     private let gateBuf: MTLBuffer      // fp16 [intermediate]
     private let upBuf: MTLBuffer        // fp16 [intermediate]
     private let actBuf: MTLBuffer      // fp16 [intermediate]
-    private let scores: MTLBuffer       // fp32 [numHeads·maxContext]
-    private let probs: MTLBuffer        // fp32 [numHeads·maxContext]
+    // Naive-path only (nil on the fused path — the online softmax never
+    // materializes scores/probs, spec D2's memory win).
+    private let scores: MTLBuffer?      // fp32 [numHeads·maxContext]
+    private let probs: MTLBuffer?       // fp32 [numHeads·maxContext]
     private let logitsBuf: MTLBuffer    // fp32 [vocab]
     private let cosTable: MTLBuffer     // fp32 [maxContext·headDim/2]
     private let sinTable: MTLBuffer     // fp32 [maxContext·headDim/2]
@@ -131,25 +149,31 @@ public final class GPUModel {
         }
         try self.init(
             file: checkpoint, packed: nil, config: config, context: context,
-            residency: residency, maxContext: maxContext)
+            residency: residency, maxContext: maxContext, kernelPath: .naive)
     }
 
     /// The P3-5 packed path: identical pipeline, q4g64 matrices consumed by
     /// the P3-4 fused kernels (register dequant, hard rule 1). The packed
     /// file's validation (format tag, provenance, triplet consistency, `.q`
     /// alignment) already happened in `PackedCheckpoint`.
+    ///
+    /// - Parameter kernelPath: attention kernel structure (P4-2, spec D4).
+    ///   `.naive` (default until P4-4) runs the Phase 2/3 three-kernel
+    ///   chain; `.fused` runs the one-dispatch SDPA kernel.
     public convenience init(
         packed: PackedCheckpoint, config: ModelConfig, context: MetalContext,
-        residency: WeightsResidency = .mmap, maxContext: Int
+        residency: WeightsResidency = .mmap, maxContext: Int,
+        kernelPath: KernelPath = .naive
     ) throws {
         try self.init(
             file: packed.file, packed: packed, config: config, context: context,
-            residency: residency, maxContext: maxContext)
+            residency: residency, maxContext: maxContext, kernelPath: kernelPath)
     }
 
     private init(
         file: SafetensorsFile, packed: PackedCheckpoint?, config: ModelConfig,
-        context: MetalContext, residency: WeightsResidency, maxContext: Int
+        context: MetalContext, residency: WeightsResidency, maxContext: Int,
+        kernelPath: KernelPath
     ) throws {
         guard config.usesQKNorm, !config.attentionBias else {
             throw ModelError.unsupportedFamily(
@@ -166,6 +190,15 @@ public final class GPUModel {
         self.maxContext = maxContext
         self.context = context
         self.weightsFormat = packed == nil ? .bf16 : .q4g64
+        self.kernelPath = kernelPath
+        if kernelPath == .fused {
+            // Fail at load, not mid-decode: the fused kernel's per-lane
+            // register budget caps headDim (the pinned model's 128 fits).
+            guard config.headDim <= FusedSDPAKernel.maxHeadDim else {
+                throw KVCacheError.headDimExceedsFusedLimit(
+                    headDim: config.headDim, limit: FusedSDPAKernel.maxHeadDim)
+            }
+        }
 
         let weights = try GPUWeights(file: file, context: context, residency: residency)
         self.weights = weights
@@ -249,9 +282,11 @@ public final class GPUModel {
         decodeKernels = try DecodeKernels(context: context)
         attentionKernels = try AttentionKernels(context: context)
         quantKernels = packed == nil ? nil : try QuantKernels(context: context)
+        fusedSDPA = kernelPath == .fused ? try FusedSDPAKernel(context: context) : nil
         decodeKernels.dispatchCounter = dispatchCounter
         attentionKernels.dispatchCounter = dispatchCounter
         quantKernels?.dispatchCounter = dispatchCounter
+        fusedSDPA?.dispatchCounter = dispatchCounter
         kvCache = try KVCache(
             device: context.device, layers: config.numHiddenLayers,
             kvHeads: kvHeads, maxContext: maxContext, headDim: headDim)
@@ -276,8 +311,13 @@ public final class GPUModel {
         gateBuf = try makeBuffer(bytes: intermediate * 2)
         upBuf = try makeBuffer(bytes: intermediate * 2)
         actBuf = try makeBuffer(bytes: intermediate * 2)
-        scores = try makeBuffer(bytes: numHeads * maxContext * 4)
-        probs = try makeBuffer(bytes: numHeads * maxContext * 4)
+        if kernelPath == .naive {
+            scores = try makeBuffer(bytes: numHeads * maxContext * 4)
+            probs = try makeBuffer(bytes: numHeads * maxContext * 4)
+        } else {
+            scores = nil
+            probs = nil
+        }
         logitsBuf = try makeBuffer(bytes: config.vocabSize * 4)
 
         // The GPU RoPE kernel consumes the CPU reference's fp32 tables —
@@ -564,18 +604,27 @@ public final class GPUModel {
                 into: try encoderFor(.normElementwise), cache: kvCache,
                 layer: layer, component: .value,
                 position: position, vector: vVec)
-            try attentionKernels.encodeAttentionScores(
-                into: try encoderFor(.attention), cache: kvCache, layer: layer,
-                position: position,
-                query: qVec, numHeads: numHeads, scores: scores)
-            try attentionKernels.encodeSoftmaxRows(
-                into: try encoderFor(.attention), input: scores, rows: numHeads,
-                count: position + 1,
-                rowStride: maxContext, output: probs)
-            try attentionKernels.encodeAttentionPV(
-                into: try encoderFor(.attention), cache: kvCache, layer: layer,
-                position: position,
-                probs: probs, numHeads: numHeads, output: attnOut)
+            if let fusedSDPA {
+                // P4-2 fused path (spec D2): scores → softmax → PV in one
+                // dispatch, online fp32 softmax, nothing materialized.
+                try fusedSDPA.encodeSDPA(
+                    into: try encoderFor(.attention), cache: kvCache,
+                    layer: layer, position: position,
+                    query: qVec, numHeads: numHeads, output: attnOut)
+            } else {
+                try attentionKernels.encodeAttentionScores(
+                    into: try encoderFor(.attention), cache: kvCache, layer: layer,
+                    position: position,
+                    query: qVec, numHeads: numHeads, scores: scores!)
+                try attentionKernels.encodeSoftmaxRows(
+                    into: try encoderFor(.attention), input: scores!, rows: numHeads,
+                    count: position + 1,
+                    rowStride: maxContext, output: probs!)
+                try attentionKernels.encodeAttentionPV(
+                    into: try encoderFor(.attention), cache: kvCache, layer: layer,
+                    position: position,
+                    probs: probs!, numHeads: numHeads, output: attnOut)
+            }
             try encodeMatvec(
                 refs.oProj, into: try encoderFor(.matvec), input: attnOut,
                 outDim: hidden, inDim: numHeads * headDim, output: projOut)

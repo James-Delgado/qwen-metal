@@ -12,6 +12,8 @@ public enum KVCacheError: Error, CustomStringConvertible, Equatable {
     case contextFull(position: Int, maxContext: Int)
     case gqaMismatch(numHeads: Int, kvHeads: Int)
     case rowCountExceedsStride(count: Int, rowStride: Int)
+    case headDimExceedsFusedLimit(headDim: Int, limit: Int)
+    case fusedKernelUnsupportedDevice(threadExecutionWidth: Int, maxThreadsPerThreadgroup: Int)
 
     public var description: String {
         switch self {
@@ -32,6 +34,13 @@ public enum KVCacheError: Error, CustomStringConvertible, Equatable {
             return "GQA requires kvHeads \(kvHeads) to divide numHeads \(numHeads)"
         case .rowCountExceedsStride(let count, let rowStride):
             return "Softmax row count \(count) exceeds row stride \(rowStride)"
+        case .headDimExceedsFusedLimit(let headDim, let limit):
+            return "headDim \(headDim) exceeds the fused SDPA kernel's per-lane "
+                + "register budget (limit \(limit)); use the naive kernel path"
+        case .fusedKernelUnsupportedDevice(let width, let maxThreads):
+            return "Fused SDPA kernel needs SIMD width >= 32 and >= 128 "
+                + "threads/threadgroup; device reports threadExecutionWidth "
+                + "\(width), maxTotalThreadsPerThreadgroup \(maxThreads)"
         }
     }
 }
