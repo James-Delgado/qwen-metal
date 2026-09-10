@@ -1251,7 +1251,8 @@ tasks:
   - id: P4-3
     rank: 18.3
     title: "Folding set: qk-norm/RoPE/append cluster + residual/SwiGLU folds (+norm folds/matvec concat) to <=300 dispatches"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-10T16:59:46Z
     depends_on: [P4-2]
     blocks: [P4-4]
     deliverable:
