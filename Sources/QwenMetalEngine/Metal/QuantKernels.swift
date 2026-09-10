@@ -222,12 +222,12 @@ public final class QuantKernels {
         biases: MTLBuffer, biasesByteOffset: Int,
         outDim: Int, inDim: Int, output: MTLBuffer
     ) throws {
-        let offsets = try tripletElementOffsets(
+        let offsets = try Self.tripletElementOffsets(
             q: q, qByteOffset: qByteOffset,
             scales: scales, scalesByteOffset: scalesByteOffset,
             biases: biases, biasesByteOffset: biasesByteOffset,
             outDim: outDim, inDim: inDim)
-        try requireCapacity(output, bytes: outDim * inDim * 4, name: "output")
+        try Self.requireCapacity(output, bytes: outDim * inDim * 4, name: "output")
 
         encoder.setComputePipelineState(tilePipeline)
         setTriplet(encoder, q: q, scales: scales, biases: biases, offsets: offsets)
@@ -247,7 +247,7 @@ public final class QuantKernels {
         biases: MTLBuffer, biasesByteOffset: Int,
         vocabSize: Int, hiddenSize: Int, tokenId: Int, output: MTLBuffer
     ) throws {
-        let offsets = try tripletElementOffsets(
+        let offsets = try Self.tripletElementOffsets(
             q: q, qByteOffset: qByteOffset,
             scales: scales, scalesByteOffset: scalesByteOffset,
             biases: biases, biasesByteOffset: biasesByteOffset,
@@ -256,7 +256,7 @@ public final class QuantKernels {
         guard tokenId >= 0, tokenId < vocabSize else {
             throw QuantKernelError.tokenIdOutOfRange(id: tokenId, vocabSize: vocabSize)
         }
-        try requireCapacity(output, bytes: hiddenSize * 2, name: "output")
+        try Self.requireCapacity(output, bytes: hiddenSize * 2, name: "output")
 
         encoder.setComputePipelineState(gatherPipeline)
         setTriplet(encoder, q: q, scales: scales, biases: biases, offsets: offsets)
@@ -276,13 +276,13 @@ public final class QuantKernels {
         input: MTLBuffer, outDim: Int, inDim: Int,
         output: MTLBuffer, fp32Output: Bool = false
     ) throws {
-        let offsets = try tripletElementOffsets(
+        let offsets = try Self.tripletElementOffsets(
             q: q, qByteOffset: qByteOffset,
             scales: scales, scalesByteOffset: scalesByteOffset,
             biases: biases, biasesByteOffset: biasesByteOffset,
             outDim: outDim, inDim: inDim)
-        try requireCapacity(input, bytes: inDim * 2, name: "input")
-        try requireCapacity(
+        try Self.requireCapacity(input, bytes: inDim * 2, name: "input")
+        try Self.requireCapacity(
             output, bytes: outDim * (fp32Output ? 4 : 2), name: "output")
 
         let pipeline = fp32Output ? matvecF32Pipeline : matvecF16Pipeline
@@ -297,18 +297,31 @@ public final class QuantKernels {
 
     // MARK: - Validation + dispatch helpers
 
-    private struct TripletElementOffsets {
+    struct TripletElementOffsets {
         let q: Int
         let scales: Int
         let biases: Int
+    }
+
+    /// FoldedKernels convenience (P4-3): the same validation over a triplet
+    /// given as buffer/byte-offset pairs — one copy of the rules, no drift.
+    static func tripletElementOffsets(
+        _ triplet: FoldedKernels.Triplet, outDim: Int, inDim: Int
+    ) throws -> TripletElementOffsets {
+        try Self.tripletElementOffsets(
+            q: triplet.q, qByteOffset: triplet.qByteOffset,
+            scales: triplet.scales, scalesByteOffset: triplet.scalesByteOffset,
+            biases: triplet.biases, biasesByteOffset: triplet.biasesByteOffset,
+            outDim: outDim, inDim: inDim)
     }
 
     /// Validates dims, alignment, and capacity for one packed triplet and
     /// converts byte offsets to element offsets (u32 for `.q`, fp16 for
     /// scales/biases). Typed u32 loads need 4-byte alignment — structurally
     /// true for a valid packed file (PackedCheckpoint validates it at load);
-    /// asserted here too, never assumed.
-    private func tripletElementOffsets(
+    /// asserted here too, never assumed. Static + internal since P4-3, so
+    /// the FoldedKernels wrappers share it.
+    static func tripletElementOffsets(
         q: MTLBuffer, qByteOffset: Int,
         scales: MTLBuffer, scalesByteOffset: Int,
         biases: MTLBuffer, biasesByteOffset: Int,
@@ -337,16 +350,16 @@ public final class QuantKernels {
                 buffer: "biases", byteOffset: biasesByteOffset, alignment: 2)
         }
         let groupBytes = outDim * (inDim / Q4G64.groupSize) * 2
-        try requireCapacity(
+        try Self.requireCapacity(
             q, bytes: qByteOffset + outDim * (inDim / Q4G64.codesPerWord) * 4,
             name: "q")
-        try requireCapacity(scales, bytes: scalesByteOffset + groupBytes, name: "scales")
-        try requireCapacity(biases, bytes: biasesByteOffset + groupBytes, name: "biases")
+        try Self.requireCapacity(scales, bytes: scalesByteOffset + groupBytes, name: "scales")
+        try Self.requireCapacity(biases, bytes: biasesByteOffset + groupBytes, name: "biases")
         return TripletElementOffsets(
             q: qByteOffset / 4, scales: scalesByteOffset / 2, biases: biasesByteOffset / 2)
     }
 
-    private func requireCapacity(
+    static func requireCapacity(
         _ buffer: MTLBuffer, bytes: Int, name: String
     ) throws {
         guard buffer.length >= bytes else {

@@ -1251,8 +1251,9 @@ tasks:
   - id: P4-3
     rank: 18.3
     title: "Folding set: qk-norm/RoPE/append cluster + residual/SwiGLU folds (+norm folds/matvec concat) to <=300 dispatches"
-    status: in_progress
+    status: done
     started_at: 2026-09-10T16:59:46Z
+    completed_at: 2026-09-10T18:17:48Z
     depends_on: [P4-2]
     blocks: [P4-4]
     deliverable:
@@ -1269,11 +1270,25 @@ tasks:
       append becomes computed -> exactness replaced by mapped tolerance
       (gates entry). All folds keep fp16-boundary/fp32-accumulate
       semantics.
+      2026-09-10 (done): landed as Metal/FoldedKernels.swift (matvec3_q4
+      QKV concat, qknorm_rope_append cluster as ONE dispatch, gateup_swiglu
+      concat+fold, matvec_res residual fold) + GPUModel per-path layer
+      encoders (naive untouched; fused = 8 dispatches/layer) + 12
+      FoldedKernelTests. ALL pre-committed gates held first run (Tier K
+      fold-vs-unfused-chain on odd AND real dims; norm-species cluster vs
+      CPU fp32 at positions {0,1,large}; v-append EXACT incl. adversarial
+      bit patterns; contextFull pre-dispatch, cache untouched). Dispatch
+      count MEASURED: tiny 9/11 (pin red-first from 20/22), real artifact
+      227 == structural floor, <= 300 gate met with margin. Norm folds NOT
+      taken (floor reached; redundant-reduction cost — rationale in
+      DECISIONS). Release suite minus CPU logit gate: 379 tests, 2 opt-in
+      skips, 0 failures (1755 s). See DECISIONS.md 2026-09-10 P4-3 entry.
+      Unblocks P4-4.
 
   - id: P4-4
     rank: 18.4
     title: "Fused path default + full Tier-M/E re-verification + free-run report + Mac 'after' rows + app finalization"
-    status: blocked
+    status: ready
     depends_on: [P4-3]
     blocks: [P4-5]
     deliverable:

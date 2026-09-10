@@ -353,16 +353,19 @@ final class GPUQuantModelTests: XCTestCase {
         }
     }
 
-    /// The fused path replaces 3 attention dispatches/layer with 1, and the
-    /// count is MEASURED (P2-5 rule): 1 layer → naive 22/24 becomes fused
-    /// 20/22 (embedding 1 + layer 19 + logits tail 2).
-    func testFusedPathDispatchCountMeasuredTwoLowerPerLayer() throws {
+    /// P4-3 edge test 8 (tiny-model pin): the folded fused path runs 8
+    /// dispatches/layer (input norm, matvec3, cluster, SDPA, o+res,
+    /// post-norm, gate+up+SwiGLU, down+res), and the count is MEASURED
+    /// (P2-5 rule): 1 layer → naive 22/24 becomes fused 9/11 (embedding 1 +
+    /// layer 8 + logits tail 2). Was 20/22 at P4-2 (SDPA only) — this pin
+    /// went red-first when the P4-3 folds landed.
+    func testFusedPathDispatchCountMeasuredEightPerLayer() throws {
         let model = try makeTinyPackedModel(kernelPath: .fused)
         try model.step(token: 1, computeLogits: false)
-        XCTAssertEqual(model.lastStepDispatchCount, 20)
+        XCTAssertEqual(model.lastStepDispatchCount, 9)
         for token in [2, 3] {
             try model.step(token: token, computeLogits: true)
-            XCTAssertEqual(model.lastStepDispatchCount, 22)
+            XCTAssertEqual(model.lastStepDispatchCount, 11)
         }
         let timing = try XCTUnwrap(model.lastStepTiming)
         XCTAssertGreaterThan(timing.gpuDuration, 0)

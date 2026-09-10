@@ -2783,3 +2783,77 @@ step 11 now requires every task report to list each file CREATED by path
 plus a one-line note of what else was modified. The same rule was pushed
 upstream to the agent-harness template repo (templates/project-init/
 AGENT_OPERATION.md), so future /project-init scaffolds inherit it.
+
+## 2026-09-10 — P4-3: folding set landed — fused path 8 dispatches/layer, 227/token MEASURED (gate ≤300)
+
+- **Deliverable:** `Sources/QwenMetalEngine/Metal/FoldedKernels.swift` (4 new
+  kernels) + the `GPUModel` fused-path encode restructure +
+  `tests/QwenMetalEngineTests/FoldedKernelTests.swift` (12 tests) + pipeline
+  pin updates. The fused (q4g64) kernel path now runs **8 dispatches/layer**:
+  input norm → `matvec3_q4_f16` (QKV concat, one dispatch over the 4096
+  concatenated rows) → `qknorm_rope_append_f16` (the 6-dispatch post-QKV
+  cluster as ONE dispatch: q-norm+RoPE→qVec, k-norm+RoPE→cache slot,
+  v pure-copy→cache slot) → fused SDPA (P4-2) → `matvec_res_q4_f16` (o_proj
+  with the residual add folded into the store) → post-norm →
+  `gateup_swiglu_q4_f16` (gate+up as one dispatch, each thread computes both
+  row dots and applies SwiGLU — zero redundant compute) → `matvec_res_q4_f16`
+  (down_proj + residual). Naive packed path (21/layer) and the bf16 backend
+  are untouched and stay selectable/permanent per spec D4.
+- **Dispatch counts, MEASURED by DispatchCounter (P2-5 rule, never derived):**
+  tiny 1-layer model 9 without logits / 11 with (was 20/22 at P4-2 — the pin
+  went red-first, then was updated); real artifact **227 with logits**
+  (8×28 + embedding + final norm + lm_head), asserted `== 227` and `≤ 300`
+  in the real-artifact smoke. 227 equals the spec's structural floor; the
+  binding ≤300 gate verdict remains P4-5's on-device measurement.
+- **Fold-lever choices (spec D3 licenses "as attribution says they pay"):**
+  the cluster went to 1 dispatch (spec required ≤2 — one kernel with three
+  head-role ranges was no harder than two and the roles share the norm+rope
+  body); BOTH matvec concatenations were taken (qkv→1, gate+up→1, the
+  latter absorbing SwiGLU with no redundant compute); **norm folds were NOT
+  taken** — the mandated folds + the two concats already land on the ≈8/layer
+  structural floor (227 ≤ 300 with margin), and folding a row-reduction norm
+  into a matvec would make every output row recompute the input-row sum of
+  squares (≈2048 redundant MACs × up to 6144 rows) for no dispatch-gate
+  benefit. Revisit only if P4-5's on-device attribution says the remaining
+  norm dispatches matter.
+- **fp16-boundary semantics preserved in every fold (spec D3):** matvec
+  accumulators round to fp16 exactly where the standalone kernels stored
+  fp16 (gate/up before SwiGLU, projection before the residual add), the
+  cluster's norm output rounds to fp16 before the rotation reads it, and
+  the residual add reads two fp16 values and rounds once — each fused span
+  computes the unfused chain's arithmetic without the DRAM round-trips.
+  The k-side cache write is now a computed value; its exactness gate is
+  replaced by the norm-species tolerance exactly as the approved 2026-09-05
+  gates entry maps it. The v-side append remains a pure copy and its EXACT
+  claim is test-pinned with adversarial bit patterns (NaN payloads, ±inf,
+  subnormals, −0).
+- **Gate outcomes (all pre-committed constants, none touched, first run):**
+  matvec-only fold spans vs the unfused kernel chain at Tier K
+  max(2⁻⁹·M, 2⁻¹¹) on odd synthetic dims AND real dims (matvec3 67|33|45×128
+  and 2048|1024|1024×2048; gate+up 51×192 and 6144×2048; residual matvec
+  77×64, 2048×2048, 2048×6144); cluster q/k outputs vs the CPU fp32
+  norm+rope reference at the norm-species gate max(2⁻⁸·M, 2⁻¹¹) at RoPE
+  positions {0, 1, maxContext−1}; head-mapping/norm-selection pinned by a
+  small-dims exact construction (±c rows, eps 0 ⇒ outputs exactly the
+  norm-weight vectors, P2-3 precedent); context-full still throws
+  pre-dispatch with the cache verified untouched byte-for-byte. The fused
+  pipeline re-passed its P4-2 suites on the folded structure: full-stack
+  synthetic sanity at 2⁻⁵·M, incremental-vs-replay bitwise, real-artifact
+  fused smoke incl. the naive-consistency triangle bound and a coherent
+  free-run.
+- **Verification (SOP step 5):** `swift test -c release --skip
+  LogitMatchSuiteTests`: "Executed 379 tests, with 2 tests skipped and 0
+  failures (0 unexpected) in 1755.151 (1755.216) seconds" (skips = the two
+  opt-in free-run report harnesses; +12 tests over P4-2's 367). Release
+  rebuild of the touched files emits no new warnings (the pre-existing
+  DK-1 setScalar species and the cblas deprecation remain; FoldedKernels
+  uses concrete setScalar overloads by construction).
+- **Notes:** `GPUModel.swift` grew to 813 lines (guideline ≤800) from the
+  naive/folded layer split; splitting the encode section into another file
+  would force the private scratch buffers to internal access, so cohesion
+  won — flagged here rather than silently exceeded. `QuantKernels`' triplet
+  validation became internal-static and is shared by `FoldedKernels`
+  (one copy of the alignment/capacity rules). Scratch buffers are now
+  allocated per kernel path: the fused path drops qRaw/kRaw/kVec/vVec/
+  projOut/gateBuf/upBuf (+scores/probs from P4-2) and adds only the 8 KB
+  qkv concat buffer — net allocation strictly decreases (spec memory rule).

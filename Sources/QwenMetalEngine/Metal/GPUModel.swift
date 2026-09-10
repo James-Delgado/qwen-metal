@@ -29,13 +29,16 @@ import QuartzCore
 /// not Qwen3-shaped (QK-norm, no attention biases), and each format's loader
 /// refuses the other format's file with a clear error.
 public final class GPUModel {
-    /// P4-2 (phase-4.md D4): which attention kernel structure the packed
-    /// pipeline runs. `.naive` is the Phase 2/3 three-kernel chain
-    /// (scores → softmax → PV); `.fused` is the one-dispatch online-softmax
-    /// SDPA kernel. Selectable ONLY on the packed (q4g64) pipeline — the
-    /// bf16 backend runs the naive structure permanently (it is the Phase 2
-    /// correctness artifact). Naive stays the default until P4-4 flips it;
-    /// both paths gate against the same CPU-quant oracle (D5).
+    /// P4-2/P4-3 (phase-4.md D2-D4): which kernel structure the packed
+    /// pipeline runs. `.naive` is the Phase 2/3 21-dispatch layer (unfused
+    /// scores → softmax → PV attention, standalone elementwise kernels);
+    /// `.fused` is the Phase 4 8-dispatch layer (one-dispatch online-softmax
+    /// SDPA plus the P4-3 folding set: QKV concat, qk-norm/RoPE/append
+    /// cluster, gate+up+SwiGLU, residual-folded matvecs). Selectable ONLY on
+    /// the packed (q4g64) pipeline — the bf16 backend runs the naive
+    /// structure permanently (it is the Phase 2 correctness artifact).
+    /// Naive stays the default until P4-4 flips it; both paths gate against
+    /// the same CPU-quant oracle (D5).
     public enum KernelPath: String, CaseIterable, Sendable {
         case naive
         case fused
@@ -82,10 +85,10 @@ public final class GPUModel {
     public private(set) var lastStepTiming: DispatchTiming?
 
     /// Compute dispatches encoded by the most recent `step`, measured at the
-    /// dispatchThreads call sites (P2-5, spec D5): 591 at the pinned dims
-    /// with logits (21/layer × 28 + embedding + final norm + lm_head),
-    /// 589 without the logits tail. The packed path replaces kernels 1:1,
-    /// so its measured count is reported by the same counter.
+    /// dispatchThreads call sites (P2-5, spec D5): naive path 591 at the
+    /// pinned dims with logits (21/layer × 28 + embedding + final norm +
+    /// lm_head), 589 without the logits tail; fused path 227 with logits
+    /// (8/layer × 28 + the same head/tail — P4-3, ≤300 gate), 225 without.
     public private(set) var lastStepDispatchCount: Int?
 
     /// Tokens whose KV entries currently occupy cache positions
@@ -100,6 +103,9 @@ public final class GPUModel {
     private let quantKernels: QuantKernels?
     /// Present exactly on the fused kernel path (P4-2, spec D4).
     private let fusedSDPA: FusedSDPAKernel?
+    /// Present exactly on the fused kernel path (P4-3, spec D3): the folding
+    /// set that takes the packed pipeline to 8 dispatches per layer.
+    private let foldedKernels: FoldedKernels?
     private let dispatchCounter = DispatchCounter()
 
     private let embeddingRef: MatrixRef
@@ -109,24 +115,30 @@ public final class GPUModel {
 
     // Scratch buffers, allocated once at init (sizes are config-fixed).
     // The residual stream ping-pongs hiddenA → hiddenB → hiddenA per layer
-    // (residual_add is out-of-place), ending each layer back in hiddenA.
+    // (the second half-block's store lands in the other buffer), ending each
+    // layer back in hiddenA. Buffers exist exactly on the path that uses
+    // them (spec: fusion only removes allocations, never adds net memory).
     private let hiddenA: MTLBuffer      // fp16 [hidden]
     private let hiddenB: MTLBuffer      // fp16 [hidden]
     private let normed: MTLBuffer       // fp16 [hidden] — norm outputs
-    private let qRaw: MTLBuffer         // fp16 [numHeads·headDim]
-    private let qVec: MTLBuffer         // fp16 [numHeads·headDim] — post QK-norm
-    private let kRaw: MTLBuffer         // fp16 [kvHeads·headDim]
-    private let kVec: MTLBuffer         // fp16 [kvHeads·headDim] — post QK-norm
-    private let vVec: MTLBuffer         // fp16 [kvHeads·headDim]
+    private let qVec: MTLBuffer         // fp16 [numHeads·headDim] — post QK-norm+RoPE
     private let attnOut: MTLBuffer      // fp16 [numHeads·headDim]
-    private let projOut: MTLBuffer      // fp16 [hidden] — o_proj / down_proj out
-    private let gateBuf: MTLBuffer      // fp16 [intermediate]
-    private let upBuf: MTLBuffer        // fp16 [intermediate]
-    private let actBuf: MTLBuffer      // fp16 [intermediate]
-    // Naive-path only (nil on the fused path — the online softmax never
-    // materializes scores/probs, spec D2's memory win).
+    private let actBuf: MTLBuffer       // fp16 [intermediate] — SwiGLU output
+    // Naive-path only: standalone-kernel intermediates the folds eliminate.
+    private let qRaw: MTLBuffer?        // fp16 [numHeads·headDim]
+    private let kRaw: MTLBuffer?        // fp16 [kvHeads·headDim]
+    private let kVec: MTLBuffer?        // fp16 [kvHeads·headDim] — post QK-norm
+    private let vVec: MTLBuffer?        // fp16 [kvHeads·headDim]
+    private let projOut: MTLBuffer?     // fp16 [hidden] — o_proj / down_proj out
+    private let gateBuf: MTLBuffer?     // fp16 [intermediate]
+    private let upBuf: MTLBuffer?       // fp16 [intermediate]
+    // Naive-path only (the online softmax never materializes scores/probs,
+    // spec D2's memory win).
     private let scores: MTLBuffer?      // fp32 [numHeads·maxContext]
     private let probs: MTLBuffer?       // fp32 [numHeads·maxContext]
+    // Fused-path only (P4-3): the matvec3 output the cluster kernel reads,
+    // [numHeads + 2·kvHeads, headDim] (q heads, then k, then v).
+    private let qkvBuf: MTLBuffer?
     private let logitsBuf: MTLBuffer    // fp32 [vocab]
     private let cosTable: MTLBuffer     // fp32 [maxContext·headDim/2]
     private let sinTable: MTLBuffer     // fp32 [maxContext·headDim/2]
@@ -283,10 +295,12 @@ public final class GPUModel {
         attentionKernels = try AttentionKernels(context: context)
         quantKernels = packed == nil ? nil : try QuantKernels(context: context)
         fusedSDPA = kernelPath == .fused ? try FusedSDPAKernel(context: context) : nil
+        foldedKernels = kernelPath == .fused ? try FoldedKernels(context: context) : nil
         decodeKernels.dispatchCounter = dispatchCounter
         attentionKernels.dispatchCounter = dispatchCounter
         quantKernels?.dispatchCounter = dispatchCounter
         fusedSDPA?.dispatchCounter = dispatchCounter
+        foldedKernels?.dispatchCounter = dispatchCounter
         kvCache = try KVCache(
             device: context.device, layers: config.numHiddenLayers,
             kvHeads: kvHeads, maxContext: maxContext, headDim: headDim)
@@ -301,22 +315,31 @@ public final class GPUModel {
         hiddenA = try makeBuffer(bytes: hidden * 2)
         hiddenB = try makeBuffer(bytes: hidden * 2)
         normed = try makeBuffer(bytes: hidden * 2)
-        qRaw = try makeBuffer(bytes: numHeads * headDim * 2)
         qVec = try makeBuffer(bytes: numHeads * headDim * 2)
-        kRaw = try makeBuffer(bytes: kvHeads * headDim * 2)
-        kVec = try makeBuffer(bytes: kvHeads * headDim * 2)
-        vVec = try makeBuffer(bytes: kvHeads * headDim * 2)
         attnOut = try makeBuffer(bytes: numHeads * headDim * 2)
-        projOut = try makeBuffer(bytes: hidden * 2)
-        gateBuf = try makeBuffer(bytes: intermediate * 2)
-        upBuf = try makeBuffer(bytes: intermediate * 2)
         actBuf = try makeBuffer(bytes: intermediate * 2)
         if kernelPath == .naive {
+            qRaw = try makeBuffer(bytes: numHeads * headDim * 2)
+            kRaw = try makeBuffer(bytes: kvHeads * headDim * 2)
+            kVec = try makeBuffer(bytes: kvHeads * headDim * 2)
+            vVec = try makeBuffer(bytes: kvHeads * headDim * 2)
+            projOut = try makeBuffer(bytes: hidden * 2)
+            gateBuf = try makeBuffer(bytes: intermediate * 2)
+            upBuf = try makeBuffer(bytes: intermediate * 2)
             scores = try makeBuffer(bytes: numHeads * maxContext * 4)
             probs = try makeBuffer(bytes: numHeads * maxContext * 4)
+            qkvBuf = nil
         } else {
+            qRaw = nil
+            kRaw = nil
+            kVec = nil
+            vVec = nil
+            projOut = nil
+            gateBuf = nil
+            upBuf = nil
             scores = nil
             probs = nil
+            qkvBuf = try makeBuffer(bytes: (numHeads + 2 * kvHeads) * headDim * 2)
         }
         logitsBuf = try makeBuffer(bytes: config.vocabSize * 4)
 
@@ -550,110 +573,21 @@ public final class GPUModel {
         encoderFor: (KernelClass) throws -> MTLComputeCommandEncoder
     ) throws {
         let hidden = config.hiddenSize
-        let headDim = config.headDim
-        let numHeads = config.numAttentionHeads
-        let kvHeads = config.numKeyValueHeads
-        let intermediate = config.intermediateSize
         let eps = Float(config.rmsNormEps)
 
         try encodeEmbedding(
             into: try encoderFor(.headTail), token: token, output: hiddenA)
 
         for (layer, refs) in layerRefs.enumerated() {
-            // h = hiddenA on entry. Attention half: hiddenB = h + attn(norm(h)).
-            try decodeKernels.encodeRMSNorm(
-                into: try encoderFor(.normElementwise), input: hiddenA,
-                weight: weights.buffer,
-                weightByteOffset: refs.inputNorm, rows: 1, dim: hidden,
-                eps: eps, output: normed)
-            try encodeMatvec(
-                refs.qProj, into: try encoderFor(.matvec), input: normed,
-                outDim: numHeads * headDim, inDim: hidden, output: qRaw)
-            try encodeMatvec(
-                refs.kProj, into: try encoderFor(.matvec), input: normed,
-                outDim: kvHeads * headDim, inDim: hidden, output: kRaw)
-            try encodeMatvec(
-                refs.vProj, into: try encoderFor(.matvec), input: normed,
-                outDim: kvHeads * headDim, inDim: hidden, output: vVec)
-            // Family order (PIN-1): per-head Q/K RMSNorm, THEN RoPE.
-            try decodeKernels.encodeRMSNorm(
-                into: try encoderFor(.normElementwise), input: qRaw,
-                weight: weights.buffer,
-                weightByteOffset: refs.qNorm, rows: numHeads, dim: headDim,
-                eps: eps, output: qVec)
-            try decodeKernels.encodeRMSNorm(
-                into: try encoderFor(.normElementwise), input: kRaw,
-                weight: weights.buffer,
-                weightByteOffset: refs.kNorm, rows: kvHeads, dim: headDim,
-                eps: eps, output: kVec)
-            try decodeKernels.encodeRoPE(
-                into: try encoderFor(.normElementwise), vector: qVec,
-                cosTable: cosTable, sinTable: sinTable,
-                position: position, positions: maxContext, heads: numHeads,
-                headDim: headDim)
-            try decodeKernels.encodeRoPE(
-                into: try encoderFor(.normElementwise), vector: kVec,
-                cosTable: cosTable, sinTable: sinTable,
-                position: position, positions: maxContext, heads: kvHeads,
-                headDim: headDim)
-            try attentionKernels.encodeKVAppend(
-                into: try encoderFor(.normElementwise), cache: kvCache,
-                layer: layer, component: .key,
-                position: position, vector: kVec)
-            try attentionKernels.encodeKVAppend(
-                into: try encoderFor(.normElementwise), cache: kvCache,
-                layer: layer, component: .value,
-                position: position, vector: vVec)
-            if let fusedSDPA {
-                // P4-2 fused path (spec D2): scores → softmax → PV in one
-                // dispatch, online fp32 softmax, nothing materialized.
-                try fusedSDPA.encodeSDPA(
-                    into: try encoderFor(.attention), cache: kvCache,
-                    layer: layer, position: position,
-                    query: qVec, numHeads: numHeads, output: attnOut)
+            if foldedKernels != nil {
+                try encodeFoldedLayer(
+                    refs: refs, layer: layer, position: position,
+                    encoderFor: encoderFor)
             } else {
-                try attentionKernels.encodeAttentionScores(
-                    into: try encoderFor(.attention), cache: kvCache, layer: layer,
-                    position: position,
-                    query: qVec, numHeads: numHeads, scores: scores!)
-                try attentionKernels.encodeSoftmaxRows(
-                    into: try encoderFor(.attention), input: scores!, rows: numHeads,
-                    count: position + 1,
-                    rowStride: maxContext, output: probs!)
-                try attentionKernels.encodeAttentionPV(
-                    into: try encoderFor(.attention), cache: kvCache, layer: layer,
-                    position: position,
-                    probs: probs!, numHeads: numHeads, output: attnOut)
+                try encodeNaiveLayer(
+                    refs: refs, layer: layer, position: position,
+                    encoderFor: encoderFor)
             }
-            try encodeMatvec(
-                refs.oProj, into: try encoderFor(.matvec), input: attnOut,
-                outDim: hidden, inDim: numHeads * headDim, output: projOut)
-            try decodeKernels.encodeResidualAdd(
-                into: try encoderFor(.normElementwise), a: hiddenA, b: projOut,
-                count: hidden, output: hiddenB)
-
-            // MLP half: hiddenA = hiddenB + mlp(norm(hiddenB)).
-            try decodeKernels.encodeRMSNorm(
-                into: try encoderFor(.normElementwise), input: hiddenB,
-                weight: weights.buffer,
-                weightByteOffset: refs.postAttentionNorm, rows: 1, dim: hidden,
-                eps: eps, output: normed)
-            try encodeMatvec(
-                refs.gateProj, into: try encoderFor(.matvec), input: normed,
-                outDim: intermediate, inDim: hidden, output: gateBuf)
-            try encodeMatvec(
-                refs.upProj, into: try encoderFor(.matvec), input: normed,
-                outDim: intermediate, inDim: hidden, output: upBuf)
-            try decodeKernels.encodeSwiGLU(
-                into: try encoderFor(.normElementwise), gate: gateBuf,
-                up: upBuf, count: intermediate,
-                output: actBuf)
-            try encodeMatvec(
-                refs.downProj, into: try encoderFor(.matvec), input: actBuf,
-                outDim: hidden, inDim: intermediate, output: projOut)
-            try decodeKernels.encodeResidualAdd(
-                into: try encoderFor(.normElementwise), a: hiddenB, b: projOut,
-                count: hidden, output: hiddenA)
         }
 
         guard computeLogits else { return }
@@ -666,6 +600,188 @@ public final class GPUModel {
             lmHeadRef, into: try encoderFor(.headTail), input: normed,
             outDim: config.vocabSize, inDim: hidden, output: logitsBuf,
             fp32Output: true)
+    }
+
+    /// The Phase 2/3 naive layer structure — 21 dispatches (19 with the
+    /// P4-2 fused SDPA never combined here: `.naive` always runs the full
+    /// three-kernel attention chain). Unchanged since P2-4; stays selectable
+    /// for the P4-5 before/after row and permanent on the bf16 backend.
+    private func encodeNaiveLayer(
+        refs: LayerRefs, layer: Int, position: Int,
+        encoderFor: (KernelClass) throws -> MTLComputeCommandEncoder
+    ) throws {
+        let hidden = config.hiddenSize
+        let headDim = config.headDim
+        let numHeads = config.numAttentionHeads
+        let kvHeads = config.numKeyValueHeads
+        let intermediate = config.intermediateSize
+        let eps = Float(config.rmsNormEps)
+
+        // h = hiddenA on entry. Attention half: hiddenB = h + attn(norm(h)).
+        try decodeKernels.encodeRMSNorm(
+            into: try encoderFor(.normElementwise), input: hiddenA,
+            weight: weights.buffer,
+            weightByteOffset: refs.inputNorm, rows: 1, dim: hidden,
+            eps: eps, output: normed)
+        try encodeMatvec(
+            refs.qProj, into: try encoderFor(.matvec), input: normed,
+            outDim: numHeads * headDim, inDim: hidden, output: qRaw!)
+        try encodeMatvec(
+            refs.kProj, into: try encoderFor(.matvec), input: normed,
+            outDim: kvHeads * headDim, inDim: hidden, output: kRaw!)
+        try encodeMatvec(
+            refs.vProj, into: try encoderFor(.matvec), input: normed,
+            outDim: kvHeads * headDim, inDim: hidden, output: vVec!)
+        // Family order (PIN-1): per-head Q/K RMSNorm, THEN RoPE.
+        try decodeKernels.encodeRMSNorm(
+            into: try encoderFor(.normElementwise), input: qRaw!,
+            weight: weights.buffer,
+            weightByteOffset: refs.qNorm, rows: numHeads, dim: headDim,
+            eps: eps, output: qVec)
+        try decodeKernels.encodeRMSNorm(
+            into: try encoderFor(.normElementwise), input: kRaw!,
+            weight: weights.buffer,
+            weightByteOffset: refs.kNorm, rows: kvHeads, dim: headDim,
+            eps: eps, output: kVec!)
+        try decodeKernels.encodeRoPE(
+            into: try encoderFor(.normElementwise), vector: qVec,
+            cosTable: cosTable, sinTable: sinTable,
+            position: position, positions: maxContext, heads: numHeads,
+            headDim: headDim)
+        try decodeKernels.encodeRoPE(
+            into: try encoderFor(.normElementwise), vector: kVec!,
+            cosTable: cosTable, sinTable: sinTable,
+            position: position, positions: maxContext, heads: kvHeads,
+            headDim: headDim)
+        try attentionKernels.encodeKVAppend(
+            into: try encoderFor(.normElementwise), cache: kvCache,
+            layer: layer, component: .key,
+            position: position, vector: kVec!)
+        try attentionKernels.encodeKVAppend(
+            into: try encoderFor(.normElementwise), cache: kvCache,
+            layer: layer, component: .value,
+            position: position, vector: vVec!)
+        try attentionKernels.encodeAttentionScores(
+            into: try encoderFor(.attention), cache: kvCache, layer: layer,
+            position: position,
+            query: qVec, numHeads: numHeads, scores: scores!)
+        try attentionKernels.encodeSoftmaxRows(
+            into: try encoderFor(.attention), input: scores!, rows: numHeads,
+            count: position + 1,
+            rowStride: maxContext, output: probs!)
+        try attentionKernels.encodeAttentionPV(
+            into: try encoderFor(.attention), cache: kvCache, layer: layer,
+            position: position,
+            probs: probs!, numHeads: numHeads, output: attnOut)
+        try encodeMatvec(
+            refs.oProj, into: try encoderFor(.matvec), input: attnOut,
+            outDim: hidden, inDim: numHeads * headDim, output: projOut!)
+        try decodeKernels.encodeResidualAdd(
+            into: try encoderFor(.normElementwise), a: hiddenA, b: projOut!,
+            count: hidden, output: hiddenB)
+
+        // MLP half: hiddenA = hiddenB + mlp(norm(hiddenB)).
+        try decodeKernels.encodeRMSNorm(
+            into: try encoderFor(.normElementwise), input: hiddenB,
+            weight: weights.buffer,
+            weightByteOffset: refs.postAttentionNorm, rows: 1, dim: hidden,
+            eps: eps, output: normed)
+        try encodeMatvec(
+            refs.gateProj, into: try encoderFor(.matvec), input: normed,
+            outDim: intermediate, inDim: hidden, output: gateBuf!)
+        try encodeMatvec(
+            refs.upProj, into: try encoderFor(.matvec), input: normed,
+            outDim: intermediate, inDim: hidden, output: upBuf!)
+        try decodeKernels.encodeSwiGLU(
+            into: try encoderFor(.normElementwise), gate: gateBuf!,
+            up: upBuf!, count: intermediate,
+            output: actBuf)
+        try encodeMatvec(
+            refs.downProj, into: try encoderFor(.matvec), input: actBuf,
+            outDim: hidden, inDim: intermediate, output: projOut!)
+        try decodeKernels.encodeResidualAdd(
+            into: try encoderFor(.normElementwise), a: hiddenB, b: projOut!,
+            count: hidden, output: hiddenA)
+    }
+
+    /// P4-3 (spec D3): the folded layer — 8 dispatches. Input norm →
+    /// matvec3 (QKV concat) → fused qk-norm/RoPE/append cluster → fused
+    /// SDPA → o_proj+residual → post-norm → gate+up+SwiGLU → down+residual.
+    /// Every fold keeps the naive chain's fp16-boundary/fp32-accumulate
+    /// semantics (FoldedKernels doc); the residual ping-pong (hiddenA →
+    /// hiddenB → hiddenA) is unchanged, so the Tier-E hook points hold.
+    private func encodeFoldedLayer(
+        refs: LayerRefs, layer: Int, position: Int,
+        encoderFor: (KernelClass) throws -> MTLComputeCommandEncoder
+    ) throws {
+        let hidden = config.hiddenSize
+        let headDim = config.headDim
+        let numHeads = config.numAttentionHeads
+        let kvHeads = config.numKeyValueHeads
+        let intermediate = config.intermediateSize
+        let eps = Float(config.rmsNormEps)
+        let foldedKernels = foldedKernels!
+        let qkvBuf = qkvBuf!
+
+        // h = hiddenA on entry. Attention half: hiddenB = h + attn(norm(h)).
+        try decodeKernels.encodeRMSNorm(
+            into: try encoderFor(.normElementwise), input: hiddenA,
+            weight: weights.buffer,
+            weightByteOffset: refs.inputNorm, rows: 1, dim: hidden,
+            eps: eps, output: normed)
+        try foldedKernels.encodeMatvec3(
+            into: try encoderFor(.matvec),
+            a: try q4Triplet(refs.qProj), outDimA: numHeads * headDim,
+            b: try q4Triplet(refs.kProj), outDimB: kvHeads * headDim,
+            c: try q4Triplet(refs.vProj), outDimC: kvHeads * headDim,
+            inDim: hidden, input: normed, output: qkvBuf)
+        // Family order (PIN-1) inside the cluster: per-head Q/K RMSNorm,
+        // THEN RoPE; k stores into the cache slot, v copies into its slot.
+        try foldedKernels.encodeQKNormRoPEAppend(
+            into: try encoderFor(.normElementwise), qkv: qkvBuf,
+            qNormWeight: weights.buffer, qNormByteOffset: refs.qNorm,
+            kNormWeight: weights.buffer, kNormByteOffset: refs.kNorm,
+            cosTable: cosTable, sinTable: sinTable,
+            position: position, positions: maxContext, numHeads: numHeads,
+            eps: eps, cache: kvCache, layer: layer, qOut: qVec)
+        try fusedSDPA!.encodeSDPA(
+            into: try encoderFor(.attention), cache: kvCache,
+            layer: layer, position: position,
+            query: qVec, numHeads: numHeads, output: attnOut)
+        try foldedKernels.encodeMatvecResidual(
+            into: try encoderFor(.matvec), triplet: try q4Triplet(refs.oProj),
+            outDim: hidden, inDim: numHeads * headDim,
+            input: attnOut, residual: hiddenA, output: hiddenB)
+
+        // MLP half: hiddenA = hiddenB + mlp(norm(hiddenB)).
+        try decodeKernels.encodeRMSNorm(
+            into: try encoderFor(.normElementwise), input: hiddenB,
+            weight: weights.buffer,
+            weightByteOffset: refs.postAttentionNorm, rows: 1, dim: hidden,
+            eps: eps, output: normed)
+        try foldedKernels.encodeGateUpSwiGLU(
+            into: try encoderFor(.matvec),
+            gate: try q4Triplet(refs.gateProj), up: try q4Triplet(refs.upProj),
+            outDim: intermediate, inDim: hidden, input: normed, output: actBuf)
+        try foldedKernels.encodeMatvecResidual(
+            into: try encoderFor(.matvec), triplet: try q4Triplet(refs.downProj),
+            outDim: hidden, inDim: intermediate,
+            input: actBuf, residual: hiddenB, output: hiddenA)
+    }
+
+    /// The packed triplet of a `.q4` ref as FoldedKernels input. The fused
+    /// path exists only on the packed pipeline, so every matrix ref is
+    /// `.q4` by construction; `.bf16` here is an internal inconsistency.
+    private func q4Triplet(_ ref: MatrixRef) throws -> FoldedKernels.Triplet {
+        guard case .q4(let q, let scales, let biases) = ref else {
+            throw ModelError.badInput(detail:
+                "internal inconsistency: fused kernel path reached a bf16 "
+                + "weight ref — the fused path is packed-only (spec D4)")
+        }
+        return FoldedKernels.Triplet(
+            q: weights.buffer, qByteOffset: q,
+            scales: weights.buffer, scalesByteOffset: scales,
+            biases: weights.buffer, biasesByteOffset: biases)
     }
 }
 
