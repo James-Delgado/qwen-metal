@@ -1357,7 +1357,8 @@ tasks:
   - id: P4-EXEC
     rank: 19
     title: "Phase 4 exit milestone (all P4 tasks done, exit criteria walked)"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-11T17:17:29Z
     depends_on: [P4-1, P4-2, P4-3, P4-4, P4-5]
     blocks: [SPEC-P5]
     deliverable:
