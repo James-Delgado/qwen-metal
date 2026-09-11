@@ -1290,7 +1290,7 @@ tasks:
     title: "Fused path default + full Tier-M/E re-verification + free-run report + Mac 'after' rows + app finalization"
     status: ready
     depends_on: [P4-3]
-    blocks: [P4-5]
+    blocks: [P4-5, LD-1]
     deliverable:
       file: "engine package (GPU decode path) + CLI/app"
       tests: "Tier-M at surviving slices + Tier-E logit suite verbatim vs live CPU-quant on the fused path; both kernel paths pass shared smoke; edge behavior unchanged (empty prompt, >4K, no-Metal, missing model); free-run divergence REPORTED (file mechanism)"
@@ -1464,6 +1464,38 @@ tasks:
       refresh).
 
   # ---------- Follow-ups (seeded from measurements) ----------
+  - id: LD-1
+    rank: 24.3
+    title: "Long-depth GPU free-run report: fp16-activation behavior at multi-thousand-token cache depth"
+    status: blocked
+    depends_on: [P4-4]
+    blocks: []
+    deliverable:
+      file: "tests (free-run/report harness extension) + DECISIONS.md report entry"
+      tests: "report-not-gate (2026-08-23 rationale): divergence step + non-finite-logit count at depth ~3900; harness depth configurable; wall-time-viable oracle strategy chosen and recorded"
+    est_complexity: medium
+    notes: |
+      Seeded 2026-09-10 (decided by James, in-conversation, from the P4-3
+      fp16-activation discussion): the fp16 evidence stops at 128 free-run
+      steps / 250 teacher-forced steps / ~640-token device decodes —
+      nothing measures the GPU fp16 path at multi-thousand-token cache
+      depth. The convexity argument (attention is a convex combination,
+      so fp16 KV-cache rounding does not amplify with depth) says depth
+      is safe; this task replaces the argument with a measurement before
+      Phase 6 cites it in the writeup's measurement-limitations section.
+      Sketch: extend the free-run report harness (the
+      QWEN_FREE_RUN_REPORT_FILE mechanism) to ~3900 generated tokens
+      within the pinned 4096 context on the default path; REPORT the
+      divergence step and a non-finite-logit count (the fp16-overflow
+      tripwire) — never gate (free-run stays report-only per the
+      2026-08-23 rationale). Wall-time design point: a per-step live
+      CPU-quant oracle at growing depth is hours-scale; sampled
+      fingerprint checkpoints (every N steps) or a GPU-naive-vs-GPU-fused
+      cross-check are the candidate levers — choosing one (and recording
+      why) is part of the task. Blocked on P4-4 only so the measured
+      path is the shipping default (fused); filler otherwise — never
+      blocks the phase chain.
+
   - id: DEV-1
     rank: 25
     title: "Cut oracle-suite wall time (logit suite is ~32 min in a debug build)"
