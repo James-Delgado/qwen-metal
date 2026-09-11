@@ -7,6 +7,12 @@ import Metal
 /// and the free-run report — the SharedGPUModel pattern. maxContext 256
 /// covers the activation slices (seq 5), the logit suite's longest
 /// teacher-forced sequence, and the 128-step free run.
+///
+/// P4-4: built with the engine DEFAULT kernel path — FUSED since the P4-4
+/// flip (spec D4) — so every suite over this model verifies the production
+/// fused pipeline verbatim (the D5 obligation). The naive path stays covered
+/// by its explicit-path pins (GPUQuantModelTests) and the shared real-
+/// artifact smoke (FusedPathRealArtifactSmokeTests).
 enum SharedQuantGPUModel {
     static let maxContext = 256
 
@@ -294,14 +300,131 @@ final class GPUQuantTierMTests: XCTestCase {
             gpuOutput, reference,
             rel: exp2(-7), slice: "layer0_attn_output (CPU-quant live)")
     }
+
+    /// P4-4 Tier-M at the SURVIVING attention slice on the FUSED path (spec
+    /// D5): the layer-0 attention module rebuilt from the P4-2/P4-3 kernels
+    /// — matvec3 (QKV concat) → qk-norm/RoPE/append cluster → fused SDPA →
+    /// o_proj via the residual-folded matvec fed a zero residual — against
+    /// the SAME live CPU-quant slice as the naive test above, at the
+    /// VERBATIM attention-species constant 2⁻⁷ (the outermost species the
+    /// span absorbs; no new constants — DECISIONS.md 2026-09-05 gates).
+    func testFusedAttentionOutputMatchesCPUQuant() throws {
+        let model = try SharedQuantGPUModel.model()
+        let cpu = try SharedQuantModel.model()
+        let context = try SharedGPUModel.metalContext()
+        let folded = try FoldedKernels(context: context)
+        let sdpa = try FusedSDPAKernel(context: context)
+        let config = model.config
+        let hidden = config.hiddenSize
+        let headDim = config.headDim
+        let numHeads = config.numAttentionHeads
+        let kvHeads = config.numKeyValueHeads
+        let eps = Float(config.rmsNormEps)
+        let seqLen = 5
+
+        func foldedTriplet(_ base: String) throws -> FoldedKernels.Triplet {
+            let t = try triplet(base)
+            return FoldedKernels.Triplet(
+                q: model.weights.buffer, qByteOffset: t.q,
+                scales: model.weights.buffer, scalesByteOffset: t.scales,
+                biases: model.weights.buffer, biasesByteOffset: t.biases)
+        }
+        let qProj = try foldedTriplet("model.layers.0.self_attn.q_proj.weight")
+        let kProj = try foldedTriplet("model.layers.0.self_attn.k_proj.weight")
+        let vProj = try foldedTriplet("model.layers.0.self_attn.v_proj.weight")
+        let oProj = try foldedTriplet("model.layers.0.self_attn.o_proj.weight")
+        let qNormOffset = try model.weights.byteOffset(
+            for: "model.layers.0.self_attn.q_norm.weight")
+        let kNormOffset = try model.weights.byteOffset(
+            for: "model.layers.0.self_attn.k_norm.weight")
+
+        let cache = try KVCache(
+            device: context.device, layers: 1, kvHeads: kvHeads,
+            maxContext: seqLen, headDim: headDim)
+        let rope = try RoPE(
+            headDim: headDim, theta: config.ropeTheta, positions: seqLen)
+        let cosTable = try makeEmptyBuffer(bytes: rope.cosValues.count * 4)
+        let sinTable = try makeEmptyBuffer(bytes: rope.sinValues.count * 4)
+        rope.cosValues.withUnsafeBytes {
+            cosTable.contents().copyMemory(from: $0.baseAddress!, byteCount: $0.count)
+        }
+        rope.sinValues.withUnsafeBytes {
+            sinTable.contents().copyMemory(from: $0.baseAddress!, byteCount: $0.count)
+        }
+
+        let referenceInput = try cpu.blocks[0].inputNorm(
+            try cpu.embedding(try promptIDs()))
+        let reference = try cpu.blocks[0].attention(referenceInput, seqLen: seqLen)
+
+        let input = try makeEmptyBuffer(bytes: hidden * 2)
+        let qkv = try makeEmptyBuffer(
+            bytes: (numHeads + 2 * kvHeads) * headDim * 2)
+        let qVec = try makeEmptyBuffer(bytes: numHeads * headDim * 2)
+        let attnOut = try makeEmptyBuffer(bytes: numHeads * headDim * 2)
+        // fp16 +0.0 residual: res + W·x rounds once, so a zero residual
+        // observes the pure o_proj output through the folded kernel.
+        let zeroResidual = try makeF16Buffer(
+            [Float](repeating: 0, count: hidden))
+        let out = try makeEmptyBuffer(bytes: hidden * 2)
+
+        var gpuOutput: [Float] = []
+        for position in 0..<seqLen {
+            let row = Array(
+                referenceInput[(position * hidden)..<((position + 1) * hidden)])
+            let halves = row.map(Float16.init)
+            halves.withUnsafeBytes {
+                input.contents().copyMemory(from: $0.baseAddress!, byteCount: $0.count)
+            }
+            try context.timedDispatch { encoder in
+                try folded.encodeMatvec3(
+                    into: encoder,
+                    a: qProj, outDimA: numHeads * headDim,
+                    b: kProj, outDimB: kvHeads * headDim,
+                    c: vProj, outDimC: kvHeads * headDim,
+                    inDim: hidden, input: input, output: qkv)
+                try folded.encodeQKNormRoPEAppend(
+                    into: encoder, qkv: qkv,
+                    qNormWeight: model.weights.buffer,
+                    qNormByteOffset: qNormOffset,
+                    kNormWeight: model.weights.buffer,
+                    kNormByteOffset: kNormOffset,
+                    cosTable: cosTable, sinTable: sinTable,
+                    position: position, positions: seqLen,
+                    numHeads: numHeads, eps: eps,
+                    cache: cache, layer: 0, qOut: qVec)
+                try sdpa.encodeSDPA(
+                    into: encoder, cache: cache, layer: 0, position: position,
+                    query: qVec, numHeads: numHeads, output: attnOut)
+                try folded.encodeMatvecResidual(
+                    into: encoder, triplet: oProj,
+                    outDim: hidden, inDim: numHeads * headDim,
+                    input: attnOut, residual: zeroResidual, output: out)
+            }
+            gpuOutput += readF16(out, count: hidden)
+        }
+        assertWithinPhase2Gate(
+            gpuOutput, reference,
+            rel: exp2(-7), slice: "layer0_attn_output FUSED (CPU-quant live)")
+    }
 }
 
 // MARK: - Tier E: the full 28-layer GPU-quant stack vs live CPU-quant
+//
+// P4-4: the shared model runs the FUSED default, so these full-stack slices
+// and the 250-step logit suite below are the binding fused-path Tier-E
+// re-verification (spec D5 — constants verbatim, oracle unchanged).
 
 final class GPUQuantTierETests: XCTestCase {
 
     override func setUpWithError() throws {
         try SharedQuantGPUModel.skipUnlessReady()
+    }
+
+    /// Pins the suite's subject: the shared model is the production DEFAULT
+    /// path, which is fused since P4-4. If the default ever changes, this
+    /// fails before a silently-mislabeled Tier-E run can pass.
+    func testSharedModelRunsTheFusedDefault() throws {
+        XCTAssertEqual(try SharedQuantGPUModel.model().kernelPath, .fused)
     }
 
     /// Tier-E gate 2⁻⁵ on both full-stack slices: the pinned prompt's 5

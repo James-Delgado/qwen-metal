@@ -1288,8 +1288,9 @@ tasks:
   - id: P4-4
     rank: 18.4
     title: "Fused path default + full Tier-M/E re-verification + free-run report + Mac 'after' rows + app finalization"
-    status: in_progress
+    status: done
     started_at: 2026-09-11T04:16:54Z
+    completed_at: 2026-09-11T05:40:59Z
     depends_on: [P4-3]
     blocks: [P4-5, LD-1]
     deliverable:
@@ -1303,11 +1304,25 @@ tasks:
       fused decode sanity + "after" attribution breakdown. Run oracle
       suites release-mode (DEV-1). Dispatches/token recorded via
       DispatchCounter (measured, not derived).
+      2026-09-11 (done): GPUModel(packed:) default flipped to .fused
+      (red-first pin); CLI --kernels on generate/attribute; app Kernels
+      toggle; BenchmarkReport/AttributionRunResult gained a required
+      kernelPath field (rows labeled — P4-5 A/B rows differ only there).
+      Shared quant GPU model now builds the fused DEFAULT: Tier-E
+      full-stack + 250-step logit suite ran verbatim on fused vs live
+      CPU-quant, ALL pre-committed gates held; new fused Tier-M
+      attention slice at verbatim 2⁻⁷ held first run. Free-run report
+      (fused): NONE on all 5 prompts x 128 steps (DECISIONS entry).
+      Mac PROVISIONAL "after" rows: window 31.16 tok/s, wall-GPU
+      0.290 ms @ 227 dispatches; attribution sanity 1.02. Release suite
+      381 tests / 2 opt-in skips / 0 failures (1384 s); app release
+      build green. P4-5 + LD-1 flipped to ready. See DECISIONS.md
+      2026-09-11 P4-4 entry.
 
   - id: P4-5
     rank: 18.5
     title: "On-device Phase 4 rows: decode/overhead/dispatch gates + interleaved naive-vs-fused before/after + variance/attribution exports"
-    status: blocked
+    status: ready
     owner: james
     depends_on: [P4-4]
     blocks: [P4-EXEC]
@@ -1478,7 +1493,7 @@ tasks:
   - id: LD-1
     rank: 24.3
     title: "Long-depth GPU free-run report: fp16-activation behavior at multi-thousand-token cache depth"
-    status: blocked
+    status: ready
     depends_on: [P4-4]
     blocks: []
     deliverable:

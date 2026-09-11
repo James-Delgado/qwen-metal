@@ -5,7 +5,8 @@ import Foundation
 /// P3-5 free-running divergence REPORT (not a gate — DECISIONS.md 2026-08-25
 /// Phase 3 gates entry, Phase 2 rationale standing): 128 free-running greedy
 /// steps × 5 prompts, GPU-quant pipeline vs the CPU-quant reference, each
-/// self-feeding its OWN argmax. With per-logit deviation legitimately up to
+/// self-feeding its OWN argmax. Runs the shared model's DEFAULT kernel path
+/// — FUSED since P4-4 (the P4-4 report re-runs this on the fused pipeline). With per-logit deviation legitimately up to
 /// 2⁻⁵·M, any near-tie step can flip and permanently fork the trajectory, so
 /// the output is recorded in DECISIONS.md (first-divergence index + both
 /// texts), never asserted.

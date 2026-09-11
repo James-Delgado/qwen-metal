@@ -13,7 +13,7 @@ import QwenMetalEngine
 private let contextCap = 4096
 
 private let generateUsage = """
-usage: qwen-metal-cli generate --model-dir <dir> --prompt "<text>" [--max-tokens N] [--backend cpu|gpu] [--weights bf16|q4g64]
+usage: qwen-metal-cli generate --model-dir <dir> --prompt "<text>" [--max-tokens N] [--backend cpu|gpu] [--weights bf16|q4g64] [--kernels naive|fused]
   --model-dir   directory with exactly one .safetensors checkpoint,
                 config.json, tokenizer.json, tokenizer_config.json
   --prompt      non-empty prompt text
@@ -21,6 +21,10 @@ usage: qwen-metal-cli generate --model-dir <dir> --prompt "<text>" [--max-tokens
   --backend     cpu (fp32 reference, default) or gpu (Metal fp16 + KV cache)
   --weights     bf16 (default) or q4g64 (the packed 4-bit artifact — needs a
                 *-q4g64.safetensors file beside the checkpoint)
+  --kernels     fused (default on gpu+q4g64 — the Phase 4 8-dispatch/layer
+                structure) or naive (the Phase 2/3 21-dispatch structure,
+                kept for the P4-5 A/B row). gpu backend only; fused needs
+                q4g64 (the bf16 backend is permanently naive, spec D4)
 """
 
 private func printStderr(_ message: String) {
@@ -44,6 +48,7 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
     var maxTokens = 64
     var backend = Backend.cpu
     var weightsFormat = WeightsFormat.bf16
+    var kernels: GPUModel.KernelPath?
 
     var index = 0
     while index < arguments.count {
@@ -70,6 +75,11 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
                 return usageError("--weights must be 'bf16' or 'q4g64', got '\(value)'")
             }
             weightsFormat = parsed
+        case "--kernels":
+            guard let parsed = GPUModel.KernelPath(rawValue: value) else {
+                return usageError("--kernels must be 'naive' or 'fused', got '\(value)'")
+            }
+            kernels = parsed
         default:
             return usageError("unknown flag '\(flag)'")
         }
@@ -79,6 +89,14 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
     guard let modelDir else { return usageError("--model-dir is required") }
     guard let prompt else { return usageError("--prompt is required") }
     guard !prompt.isEmpty else { return usageError("--prompt must not be empty") }
+    if kernels != nil, backend == .cpu {
+        return usageError("--kernels selects GPU kernel structure — gpu backend only")
+    }
+    if kernels == .fused, weightsFormat == .bf16 {
+        return usageError(
+            "--kernels fused needs --weights q4g64 (the bf16 backend runs "
+            + "the naive structure permanently, phase-4.md D4)")
+    }
 
     do {
         let directory = try ModelDirectory(
@@ -124,9 +142,11 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
                     weights: packed, config: config, maxSequenceLength: contextLimit)
             case .gpu:
                 let metal = try MetalContext()
+                // Fused is the engine default (P4-4); --kernels naive keeps
+                // the Phase 2/3 structure selectable for the A/B row.
                 let gpu = try GPUModel(
                     packed: packed, config: config, context: metal,
-                    maxContext: contextLimit)
+                    maxContext: contextLimit, kernelPath: kernels ?? .fused)
                 model = gpu
                 gpuModel = gpu
             }
@@ -171,7 +191,9 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
         case (.cpu, .bf16): backendNote = "CPU reference — no KV cache"
         case (.cpu, .q4g64): backendNote = "CPU-quant reference — no KV cache"
         case (.gpu, .bf16): backendNote = "GPU fp16 + KV cache, naive kernels"
-        case (.gpu, .q4g64): backendNote = "GPU q4g64 + KV cache, fused dequant kernels"
+        case (.gpu, .q4g64):
+            backendNote = "GPU q4g64 + KV cache, kernels "
+                + (gpuModel?.kernelPath.rawValue ?? "?")
         }
         printStderr(String(
             format: "%d prompt tokens, %d generated in %.1fs (%.2f tok/s, %@)",

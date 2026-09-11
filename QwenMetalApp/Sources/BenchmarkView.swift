@@ -47,6 +47,21 @@ struct BenchmarkView: View {
                     .onChange(of: model.residency) {
                         model.residencyChanged()
                     }
+                    // P4-4 (spec D4): fused default; naive exists for the
+                    // P4-5 interleaved before/after row. q4g64 only — the
+                    // bf16 backend is permanently naive.
+                    if model.weightsFormat == .q4g64 {
+                        Picker("Kernels", selection: $model.kernelPath) {
+                            ForEach(GPUModel.KernelPath.allCases, id: \.self) {
+                                Text($0.rawValue)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(model.isRunning || model.isLoading)
+                        .onChange(of: model.kernelPath) {
+                            model.kernelPathChanged()
+                        }
+                    }
                     Button(model.loadSummary == nil
                         ? "Load model" : "Reload model") {
                         Task { await model.loadModel() }

@@ -380,6 +380,25 @@ settings as above, burst cap 640.
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-09-08 | Apple M2 Pro (Mac, dev machine) | decode-essay (84) | 640 (cap) | 34.74 | 35.09 | 0.360 | 591 | 28.32 (overall 28.23) | 35.18 / 38.36 / 38.73 / 38.93 | 0 (n=384) | PROVISIONAL, burst, warm, dev-loop sanity only. Tight distribution (max/p50 ≈ 1.11, zero stalls) — the D7 stall detector's clean-baseline shape. Median GPU 34.74 ms at 640-token depths vs 30.27 ms at depth ~146 in the attribution row: the depth-dependent attention/append cost, consistent measured twice. Output coherent (computing-history essay). |
 
+### 2026-09-11 — Mac fused "after" rows (P4-4, PROVISIONAL): attribution breakdown + decode row
+
+Fused (P4-2 SDPA + P4-3 folds) is the packed-pipeline DEFAULT as of P4-4;
+same protocol, machine, and artifact (d03b3fe3…) as the 2026-09-08 "before"
+rows above. Reproduce: the same two commands (fused is now the default; add
+`--kernels naive` for the pre-fusion structure). These are dev-loop sanity
+rows: the naive-vs-fused comparison here is CROSS-SESSION and therefore
+context-only — the claim-grade before/after is P4-5's in-session interleaved
+A/B under the D8 + bookend protocol, and Mac fractions do not predict device
+fractions (Phase 2 precedent).
+
+| Date | Device | matvec | attention | norm+elementwise | head/tail | Class-sum (median ms/tok) | Production GPU ms/tok @ dispatches | Sanity ratio | Notes |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-11 | Apple M2 Pro (Mac, dev machine) | 12.16 ms (45.1%) | 2.32 ms (8.6%) | 10.74 ms (39.8%) | 1.77 ms (6.6%) | 26.99 (span 27.11, wall 27.30) | 26.50 @ 227 | 1.02 (band 0.50–2.00) | PROVISIONAL, DIAGNOSTIC, kernels FUSED, depth 83–146. Production GPU 26.50 ms vs naive 30.27 ms at the same depth (−3.8 ms on Mac). Mac-only observation: norm+elementwise stays ≈39.8% of class-sum despite 11 → 3 elementwise dispatches/layer — the M2 Pro appears launch-latency-bound on the small fused dispatches, NOT byte-bound; no design decision from Mac fractions (the norm-fold revisit stays gated on P4-5's on-device attribution, per the P4-3 rationale). |
+
+| Date | Device | Prompt (tokens) | Generated | Median GPU ms/tok | Median wall ms/tok | Median wall−GPU ms | Dispatches/tok | Window tok/s (128–512) | Latency p50/p95/p99/max ms (window) | Stalls | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-11 | Apple M2 Pro (Mac, dev machine) | decode-essay (84) | 640 (cap) | 31.76 | 32.05 | 0.290 | 227 | 31.16 (overall 31.14) | 32.16 / 35.14 / 35.60 / 35.68 | 0 (n=384) | PROVISIONAL, burst, warm, kernels FUSED (the new default), dev-loop sanity only. vs the 2026-09-08 naive row: window 31.16 vs 28.32 tok/s, median GPU 31.76 vs 34.74 ms, wall−GPU 0.290 vs 0.360 ms at 591→227 dispatches — directional Mac signal only (cross-session). Tight distribution (max/p50 ≈ 1.11), zero stalls. Output coherent (same computing-history essay species). |
+
 ## Phase 0a — energy dry-run + corrections (PROVISIONAL)
 
 ### 2026-08-22 — sustained battery-delta cycles, iPhone 15 Pro (method VALIDATED)

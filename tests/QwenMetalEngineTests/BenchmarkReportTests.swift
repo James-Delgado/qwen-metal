@@ -44,6 +44,7 @@ final class BenchmarkReportTests: XCTestCase {
             dateStamp: "2026-08-25", deviceLabel: "iPhone 15 Pro",
             osVersion: "19.0", batteryHealthNote: batteryNote,
             coldOrWarmNote: "warm", residency: .mmap,
+            kernelPath: .naive,
             promptName: "decode-essay", promptTokenCount: 84, mode: mode,
             burst: burst, sustained: sustained,
             physFootprintBytes: physFootprint)
@@ -89,19 +90,32 @@ final class BenchmarkReportTests: XCTestCase {
         XCTAssertTrue(text.contains("Phase 2 row export"))
         XCTAssertTrue(text.contains("weights bf16"))
         XCTAssertTrue(text.contains("naive fp16 GPU"))
+        XCTAssertTrue(text.contains("kernels naive"))
     }
 
-    func testQ4G64ExportRecordsFormatAndPhase() throws {
-        let text = BenchmarkReport(
-            dateStamp: "2026-09-02", deviceLabel: "iPhone 15 Pro",
-            osVersion: "19.0", batteryHealthNote: "88%",
-            coldOrWarmNote: "warm", residency: .mmap, weightsFormat: .q4g64,
-            promptName: "decode-essay", promptTokenCount: 84, mode: .burst,
-            burst: syntheticMetrics(tokens: 64)).exportText()
-        XCTAssertTrue(text.contains("Phase 3 row export"))
-        XCTAssertTrue(text.contains("weights q4g64"))
-        XCTAssertTrue(text.contains("q4g64 fused-dequant GPU"))
-        XCTAssertTrue(text.contains("residency mmap"))
+    /// P4-4: q4g64 rows are Phase 4 rows and must record the kernel path —
+    /// the P4-5 before/after rows differ ONLY in this field.
+    func testQ4G64ExportRecordsFormatPhaseAndKernelPath() throws {
+        func q4Text(_ kernelPath: GPUModel.KernelPath) -> String {
+            BenchmarkReport(
+                dateStamp: "2026-09-02", deviceLabel: "iPhone 15 Pro",
+                osVersion: "19.0", batteryHealthNote: "88%",
+                coldOrWarmNote: "warm", residency: .mmap, weightsFormat: .q4g64,
+                kernelPath: kernelPath,
+                promptName: "decode-essay", promptTokenCount: 84, mode: .burst,
+                burst: syntheticMetrics(tokens: 64)).exportText()
+        }
+        let fused = q4Text(.fused)
+        XCTAssertTrue(fused.contains("Phase 4 row export"))
+        XCTAssertTrue(fused.contains("weights q4g64"))
+        XCTAssertTrue(fused.contains("q4g64 fused-dequant GPU"))
+        XCTAssertTrue(fused.contains("residency mmap"))
+        XCTAssertTrue(fused.contains("kernels fused"))
+
+        // The naive A/B arm is still a Phase 4 row, labeled by kernels.
+        let naive = q4Text(.naive)
+        XCTAssertTrue(naive.contains("Phase 4 row export"))
+        XCTAssertTrue(naive.contains("kernels naive"))
     }
 
     // MARK: - (P4-1) latency-variance line (spec D7 — every Phase 4 row)

@@ -409,7 +409,7 @@ final class GPUAttributionTests: XCTestCase {
                 segment(.headTail, start: 0.047, seconds: 0.003, dispatches: 2),
             ])
         let result = AttributionRunResult(
-            weightsFormat: .q4g64, promptTokenCount: 84,
+            weightsFormat: .q4g64, kernelPath: .naive, promptTokenCount: 84,
             attributed: [attribution],
             productionGPUSeconds: [0.040],
             productionDispatchCount: 591,
@@ -425,11 +425,29 @@ final class GPUAttributionTests: XCTestCase {
         XCTAssertTrue(text.contains("norm+elementwise"), text)
         XCTAssertTrue(text.contains("head/tail"), text)
         XCTAssertTrue(text.contains("weights q4g64"), text)
+        // P4-4: exports must label the kernel structure (the P4-5
+        // before/after breakdowns are told apart by exactly this line).
+        XCTAssertTrue(text.contains("naive (pre-fusion) kernel structure"), text)
         // matvec median 30 ms at 60% share of the 50 ms class-sum.
         XCTAssertTrue(text.contains("30.00 ms"), text)
         XCTAssertTrue(text.contains("60.0%"), text)
         // Sanity ratio 50 / 40 = 1.25 against the pre-committed band.
         XCTAssertTrue(text.contains("1.25"), text)
         XCTAssertTrue(text.contains("591"), text)
+
+        let fusedResult = AttributionRunResult(
+            weightsFormat: .q4g64, kernelPath: .fused, promptTokenCount: 84,
+            attributed: [attribution],
+            productionGPUSeconds: [0.040],
+            productionDispatchCount: 227,
+            firstDecodePosition: 83, lastDecodePosition: 84,
+            generatedTokenIds: [7, 9])
+        let fusedText = fusedResult.exportText(
+            dateStamp: "2026-09-08", deviceLabel: "TestDevice",
+            osVersion: "macOS test", residency: .mmap)
+        XCTAssertTrue(
+            fusedText.contains("fused (P4-2 SDPA + P4-3 folds) kernel structure"),
+            fusedText)
+        XCTAssertTrue(fusedText.contains("227"), fusedText)
     }
 }

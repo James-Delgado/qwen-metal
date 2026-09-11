@@ -49,6 +49,9 @@ QwenMetalApp.entitlements   Increased Memory Limit (Phase 2 needs ~4.0 GB)
     tok/s sequence is kept (the OV#9 bimodality signal).
   - Residency toggle mmap / wiredCopy — switching drops the loaded model; the
     next run reloads in the new mode (residency is baked in at load, spec D1).
+  - Kernels toggle naive / fused (q4g64 only; P4-4, phase-4.md D4) — fused is
+    the default; naive exists for the P4-5 interleaved before/after row.
+    Same reload-on-switch contract; every row export records the path.
   - Row export: all fields (dual timing medians, wall−GPU overhead,
     dispatches/token, canonical-window rate, prefill note, phys_footprint
     cross-check, PROVISIONAL marker) as shareable/copyable text. The Xcode

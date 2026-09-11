@@ -147,8 +147,10 @@ final class GPUQuantModelTests: XCTestCase {
         return try PackedCheckpoint(path: out)
     }
 
+    /// Mirrors the production default (fused since P4-4); naive-pinning
+    /// tests pass `.naive` explicitly.
     private func makeTinyPackedModel(
-        maxContext: Int = 16, kernelPath: GPUModel.KernelPath = .naive
+        maxContext: Int = 16, kernelPath: GPUModel.KernelPath = .fused
     ) throws -> GPUModel {
         let context = try makeContextOrSkip()
         return try GPUModel(
@@ -222,12 +224,12 @@ final class GPUQuantModelTests: XCTestCase {
     // MARK: - Incremental-prefix decode contract (packed path)
 
     func testIncrementalMatchesFreshReplayBitwise() throws {
-        let model = try makeTinyPackedModel()
+        let model = try makeTinyPackedModel(kernelPath: .naive)
         _ = try model.lastPositionLogits(ids: [1, 2, 3])
         let incremental = try model.lastPositionLogits(ids: [1, 2, 3, 4])
         XCTAssertEqual(model.cachedTokens, [1, 2, 3, 4])
 
-        let fresh = try makeTinyPackedModel()
+        let fresh = try makeTinyPackedModel(kernelPath: .naive)
         let replay = try fresh.lastPositionLogits(ids: [1, 2, 3, 4])
         XCTAssertEqual(
             incremental, replay,
@@ -236,17 +238,18 @@ final class GPUQuantModelTests: XCTestCase {
 
     // MARK: - CPU-quant reference agreement (sanity on the synthetic model)
 
-    /// Wiring sanity vs the CPU-quant reference (the Phase 3 oracle): both
-    /// sides consume bit-identical dequant values (gates-entry premise), so
-    /// the committed full-stack species bound (2⁻⁵·M, floor 2⁻¹¹) applies
-    /// exactly as on the bf16 path. The binding gates run against the real
-    /// artifact in GPUQuantSuiteTests.
+    /// Wiring sanity vs the CPU-quant reference (the Phase 3 oracle) on the
+    /// NAIVE path (kept selectable, spec D4): both sides consume
+    /// bit-identical dequant values (gates-entry premise), so the committed
+    /// full-stack species bound (2⁻⁵·M, floor 2⁻¹¹) applies exactly as on
+    /// the bf16 path. The fused twin is below; the binding gates run against
+    /// the real artifact in GPUQuantSuiteTests.
     func testAgreesWithCPUQuantReferenceOnSyntheticModel() throws {
         let context = try makeContextOrSkip()
         let packed = try makePackedCheckpoint()
         let gpu = try GPUModel(
             packed: packed, config: try tinyConfig(), context: context,
-            maxContext: 16)
+            maxContext: 16, kernelPath: .naive)
         let cpu = try QwenModel(
             weights: packed, config: try tinyConfig(), maxSequenceLength: 16)
 
@@ -266,11 +269,12 @@ final class GPUQuantModelTests: XCTestCase {
 
     // MARK: - Instrumentation (P2-5 counter on the packed path)
 
-    /// The packed path replaces kernels 1:1, so the measured dispatch count
-    /// matches the bf16 pipeline structure exactly (1 layer → embedding 1 +
-    /// layer 21 + logits tail 2 = 24; 22 without the tail) and stays stable.
+    /// The NAIVE packed path replaces kernels 1:1, so the measured dispatch
+    /// count matches the bf16 pipeline structure exactly (1 layer →
+    /// embedding 1 + layer 21 + logits tail 2 = 24; 22 without the tail)
+    /// and stays stable. The fused-path pin (9/11) is below.
     func testPackedStepDispatchCountMeasuredNonzeroAndStable() throws {
-        let model = try makeTinyPackedModel()
+        let model = try makeTinyPackedModel(kernelPath: .naive)
         try model.step(token: 1, computeLogits: false)
         XCTAssertEqual(model.lastStepDispatchCount, 22)
         for token in [2, 3] {
@@ -283,6 +287,10 @@ final class GPUQuantModelTests: XCTestCase {
     }
 
     // MARK: - DecodeLoop over the packed backend (spec edge 11, engine level)
+    //
+    // These ride the production default path (fused since P4-4), pinning
+    // phase-4.md edge test 10 at engine level: EOS and context-limit stop
+    // behavior on the fused path is identical to Phase 3's.
 
     func testDecodeLoopStopsOnEOSWithPackedBackend() throws {
         let model = try makeTinyPackedModel()
@@ -308,16 +316,23 @@ final class GPUQuantModelTests: XCTestCase {
             "prompt 3 + generated 3 fills the 6-token context — clean stop")
     }
 
-    // MARK: - P4-2 kernel-path toggle (phase-4.md D4; edge tests at pipeline level)
+    // MARK: - P4-2/P4-4 kernel-path toggle (phase-4.md D4; edge tests at pipeline level)
 
-    /// Naive stays the default until P4-4 flips it; both formats report
-    /// their path, and the bf16 initializer has no fused option at all.
-    func testKernelPathDefaultsToNaiveAndReportsSelection() throws {
-        XCTAssertEqual(try makeTinyPackedModel().kernelPath, .naive)
-        XCTAssertEqual(
-            try makeTinyPackedModel(kernelPath: .fused).kernelPath, .fused)
-
+    /// P4-4 flips the packed default to FUSED (spec D4: "the fused path
+    /// becomes the default"); naive stays selectable for the P4-5 A/B row,
+    /// and the bf16 initializer has no fused option at all. This pin went
+    /// red-first when the default changed.
+    func testKernelPathDefaultsToFusedAndReportsSelection() throws {
         let context = try makeContextOrSkip()
+        let defaulted = try GPUModel(
+            packed: try makePackedCheckpoint(), config: try tinyConfig(),
+            context: context, maxContext: 16)
+        XCTAssertEqual(defaulted.kernelPath, .fused,
+                       "P4-4: fused is the packed-pipeline default")
+        XCTAssertEqual(
+            try makeTinyPackedModel(kernelPath: .naive).kernelPath, .naive,
+            "naive stays selectable for the P4-5 before/after row")
+
         let source = try makeSourceFile(tensors: tinyTensors())
         let bf16 = try GPUModel(
             checkpoint: try SafetensorsFile(path: source),

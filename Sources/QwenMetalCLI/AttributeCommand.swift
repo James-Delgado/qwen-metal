@@ -9,7 +9,7 @@ import QwenMetalEngine
 
 private let attributeUsage = """
 usage: qwen-metal-cli attribute --model-dir <dir> --prompt "<text>" \
-[--tokens N] [--weights bf16|q4g64] [--residency mmap|wired]
+[--tokens N] [--weights bf16|q4g64] [--residency mmap|wired] [--kernels naive|fused]
   --model-dir   directory with the checkpoint(s), config.json,
                 tokenizer.json, tokenizer_config.json
   --prompt      non-empty prompt text
@@ -17,6 +17,9 @@ usage: qwen-metal-cli attribute --model-dir <dir> --prompt "<text>" \
                 production reference (default \(BenchDefaults.attributionDecodeTokens))
   --weights     q4g64 (default — the Phase 3+ performance path) or bf16
   --residency   mmap (default) or wired (heap copy)
+  --kernels     fused (default on q4g64 — the P4-4 "after" breakdown) or
+                naive (the pre-fusion "before" breakdown); fused needs
+                q4g64 (the bf16 backend is permanently naive, spec D4)
 """
 
 private func printStderr(_ message: String) {
@@ -35,6 +38,7 @@ func runAttributeCommand(_ arguments: [String]) async -> Int32 {
     var decodeTokens = BenchDefaults.attributionDecodeTokens
     var weightsFormat = WeightsFormat.q4g64
     var residency = WeightsResidency.mmap
+    var kernels: GPUModel.KernelPath?
 
     var index = 0
     while index < arguments.count {
@@ -63,6 +67,11 @@ func runAttributeCommand(_ arguments: [String]) async -> Int32 {
             default:
                 return usageError("--residency must be 'mmap' or 'wired', got '\(value)'")
             }
+        case "--kernels":
+            guard let parsed = GPUModel.KernelPath(rawValue: value) else {
+                return usageError("--kernels must be 'naive' or 'fused', got '\(value)'")
+            }
+            kernels = parsed
         default:
             return usageError("unknown flag '\(flag)'")
         }
@@ -71,6 +80,11 @@ func runAttributeCommand(_ arguments: [String]) async -> Int32 {
     guard let modelDir else { return usageError("--model-dir is required") }
     guard let prompt, !prompt.isEmpty else {
         return usageError("--prompt is required and must not be empty")
+    }
+    if kernels == .fused, weightsFormat == .bf16 {
+        return usageError(
+            "--kernels fused needs --weights q4g64 (the bf16 backend runs "
+            + "the naive structure permanently, phase-4.md D4)")
     }
 
     do {
@@ -95,13 +109,14 @@ func runAttributeCommand(_ arguments: [String]) async -> Int32 {
             let packed = try PackedCheckpoint(path: packedURL.path)
             model = try GPUModel(
                 packed: packed, config: config, context: metal,
-                residency: residency, maxContext: contextLimit)
+                residency: residency, maxContext: contextLimit,
+                kernelPath: kernels ?? .fused)
         }
         let tokenizer = try await TextTokenizer(modelFolder: directory.directoryURL)
         printStderr(String(
-            format: "loaded in %.1fs (weights %@, residency %@)",
+            format: "loaded in %.1fs (weights %@, residency %@, kernels %@)",
             Date().timeIntervalSince(loadStart), weightsFormat.rawValue,
-            residency.rawValue))
+            residency.rawValue, model.kernelPath.rawValue))
 
         let promptIds = tokenizer.encode(prompt)
         let eosTokenIds = try directory.stopTokenIds(

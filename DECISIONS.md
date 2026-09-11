@@ -2857,3 +2857,83 @@ AGENT_OPERATION.md), so future /project-init scaffolds inherit it.
   allocated per kernel path: the fused path drops qRaw/kRaw/kVec/vVec/
   projOut/gateBuf/upBuf (+scores/probs from P4-2) and adds only the 8 KB
   qkv concat buffer — net allocation strictly decreases (spec memory rule).
+
+## 2026-09-11 — P4-4: fused path is the packed default — Tier-M/E re-verified fused, free-run NONE, Mac "after" rows
+
+Deliverable (phase-4.md D4/D5 + edge tests 9–10; task P4-4). No gate was
+touched; every constant below is the pre-committed 2026-09-05 value used
+verbatim.
+
+- **Default flip (D4):** `GPUModel(packed:)` now defaults to
+  `kernelPath: .fused` (red-first on the default pin —
+  GPUQuantModelTests.testKernelPathDefaultsToFusedAndReportsSelection).
+  The bf16 backend stays permanently naive (no fused option exists on
+  that initializer). Naive stays selectable on the packed pipeline for
+  the P4-5 in-session A/B: CLI `--kernels naive|fused` on `generate` and
+  `attribute` (fused+bf16 and cpu-backend combinations rejected with
+  usage errors — verified by hand against the release CLI), app
+  "Kernels" segmented toggle (q4g64 only, reload-on-switch like the
+  residency toggle).
+- **Rows now record the kernel path:** `BenchmarkReport` gained a
+  required `kernelPath` field (no default — the compiler forces every
+  call site to label; q4g64 rows export under a "Phase 4" header with a
+  `kernels naive|fused` engine field) and `AttributionRunResult` gained
+  the same, replacing the P4-1 hardcoded "naive (pre-fusion)" label.
+  The P4-5 before/after rows differ ONLY in this field, so it exists on
+  every export surface (CLI, app, BenchmarkReport, attribution export).
+- **Tier-M/E re-verification on the fused path (D5, constants
+  verbatim):** the shared real-artifact GPU model
+  (SharedQuantGPUModel) now builds the production DEFAULT — fused — so
+  GPUQuantTierETests (full-stack slices at 2⁻⁵) and
+  GPUQuantLogitSuiteTests (250-step teacher-forced suite: checkpoints,
+  fingerprints, top-64, tie-aware top-1 at ε_tie = 2⁻⁴·M64) ran
+  verbatim against live CPU-quant on the fused pipeline and ALL held. A
+  new pin (testSharedModelRunsTheFusedDefault) fails loudly if the
+  suites' subject ever silently changes. New fused Tier-M surviving
+  slice: layer-0 attention module rebuilt from the folded kernels
+  (matvec3 → cluster → fused SDPA → zero-residual o_proj fold) vs live
+  CPU-quant at the verbatim attention constant 2⁻⁷
+  (testFusedAttentionOutputMatchesCPUQuant) — held first run. Naive
+  keeps its explicit-path pins and the shared real-artifact smoke
+  (both paths, edge test 9).
+- **Free-run divergence report (fused vs CPU-quant, REPORTED not
+  gated):** 128 free-running greedy steps × 5 prompts on the fused
+  default — **first divergence: NONE on all 5 prompts** (all 128
+  tokens identical to the CPU-quant reference on every prompt; texts
+  coherent). Same NONE result the naive path recorded at P2-4/P3-5.
+  Harness: QWEN_FREE_RUN_REPORT=1 with the QWEN_FREE_RUN_REPORT_FILE
+  artifact (DEV-2 mechanism), release build, 1867 s.
+- **Mac "after" rows (PROVISIONAL, benchmarks/results.md Phase 4
+  section, artifact d03b3fe3…):** fused attribution at depth 83–146 —
+  matvec 12.16 ms (45.1%) / attention 2.32 (8.6%) / norm+elementwise
+  10.74 (39.8%) / head-tail 1.77 (6.6%), class-sum 26.99 ms vs
+  production 26.50 ms @ 227 dispatches ⇒ sanity ratio 1.02 (band
+  0.50–2.00). Fused decode row: median GPU 31.76 ms / wall 32.05 /
+  wall−GPU **0.290 ms @ 227 dispatches** (measured by DispatchCounter),
+  window **31.16 tok/s**, latency p50/p95/p99/max
+  32.16/35.14/35.60/35.68 ms, stalls 0 (n=384). Cross-session naive
+  comparison (context only, NOT the A/B claim): window 28.32 → 31.16
+  tok/s, median GPU 34.74 → 31.76 ms, wall−GPU 0.360 → 0.290 ms.
+- **Mac-only observation (no design decision taken):** norm+elementwise
+  stayed ≈39.8% of class-sum despite the 11 → 3 elementwise
+  dispatches/layer collapse — on M2 Pro the small fused dispatches look
+  launch-latency-bound rather than byte-bound. The norm-fold revisit
+  remains gated on P4-5's ON-DEVICE attribution exactly as the P4-3
+  entry left it; Mac fractions stay non-predictive (Phase 2 precedent).
+- **Edge behavior unchanged on the fused path (edge test 10):** empty
+  prompt, EOS stop, context-limit stop, headDim-limit load reject, and
+  missing-artifact/no-Metal errors are all either path-independent
+  surfaces or now test-pinned on the fused default (DecodeLoop packed
+  edge tests ride the default); CLI usage errors verified by hand.
+- **Verification (SOP step 5):** `swift test -c release --skip
+  LogitMatchSuiteTests`: "Executed 381 tests, with 2 tests skipped and
+  0 failures (0 unexpected) in 1384.207 (1384.253) seconds" (+2 over
+  P4-3's 379; both skips are the opt-in free-run harnesses, and the
+  quant free-run was then run separately as reported above). Backlog
+  drift test: 5 passed. App release build (generic iOS, unsigned):
+  BUILD SUCCEEDED. CLI release build clean; no new compiler warnings
+  (the DK-1 setScalar species and the cblas deprecation remain).
+- **Backlog:** P4-4 done; P4-5 (owner james — on-device rows) and LD-1
+  (long-depth free-run, was blocked on the default flip) flipped to
+  ready. No new follow-ups: the post-P4-5 naive-toggle cleanup is
+  already tracked as KP-1.

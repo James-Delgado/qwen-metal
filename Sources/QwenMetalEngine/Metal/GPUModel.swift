@@ -37,8 +37,9 @@ public final class GPUModel {
     /// cluster, gate+up+SwiGLU, residual-folded matvecs). Selectable ONLY on
     /// the packed (q4g64) pipeline — the bf16 backend runs the naive
     /// structure permanently (it is the Phase 2 correctness artifact).
-    /// Naive stays the default until P4-4 flips it; both paths gate against
-    /// the same CPU-quant oracle (D5).
+    /// FUSED is the packed default since P4-4 (spec D4); naive stays
+    /// selectable for the P4-5 in-session before/after row. Both paths gate
+    /// against the same CPU-quant oracle (D5).
     public enum KernelPath: String, CaseIterable, Sendable {
         case naive
         case fused
@@ -169,13 +170,14 @@ public final class GPUModel {
     /// file's validation (format tag, provenance, triplet consistency, `.q`
     /// alignment) already happened in `PackedCheckpoint`.
     ///
-    /// - Parameter kernelPath: attention kernel structure (P4-2, spec D4).
-    ///   `.naive` (default until P4-4) runs the Phase 2/3 three-kernel
-    ///   chain; `.fused` runs the one-dispatch SDPA kernel.
+    /// - Parameter kernelPath: kernel structure (P4-2/P4-4, spec D4).
+    ///   `.fused` (the default since P4-4) runs the Phase 4 8-dispatch
+    ///   folded layer; `.naive` selects the Phase 2/3 21-dispatch structure
+    ///   for the P4-5 before/after row.
     public convenience init(
         packed: PackedCheckpoint, config: ModelConfig, context: MetalContext,
         residency: WeightsResidency = .mmap, maxContext: Int,
-        kernelPath: KernelPath = .naive
+        kernelPath: KernelPath = .fused
     ) throws {
         try self.init(
             file: packed.file, packed: packed, config: config, context: context,

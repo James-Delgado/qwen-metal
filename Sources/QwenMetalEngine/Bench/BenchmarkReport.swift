@@ -24,6 +24,10 @@ public struct BenchmarkReport: Sendable {
     /// Which weight encoding produced the row (P3-5): Phase 2 bf16 or the
     /// Phase 3 q4g64 packed artifact — rows must record it.
     public var weightsFormat: WeightsFormat
+    /// Which kernel structure produced the row (P4-4, spec D4): the P4-5
+    /// before/after rows are naive vs fused, so every row must record it.
+    /// No default on purpose — the compiler forces call sites to label.
+    public var kernelPath: GPUModel.KernelPath
     public var promptName: String
     public var promptTokenCount: Int
     public var mode: Mode
@@ -39,6 +43,7 @@ public struct BenchmarkReport: Sendable {
         dateStamp: String, deviceLabel: String, osVersion: String,
         batteryHealthNote: String, coldOrWarmNote: String,
         residency: WeightsResidency, weightsFormat: WeightsFormat = .bf16,
+        kernelPath: GPUModel.KernelPath,
         promptName: String,
         promptTokenCount: Int, mode: Mode,
         burst: GenerationMetrics? = nil,
@@ -52,6 +57,7 @@ public struct BenchmarkReport: Sendable {
         self.coldOrWarmNote = coldOrWarmNote
         self.residency = residency
         self.weightsFormat = weightsFormat
+        self.kernelPath = kernelPath
         self.promptName = promptName
         self.promptTokenCount = promptTokenCount
         self.mode = mode
@@ -62,7 +68,10 @@ public struct BenchmarkReport: Sendable {
 
     public func exportText() -> String {
         var lines: [String] = []
-        let phase = weightsFormat == .bf16 ? "Phase 2" : "Phase 3"
+        // bf16 rows are the Phase 2 correctness artifact; q4g64 rows are
+        // Phase 4 rows now (both kernel paths — the P4-5 naive arm is a
+        // Phase 4 A/B row, distinguished by the kernels field below).
+        let phase = weightsFormat == .bf16 ? "Phase 2" : "Phase 4"
         lines.append("qwen-metal \(phase) row export (PROVISIONAL)")
         lines.append("date: \(dateStamp)")
         lines.append("device: \(deviceLabel) (iOS \(osVersion))")
@@ -72,7 +81,8 @@ public struct BenchmarkReport: Sendable {
             : "q4g64 fused-dequant GPU"
         lines.append(
             "engine: qwen-metal \(engineDescription) — weights "
-                + "\(weightsFormat.rawValue), residency \(residency.rawValue)")
+                + "\(weightsFormat.rawValue), residency \(residency.rawValue), "
+                + "kernels \(kernelPath.rawValue)")
         lines.append("prompt: \(promptName) (\(promptTokenCount) prompt tokens)")
         lines.append("mode: \(mode.rawValue) | cold/warm: \(orPlaceholder(coldOrWarmNote))")
         lines.append(

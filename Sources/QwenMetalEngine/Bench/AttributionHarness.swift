@@ -14,6 +14,9 @@ import Foundation
 /// One attribution run's raw results.
 public struct AttributionRunResult: Sendable {
     public let weightsFormat: WeightsFormat
+    /// Which kernel structure produced the run (P4-4: rows and exports must
+    /// record it — the P4-5 before/after breakdowns are naive vs fused).
+    public let kernelPath: GPUModel.KernelPath
     public let promptTokenCount: Int
     /// Per-token attributions from the even-offset (attributed) steps.
     public let attributed: [TokenAttribution]
@@ -29,12 +32,14 @@ public struct AttributionRunResult: Sendable {
     public let generatedTokenIds: [Int]
 
     public init(
-        weightsFormat: WeightsFormat, promptTokenCount: Int,
+        weightsFormat: WeightsFormat, kernelPath: GPUModel.KernelPath,
+        promptTokenCount: Int,
         attributed: [TokenAttribution], productionGPUSeconds: [Double],
         productionDispatchCount: Int?, firstDecodePosition: Int,
         lastDecodePosition: Int, generatedTokenIds: [Int]
     ) {
         self.weightsFormat = weightsFormat
+        self.kernelPath = kernelPath
         self.promptTokenCount = promptTokenCount
         self.attributed = attributed
         self.productionGPUSeconds = productionGPUSeconds
@@ -70,9 +75,12 @@ public struct AttributionRunResult: Sendable {
             + "(D1 opt-in mode; never a benchmark row)")
         lines.append("date: \(dateStamp)")
         lines.append("device: \(deviceLabel) (\(osVersion))")
+        let kernelDescription = kernelPath == .fused
+            ? "fused (P4-2 SDPA + P4-3 folds)"
+            : "naive (pre-fusion)"
         lines.append(
             "engine: weights \(weightsFormat.rawValue), residency "
-            + "\(residency.rawValue), naive (pre-fusion) kernel structure")
+            + "\(residency.rawValue), \(kernelDescription) kernel structure")
         lines.append(
             "prompt: \(promptTokenCount) tokens; decode steps: "
             + "\(attributed.count) attributed + \(productionGPUSeconds.count) "
@@ -217,6 +225,7 @@ public struct AttributionRunner {
 
         return AttributionRunResult(
             weightsFormat: gpuModel.weightsFormat,
+            kernelPath: gpuModel.kernelPath,
             promptTokenCount: promptIds.count,
             attributed: attributed,
             productionGPUSeconds: productionGPUSeconds,

@@ -76,6 +76,10 @@ final class AppModel: ObservableObject {
     /// artifact; a missing artifact fails with the clear noPackedCheckpoint
     /// error, and the toggle drops back to bf16 for Phase 2-style rows.
     @Published var weightsFormat: WeightsFormat = .q4g64
+    /// P4-4 (phase-4.md D4): fused default; the naive selection exists for
+    /// the P4-5 interleaved before/after row. q4g64 only — the bf16 backend
+    /// is permanently naive and ignores this.
+    @Published var kernelPath: GPUModel.KernelPath = .fused
     @Published var isLoading = false
     @Published var isRunning = false {
         // A locked screen suspends the app mid-generation and ruins the
@@ -108,6 +112,17 @@ final class AppModel: ObservableObject {
     /// are resolved at load, so a toggle reloads.
     func weightsFormatChanged() {
         if let engine, engine.weightsFormat != weightsFormat {
+            self.engine = nil
+            loadSummary = nil
+        }
+    }
+
+    /// Same contract for the kernel path (P4-4): pipelines and scratch
+    /// buffers are built at load, so a toggle reloads. Only meaningful on
+    /// q4g64 (the bf16 model is always naive — no reload needed there).
+    func kernelPathChanged() {
+        if let engine, engine.weightsFormat == .q4g64,
+           engine.gpuModel.kernelPath != kernelPath {
             self.engine = nil
             loadSummary = nil
         }
@@ -198,7 +213,8 @@ final class AppModel: ObservableObject {
                 promptTokenCount: metrics.promptTokenCount,
                 batteryNote: batteryNote, coldWarmNote: coldWarmNote,
                 residency: engine.residency,
-                weightsFormat: engine.weightsFormat, burst: metrics)
+                weightsFormat: engine.weightsFormat,
+                kernelPath: engine.gpuModel.kernelPath, burst: metrics)
             statusLine = stopFlag.isSet
                 ? "burst stopped early — report reflects the partial run"
                 : "burst complete"
@@ -250,7 +266,8 @@ final class AppModel: ObservableObject {
                     result.generations.first?.promptTokenCount ?? 0,
                 batteryNote: batteryNote, coldWarmNote: coldWarmNote,
                 residency: engine.residency,
-                weightsFormat: engine.weightsFormat, sustained: result)
+                weightsFormat: engine.weightsFormat,
+                kernelPath: engine.gpuModel.kernelPath, sustained: result)
             statusLine = "sustained loop complete"
         } catch is CancellationError {
             statusLine = "sustained loop aborted by Stop — no report"
@@ -351,11 +368,17 @@ final class AppModel: ObservableObject {
     /// residency yet. Errors propagate to the caller's `show(_:)`.
     private func loadEngineIfNeeded() async throws -> LoadedEngine {
         if let engine, engine.residency == residency,
-           engine.weightsFormat == weightsFormat { return engine }
+           engine.weightsFormat == weightsFormat,
+           weightsFormat == .bf16 || engine.gpuModel.kernelPath == kernelPath {
+            return engine
+        }
         let residency = self.residency
         let weightsFormat = self.weightsFormat
+        let kernelPath = self.kernelPath
         statusLine = "loading model (weights \(weightsFormat.rawValue), "
-            + "residency \(residency.rawValue))…"
+            + "residency \(residency.rawValue)"
+            + (weightsFormat == .q4g64 ? ", kernels \(kernelPath.rawValue)" : "")
+            + ")…"
         let loaded: LoadedEngine =
             try await Task.detached(priority: .userInitiated) {
                 let start = Date()
@@ -381,7 +404,8 @@ final class AppModel: ObservableObject {
                         path: directory.requirePackedCheckpoint().path)
                     gpu = try GPUModel(
                         packed: packed, config: config, context: metal,
-                        residency: residency, maxContext: contextLimit)
+                        residency: residency, maxContext: contextLimit,
+                        kernelPath: kernelPath)
                 }
                 let tokenizer = try await TextTokenizer(
                     modelFolder: directory.directoryURL)
@@ -397,10 +421,12 @@ final class AppModel: ObservableObject {
             }.value
         engine = loaded
         loadSummary = String(
-            format: "%@ — loaded in %.1f s, weights %@, residency %@, context %d",
+            format: "%@ — loaded in %.1f s, weights %@, residency %@, "
+                + "kernels %@, context %d",
             loaded.modelDirectoryName, loaded.loadSeconds,
             loaded.weightsFormat.rawValue,
-            loaded.residency.rawValue, loaded.contextLimit)
+            loaded.residency.rawValue,
+            loaded.gpuModel.kernelPath.rawValue, loaded.contextLimit)
         return loaded
     }
 
@@ -456,6 +482,7 @@ final class AppModel: ObservableObject {
         mode: BenchmarkReport.Mode, promptName: String, promptTokenCount: Int,
         batteryNote: String, coldWarmNote: String,
         residency: WeightsResidency, weightsFormat: WeightsFormat,
+        kernelPath: GPUModel.KernelPath,
         burst: GenerationMetrics? = nil,
         sustained: SustainedLoopResult? = nil
     ) -> String {
@@ -465,6 +492,7 @@ final class AppModel: ObservableObject {
             osVersion: Self.osVersionString(),
             batteryHealthNote: batteryNote, coldOrWarmNote: coldWarmNote,
             residency: residency, weightsFormat: weightsFormat,
+            kernelPath: kernelPath,
             promptName: promptName,
             promptTokenCount: promptTokenCount, mode: mode,
             burst: burst, sustained: sustained,
