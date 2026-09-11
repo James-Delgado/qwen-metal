@@ -1430,6 +1430,16 @@ tasks:
       brief (candidate axes/levers from TODOS.md "Post-Phase-6
       optimization campaign", the P4-EXEC decode decomposition menu, and
       the Phase 6 head-to-head gaps), James decides.
+      2026-09-10 (stated by James, in-conversation): target hardware is
+      moving — iPhone 18 series announced (A20, 12 GB RAM), and James
+      definitely wants a larger-parameter model (Qwen3-4B/8B class)
+      and/or a larger context window on it. Sizing + roofline math and
+      the charter-axis implications (larger-sibling re-pin, context
+      extension, KV-cache quantization as a non-goal re-entry, dual-model
+      residency, A20 re-baseline before any target math) are written up
+      in ~/Documents/imessage-intelligence-ideation.md §12. Nothing
+      changes before CAMP-1: the Qwen3-1.7B @ 70d244cc / iPhone 15 Pro
+      pins remain PLAN invariants through Phase 6.
 
   - id: SPEC-P7
     rank: 23.2
