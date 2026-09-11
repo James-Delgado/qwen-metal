@@ -1288,7 +1288,8 @@ tasks:
   - id: P4-4
     rank: 18.4
     title: "Fused path default + full Tier-M/E re-verification + free-run report + Mac 'after' rows + app finalization"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-11T04:16:54Z
     depends_on: [P4-3]
     blocks: [P4-5, LD-1]
     deliverable:
