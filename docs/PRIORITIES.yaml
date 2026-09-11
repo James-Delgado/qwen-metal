@@ -1322,7 +1322,8 @@ tasks:
   - id: P4-5
     rank: 18.5
     title: "On-device Phase 4 rows: decode/overhead/dispatch gates + interleaved naive-vs-fused before/after + variance/attribution exports"
-    status: ready
+    status: done
+    completed_at: 2026-09-11T17:03:50Z
     owner: james
     depends_on: [P4-4]
     blocks: [P4-EXEC]
@@ -1338,11 +1339,25 @@ tasks:
       latency-variance fields. These rows + the attribution feed the
       P4-EXEC decode-vs-roofline judgment (29.4 met, or gap decomposed
       with no unexplained slack). Agents prepare only.
+      2026-09-11 (done, James on-device; full session under D8+bookend,
+      detached, validation OFF): dispatch gate PASS (227 measured);
+      overhead gate FAIL (1.51 ms — two-point session data reveals an
+      AFFINE overhead model, ~1.17 ms fixed/token + ~1.5 us/dispatch;
+      the 1.2 gate assumed zero intercept); decode floor FAIL (22.64
+      tok/s median, range 22.27-22.82 — fold set bought ~4.5 ms not the
+      derived ~8.5: on-device elementwise is launch-latency-bound,
+      9.11 -> 8.86 ms despite 11 -> 3 dispatches/layer). Before/after
+      DIRECTIONAL: fused +9.5% (effect 1.96 > bookend drift 0.55,
+      ranges disjoint); naive median 20.68 reproduces P3-7's 20.61.
+      Sustained fused 22.24 -> ~19.4 stable; stalls 0 everywhere. Gates
+      NOT touched (hard rule 6). Rows: results.md 2026-09-11 iPhone
+      section; analysis: DECISIONS.md P4-5 entry. P4-EXEC flipped ready
+      — proceed-vs-iterate on the failed floors is James's call there.
 
   - id: P4-EXEC
     rank: 19
     title: "Phase 4 exit milestone (all P4 tasks done, exit criteria walked)"
-    status: blocked
+    status: ready
     depends_on: [P4-1, P4-2, P4-3, P4-4, P4-5]
     blocks: [SPEC-P5]
     deliverable:
@@ -1358,6 +1373,18 @@ tasks:
       standing *-EXEC rules. Veto window on the five judgment-derived
       Phase 4 gate items closes before work on this milestone's
       dependencies starts (gates entry, 2026-09-05).
+      2026-09-11 (from P4-5): TWO gates FAILED on-device — overhead
+      1.51 ms vs <=1.2 (affine overhead model discovered: ~1.17 ms
+      fixed/token + ~1.5 us/dispatch) and decode floor 22.64 vs >=24.0
+      tok/s (elementwise launch-latency-bound: fold set removed
+      dispatch count, not GPU time). Dispatch gate PASSED (227);
+      before/after DIRECTIONAL fused +9.5%. The exit walk therefore
+      CANNOT mark all criteria met as written: this milestone must
+      surface the proceed-vs-iterate decision to James (2026-09-07
+      structure — his call, with the P4-5 decomposition in hand:
+      measured levers are elementwise ~8.9 ms, fixed overhead ~1.17 ms,
+      stream rate 84%->100% ~4.3 ms, attention-above-byte-floor, CPU
+      loop ~1.3 ms). Gates stay unmodified per hard rule 6 either way.
 
   - id: SPEC-P5
     rank: 20

@@ -2937,3 +2937,76 @@ verbatim.
   (long-depth free-run, was blocked on the default flip) flipped to
   ready. No new follow-ups: the post-P4-5 naive-toggle cleanup is
   already tracked as KP-1.
+
+## 2026-09-11 — P4-5 (James, on-device): dispatch gate PASS, overhead + decode-floor gates FAIL (root-caused), before/after DIRECTIONAL fused +9.5%
+
+One detached session on the pinned iPhone 15 Pro (device identifier
+iPhone16,1 — that IS the 15 Pro's hardware id; James confirmed the same
+physical device has run every row this project has ever recorded), iOS
+26.6.1, validation OFF recorded, q4g64 d03b3fe3… mmap, decode-essay,
+D8 + bookend protocol (F1/F4 fused bookends around interleaved
+F/N/F/N/F/N). Full rows: benchmarks/results.md 2026-09-11 iPhone
+section. Per hard rule 6 nothing below adjusts any gate — failures are
+recorded as findings and feed the P4-EXEC judgment.
+
+- **Dispatch gate (≤300): PASS.** 227 measured on every fused row
+  (DispatchCounter), 591 on every naive row, zero instability.
+- **Overhead gate (≤1.2 ms median wall−GPU): FAIL — measured 1.51 ms**
+  (fused per-run medians 1.498–1.519). Finding: with TWO dispatch
+  counts measured in one session (naive 2.06 ms @ 591, fused 1.51 ms @
+  227), the overhead model is AFFINE, not proportional:
+  **≈1.17 ms fixed per-token + ≈1.5 µs/dispatch**. The fit
+  retro-predicts every historical 591-dispatch measurement (1.9–2.0 ms
+  since P2-5). The gate's derivation (3.3 µs/dispatch × ≤300 ⇒ ~1.0 ms)
+  divided the single 591-point by its dispatch count — a zero-intercept
+  assumption nothing could falsify until a second operating point
+  existed. The per-dispatch component DID collapse as designed (591→227
+  removed ≈0.55 ms); what remains is a fixed per-token
+  submission/scheduling cost the dispatch-reduction lever cannot reach.
+- **Decode floor (≥24.0 tok/s warm-burst window median): FAIL —
+  measured 22.64 tok/s** (n=4 fused warm bursts, range 22.27–22.82;
+  cold 22.79). Root cause from the on-device attribution pair (depth
+  83–146, sanity ratio 1.00 both paths): the floor's derivation halved
+  the ≈17 ms non-matvec slice, but the fold set bought only ≈4.5
+  ms/token at window depth (in-session naive 20.68 → fused 22.64 ⇒
+  48.4 → 44.2 ms). Decomposed: **norm+elementwise went 9.11 → 8.86 ms
+  despite 11 → 3 elementwise dispatches/layer** — at ≈105 µs per small
+  dispatch the class is launch/latency-bound on the A17 Pro, so
+  consolidating dispatch COUNT barely moved GPU TIME (the Mac rows
+  showed the same signature; the device confirms it); the fused SDPA
+  advantage is depth-dependent (≈1.0 ms at depth ~115, ≈4.2 ms of GPU
+  gap at window depths); overhead contributed the 0.55 ms above.
+- **Before/after claim (D8 + bookend): DIRECTIONAL, fused faster.**
+  Fused median 22.64 (range 22.27–22.82) vs naive median 20.68 (range
+  20.40–20.77) interleaved in-session: ranges disjoint AND effect
+  1.96 tok/s > bookend drift 0.55 tok/s (F1 22.82 → F4 22.27) ⇒
+  **fused +9.5%**. Cross-check: today's naive median 20.68 reproduces
+  P3-7's 20.61 across sessions and an iOS update — the Phase 3
+  baseline stands.
+- **Sustained (fused):** windows 22.24 → 19.44 → 19.16 → 19.48 tok/s
+  over 4 generations / 5.0 min — a −12.6% first-generation thermal
+  step, then stable (contrast P3-7's 35-min drift to 17.14; the 5-min
+  loop settles higher). Battery 79→75% ≈ 5.9 W gross by the corrected
+  453.6 J/% basis — inside the 3–9 W plausibility window; formal
+  energy rounds remain Phase 6. Zero stalls in every run this session.
+- **Attribution recorded for the P4-EXEC roofline decomposition**
+  (fused, window-rate basis 44.2 ms/token): weight streaming ≈26.4 ms
+  (matvec 21.41 + lm_head-dominated head/tail 5.28) ⇒ ≈36.7 GB/s ≈ 84%
+  of roofline (P3-6-consistent); norm+elementwise 8.86; attention 1.86
+  at depth ~115, ≈5.5 DERIVED at window depth (41.30 GPU median minus
+  the other measured classes — P4-EXEC should treat the window-depth
+  attention split as derived, not measured); wall−GPU 1.51; span−wall
+  ≈1.3 ms CPU-side loop cost (logits readback + argmax). 29.4 tok/s
+  needs 34.0 ms/token — the ≈10.2 ms gap has named components with
+  measured headroom (stream rate 84%→100% ≈4.3 ms; latency-bound
+  elementwise ≈8.9 ms; fixed overhead ≈1.17 ms; attention above its
+  ≈1–2 ms byte floor; CPU loop ≈1.3 ms). The formal met-or-decomposed
+  judgment and James's proceed-vs-iterate call are P4-EXEC's
+  (2026-09-07 structure).
+- **Protocol notes:** loaded phys_footprint gauge-of-record not
+  captured (detached session; in-app cross-check 533–551 MB matches
+  P2-7's mmap 536 MB; Xcode gauge read pre-load only, 26.3 MB).
+  Battery "80" fields are state-of-charge per the 2026-09-05
+  correction. iOS moved to 26.6.1 since P3-7 — cross-session
+  comparisons stay non-claim-grade as always; the in-session A/B is
+  unaffected.

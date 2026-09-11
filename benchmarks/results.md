@@ -399,6 +399,86 @@ fractions (Phase 2 precedent).
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-09-11 | Apple M2 Pro (Mac, dev machine) | decode-essay (84) | 640 (cap) | 31.76 | 32.05 | 0.290 | 227 | 31.16 (overall 31.14) | 32.16 / 35.14 / 35.60 / 35.68 | 0 (n=384) | PROVISIONAL, burst, warm, kernels FUSED (the new default), dev-loop sanity only. vs the 2026-09-08 naive row: window 31.16 vs 28.32 tok/s, median GPU 31.76 vs 34.74 ms, wall−GPU 0.290 vs 0.360 ms at 591→227 dispatches — directional Mac signal only (cross-session). Tight distribution (max/p50 ≈ 1.11), zero stalls. Output coherent (same computing-history essay species). |
 
+### 2026-09-11 — iPhone 15 Pro Phase 4 rows (P4-5, James on-device): bookended interleaved naive-vs-fused + gates + attribution + sustained
+
+Session conditions (one session, one build, run in the listed order):
+DETACHED home-screen launches, Metal API validation OFF (recorded);
+device iPhone16,1 (= the pinned iPhone 15 Pro hardware identifier),
+iOS 26.6.1; weights q4g64 (artifact d03b3fe3…), residency mmap (P3-7
+default); prompt decode-essay (84 tokens), burst cap 640, greedy;
+battery 80% at session start (state-of-charge per the 2026-09-05
+battery-fields correction; sustained ran 79→75%). Kernel path via the
+P4-4 app toggle; every export carries its `kernels` field. Bookends =
+F1/F4 (same fused config opens and closes the A/B block, phase-4.md D8
+addendum). phys_footprint: Xcode gauge captured only PRE-LOAD (26.3 MB
+at app launch, attached deploy step) — loaded values below are the
+in-app cross-check (533–551 MB, consistent with P2-7's mmap 536 MB);
+the loaded gauge-of-record reading was not captured this session.
+
+| Run | Kernels | Cold/warm | Window tok/s (128–512) | Median GPU ms/tok | Median wall ms/tok | Wall−GPU ms | Dispatches/tok | Latency p50/p95/p99/max ms (window) | Stalls | phys_footprint (app) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| F0 | fused | cold | 22.79 (overall 22.81) | 41.00 | 42.53 | 1.522 | 227 | 43.92 / 46.46 / 46.93 / 48.69 | 0 (n=384) | 534.5 MB |
+| F1 (bookend) | fused | warm | 22.82 (22.80) | 41.02 | 42.52 | 1.519 | 227 | 43.93 / 46.46 / 46.87 / 47.18 | 0 | 550.7 MB |
+| N1 | naive | warm | 20.77 (20.61) | 45.35 | 47.03 | 2.061 | 591 | 47.85 / 52.35 / 53.41 / 53.52 | 0 | 545.5 MB |
+| F2 | fused | warm | 22.72 (22.70) | 41.23 | 42.72 | 1.517 | 227 | 44.05 / 46.79 / 47.11 / 47.78 | 0 | 544.5 MB |
+| N2 | naive | warm | 20.68 (20.56) | 45.37 | 47.25 | 2.056 | 591 | 48.40 / 52.78 / 53.42 / 53.55 | 0 | 544.0 MB |
+| F3 | fused | warm | 22.56 (22.56) | 41.37 | 42.79 | 1.502 | 227 | 44.08 / 47.13 / 48.25 / 49.91 | 0 | 543.2 MB |
+| N3 | naive | warm | 20.40 (19.52) | 45.45 | 47.33 | 2.078 | 591 | 48.53 / 57.33 / 60.70 / 61.13 | 0 | 543.6 MB |
+| F4 (bookend) | fused | warm | 22.27 (21.59) | 41.89 | 43.34 | 1.498 | 227 | 44.69 / 49.29 / 51.55 / 51.89 | 0 | 544.0 MB |
+
+**Gate verdicts (pre-committed 2026-09-05, veto-closed 2026-09-07; hard
+rule 6 — no constant touched):**
+
+- **Dispatch gate ≤ 300: PASS** — 227 measured (DispatchCounter) on
+  every fused row; naive rows 591, both perfectly stable.
+- **Overhead gate ≤ 1.2 ms: FAIL** — fused median wall−GPU **1.51 ms**
+  (per-run medians 1.498–1.519). Two dispatch counts in one session fix
+  the overhead model: 2.06 ms @ 591 and 1.51 ms @ 227 ⇒ **≈1.17 ms
+  FIXED per-token cost + ≈1.5 µs/dispatch** (affine fit; retro-predicts
+  the historical 1.9–2.0 ms @ 591). The 1.2 gate assumed pure
+  per-dispatch scaling (3.3 µs/dispatch, zero intercept) from the
+  single 591-dispatch operating point. Recorded as a finding, not a
+  gate adjustment — see DECISIONS.md 2026-09-11 P4-5 entry.
+- **Decode floor ≥ 24.0 tok/s: FAIL** — fused warm-burst window median
+  **22.64 tok/s** (range 22.27–22.82, n=4). Root cause per the
+  attribution pair below: the fold set removed dispatch count but only
+  ≈0.25 ms of elementwise GPU time (launch-latency-bound small
+  kernels), so the "halve the ≈17 ms non-matvec slice" derivation
+  over-credited the folds. See DECISIONS.md.
+- **Before/after (D8 + bookend): DIRECTIONAL — fused faster.** Fused
+  median 22.64 (22.27–22.82) vs naive median 20.68 (20.40–20.77):
+  ranges disjoint AND effect 1.96 tok/s > bookend drift 0.55 tok/s
+  (F1→F4) ⇒ **fused +9.5% in-session** (−4.5 ms/token wall). Naive
+  median 20.68 also reproduces P3-7's cross-session 20.61 baseline.
+- **Latency variance (D7, reported):** zero stalls in all 8 runs; fused
+  max/p50 ≈ 1.07–1.16.
+
+**On-device attribution (DIAGNOSTIC, D1 — never benchmark rows; cache
+depth 83–146, 32 attributed + 32 production interleaved):**
+
+| Kernels | matvec | attention | norm+elementwise | head/tail | Class-sum (median ms/tok) | Production GPU ms/tok @ dispatches | Sanity ratio |
+|---|---|---|---|---|---|---|---|
+| fused ("after") | 21.41 ms (57.2%) | 1.86 ms (5.0%) | 8.86 ms (23.7%) | 5.28 ms (14.1%) | 37.48 (span 37.56, wall 38.46) | 37.57 @ 227 | 1.00 |
+| naive ("before") | 22.22 ms (57.8%) | 1.90 ms (4.9%) | 9.11 ms (23.7%) | 5.23 ms (13.6%) | 38.64 (span 38.74, wall 39.59) | 38.60 @ 591 | 1.00 |
+
+Reading (feeds the P4-EXEC decode-vs-roofline judgment): weight
+streaming (matvec + lm_head-dominated head/tail) ≈ 26.4 ms ⇒ ≈36.7 GB/s
+≈ 84% of the 43.84 GB/s roofline (consistent with P3-6's 35.29 best);
+**norm+elementwise 9.11 → 8.86 ms despite 11 → 3 dispatches/layer** —
+the small elementwise kernels are launch/latency-bound on-device
+(≈105 µs/dispatch), the same signature the Mac rows showed; the fused
+SDPA advantage is depth-dependent (≈1.0 ms of the naive-vs-fused GPU
+gap at depth ~115 here vs ≈4.2 ms at window depths in the burst rows).
+
+**Sustained (fused, ≥5-min regenerate loop, decode-essay):** 4
+generations / 5.0 min, battery 79→75%: gen windows **22.24 → 19.44 →
+19.16 → 19.48 tok/s** (−12.6% first-gen thermal step, then stable;
+gens 0–2 stop: eos at 1316 tokens, gen 3 truncated by the duration
+bound). Last-gen per-token: median GPU 53.05 ms / wall−GPU 1.483 ms @
+227 (medians over all tokens incl. depths ≫ window — not comparable to
+burst window medians); window latency p50/p95/p99/max
+51.20/53.86/54.28/54.85 ms, stalls 0. phys_footprint (app) 547.3 MB.
+
 ## Phase 0a — energy dry-run + corrections (PROVISIONAL)
 
 ### 2026-08-22 — sustained battery-delta cycles, iPhone 15 Pro (method VALIDATED)
