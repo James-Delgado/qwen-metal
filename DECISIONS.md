@@ -3010,3 +3010,72 @@ recorded as findings and feed the P4-EXEC judgment.
   correction. iOS moved to 26.6.1 since P3-7 — cross-session
   comparisons stay non-claim-grade as always; the in-session A/B is
   unaffected.
+
+## 2026-09-12 — P4-EXEC decision (James): ITERATE in Phase 4; campaign goals expanded to beat MLX + llama.cpp
+
+The P4-EXEC exit walk was run with the P4-5 data (walk table + full
+decode decomposition presented in-conversation): mandated-scope
+criteria MET, dispatch gate PASS, but the decode floor (22.64 vs
+≥24.0 tok/s) and overhead gate (1.51 vs ≤1.2 ms) FAILED. Per the
+2026-09-07 structure the proceed-vs-iterate call was James's, made
+with the decomposition in hand. **Decision: ITERATE inside Phase 4.**
+Phase 4 does NOT exit; P4-EXEC returns to blocked pending the iterate
+round. No gate value changes in either direction (hard rule 6) — the
+iterate round re-walks the SAME 24.0 / 1.2 / 300 gates at P4-11.
+
+- **Iterate scope (tasks P4-6..P4-11 seeded, ranks 18.6–18.95):**
+  measure-first diagnosis of the anomalous ~105 µs/dispatch elementwise
+  cost + norm→matvec folds (input-norm into matvec3, post-norm into
+  gateup — the revisit P4-3 reserved "if attribution says they pay";
+  the on-device attribution now says exactly that: 8.86 ms, 23.7%,
+  latency-bound); split-K/two-pass fused SDPA (occupancy — 16
+  threadgroups today, attention ≈5.75 ms at window vs ≈1 ms byte
+  floor); GPU argmax (see design change below); overhead-anatomy
+  dissection (encode vs commit→start vs completion-wakeup split of the
+  ≈1.17 ms fixed cost — decides whether ≤1.2 is structurally passable
+  before more work chases it); OPTIONAL matvec tuning toward roofline
+  (skip-eligible with a recorded note); then a P4-5-style on-device
+  re-run session (James) with the same D8+bookend protocol and the
+  same gates. Floor math: the 24.0 floor needs −2.5 ms; the first two
+  levers alone hold ≈−8 to −10 ms, so 29.4 itself is a live target
+  for the round (reported/judged, still never gated).
+- **Design change approved (James, in-conversation): GPU argmax on the
+  GPU decode path.** This amends the Phase 2 D-series choice "argmax
+  stays CPU-side in the shared DecodeLoop — GPU and CPU decode share
+  one tie-break". Contract: the GPU reduction must select EXACTLY the
+  token CPU Argmax.firstIndex selects on the same logits (lowest index
+  wins ties) — an exact-equality pin, no new tolerance constant; the
+  CPU reference keeps CPU argmax (oracle chain untouched); the
+  ≈605 KB full-logits readback disappears from the per-token loop
+  (≈1.31 ms measured CPU-side span). Greedy only — no sampler scope.
+- **All tolerance constants, the D5 mapping rule, oracle chain, KV
+  layout, and the q4g64 schema are untouched** by the iterate round.
+  Dispatch-count pins (tiny 9/11, real 227) will change RED-FIRST as
+  folds land (expected ≈171 with logits after P4-6; measured, never
+  derived — P2-5 rule).
+
+**Campaign goals expanded (decided by James, in-conversation —
+extends the 2026-09-07 north-star entry; binds CAMP-1/SPEC-P7):**
+
+- **Target: strictly better than MLX and llama.cpp** — best-in-class
+  tok/s AND memory footprint while PRESERVING prediction accuracy.
+- **Deploy every optimization lever not yet utilized**, explicitly
+  including all strategies MLX and llama.cpp use (tuned quantized
+  matvec kernels near roofline, split-K/vector decode attention,
+  pipelined/async step submission, GPU argmax — plus their levers we
+  identify during the campaign survey).
+- **Survey + hypothesize further strategies** beyond the two packages;
+  implement/measure and RECORD effectiveness per strategy.
+- **The campaign report includes an optimization-strategy survey**
+  highlighting tradeoffs (speed vs memory vs accuracy), use-cases, and
+  which strategies pay under which constraints. Some strategies may
+  trade one axis against another (or against accuracy) — the report
+  makes those frontiers explicit.
+- **Headline requirement:** report better results than MLX and
+  llama.cpp on the pinned comparison, AND explain how performance can
+  be pushed further given acceptable sacrifices or specific use-cases.
+
+Scope discipline unchanged: non-goal re-entries (quantized KV,
+speculative decoding, etc.) still require their recorded decisions at
+CAMP-1 per the existing charter-task structure; nothing enters Phase
+4–6 scope through this entry.

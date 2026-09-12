@@ -1354,12 +1354,142 @@ tasks:
       section; analysis: DECISIONS.md P4-5 entry. P4-EXEC flipped ready
       — proceed-vs-iterate on the failed floors is James's call there.
 
+  # ---------- Phase 4 iterate round (seeded 2026-09-12 by the P4-EXEC decision,
+  # ---------- James; spec: docs/phases/phase-4.md 2026-09-12 addendum) ----------
+  - id: P4-6
+    rank: 18.6
+    title: "Elementwise dispatch-cost diagnosis (~105 us anomaly) + norm->matvec folds (input-norm into matvec3, post-norm into gateup)"
+    status: ready
+    depends_on: []
+    blocks: [P4-11]
+    deliverable:
+      file: "engine package (Metal kernels + GPUModel fused-layer encode)"
+      tests: "fold spans vs unfused chain at the norm-species gate max(2^-8*M, 2^-11) verbatim (odd + real dims); diagnosis findings recorded in DECISIONS; dispatch pins updated RED-FIRST (expected ~6/layer => ~171/token, MEASURED); affected Tier suites re-passed"
+    est_complexity: medium
+    notes: |
+      Seeded 2026-09-12 (P4-EXEC iterate decision, James). The D3 revisit
+      P4-3 reserved: on-device attribution says norm dispatches pay
+      (8.86 ms, 23.7% of GPU time, ~105 us/dispatch — launch-latency-
+      bound, NOT byte-bound; llama.cpp's many-small-op graph landing at
+      30.8 ms/token suggests our per-dispatch cost may have a fixable
+      cause). MEASURE FIRST: diagnose the 105 us (serial-encoder hazard
+      barriers? untracked-resource opportunity?) before/alongside
+      folding — a config-level fix could collapse the class without
+      arithmetic changes. Folds keep fp16-boundary/fp32-accumulate
+      semantics; redundant per-row sum-of-squares accepted (the P4-3
+      counter-argument is outweighed by measured launch latency).
+      Floor math: this lever alone (~-5.5 ms est) covers the -2.5 ms
+      the 24.0 gate needs.
+
+  - id: P4-7
+    rank: 18.7
+    title: "Split-K / two-pass fused SDPA (occupancy: >16 threadgroups at depth) + edge tests re-passed"
+    status: ready
+    depends_on: []
+    blocks: [P4-11]
+    deliverable:
+      file: "engine package (Metal/FusedSDPAKernel or successor)"
+      tests: "attention-species gate max(2^-7*M, 2^-11) verbatim incl. edge tests 1-5 re-run on the new structure; deterministic partial-state merge (P4-2 precedent); dispatch pins red-first if the reduce pass changes counts"
+    est_complexity: medium
+    notes: |
+      Seeded 2026-09-12 (P4-EXEC iterate decision). Attention ~5.75 ms
+      at window depth (derived) vs ~1 ms byte floor; the P4-2 kernel
+      parks at one threadgroup per query head (16 total) on a ~6-core
+      GPU. Split cache positions across threadgroups (flash-decode
+      style) + small deterministic reduce — MLX's sdpa_vector_2pass is
+      the ecosystem precedent. Hard rule 3: correctness tests pass
+      before optimization iteration and re-pass after each.
+
+  - id: P4-8
+    rank: 18.8
+    title: "GPU argmax on the GPU decode path (exact CPU-tie-break equality; kills the 605 KB/token logits readback)"
+    status: ready
+    depends_on: []
+    blocks: [P4-11]
+    deliverable:
+      file: "engine package (Metal kernel + GPU decode-loop wiring)"
+      tests: "GPU argmax == CPU Argmax.firstIndex EXACTLY on the same logits incl. crafted ties (lowest index wins), NaN/inf edge logits; full-vocab real-dims check; Tier-E suites still green (logits remain readable for oracle tests)"
+    est_complexity: medium
+    notes: |
+      Seeded 2026-09-12 (P4-EXEC iterate decision; design change
+      approved by James — amends the Phase 2 "argmax stays CPU-side"
+      choice for the GPU pipeline only; DECISIONS 2026-09-12). Exact-
+      equality contract, no new tolerance constants. CPU reference and
+      oracle chain untouched; Tier-E teacher-forced suites keep reading
+      full logits (computeLogits path stays available — only the
+      free-running decode loop switches to the GPU-selected token).
+      Measured CPU-side loop cost ~1.31 ms/token (span - wall).
+      Greedy only — no sampler scope (PLAN non-goals).
+
+  - id: P4-9
+    rank: 18.9
+    title: "Overhead anatomy: dissect the ~1.17 ms fixed wall-GPU cost (encode vs commit->start vs completion-wakeup) — report"
+    status: ready
+    depends_on: []
+    blocks: [P4-11]
+    deliverable:
+      file: "engine package (instrumentation if needed) + DECISIONS.md findings entry"
+      tests: "any new timing fields covered by sanity tests (wall >= GPU, spans non-negative); production path untouched (P4-1 invariance precedent)"
+    est_complexity: small
+    notes: |
+      Seeded 2026-09-12 (P4-EXEC iterate decision). The P4-5 two-point
+      fit (2.06 ms @ 591 / 1.51 ms @ 227) gives ~1.17 ms fixed/token +
+      ~1.5 us/dispatch. Before any work chases the <=1.2 gate, MEASURE
+      where the fixed cost lives: CPU encode time, commit->GPU-start
+      scheduling latency, GPU-end->CPU-wakeup. MTLCommandBuffer kernel/
+      GPU start-end timestamps + wall brackets already exist. Output =
+      a DECISIONS entry saying whether <=1.2 is structurally passable
+      (and via what), or failed-with-explanation. Cheap submission
+      experiments (untracked hazards, unretained references) only if
+      the measurement points at them.
+
+  - id: P4-10
+    rank: 18.91
+    title: "OPTIONAL: quant matvec kernel tuning toward roofline (83-84% measured; simdgroup/vectorized-load rework)"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: "engine package (Metal/QuantKernels)"
+      tests: "Tier-K matvec gates verbatim on odd + real dims; P3-6 microbench re-run (same protocol) records the new fraction; dequant arithmetic bit-identical (exactness premise untouched)"
+    est_complexity: large
+    notes: |
+      Seeded 2026-09-12 (P4-EXEC iterate decision). SKIP-ELIGIBLE with
+      a recorded DECISIONS note: take it only if Mac sanity after
+      P4-6..P4-9 says the 29.4 shot needs it (floor 24.0 should not
+      need it). MLX/llama.cpp kernels are publicly near-roofline —
+      simdgroup-cooperative rows, wide vectorized loads. Max measured
+      headroom ~4.6 ms/token at the triad roofline (BW-1, still-ready
+      filler, would sharpen the true read-mostly denominator). The
+      register-dequant invariant (hard rule 1) and single-rounding
+      exactness argument must survive any rework.
+
+  - id: P4-11
+    rank: 18.95
+    title: "On-device iterate re-run (James): same D8+bookend protocol, decode/overhead/dispatch gates re-walked on the folded+split-K fused path"
+    status: blocked
+    owner: james
+    depends_on: [P4-6, P4-7, P4-8, P4-9]
+    blocks: [P4-EXEC]
+    deliverable:
+      file: "benchmarks/results.md rows + DECISIONS.md entries"
+      tests: "decode floor >=24.0 tok/s; overhead <=1.2 ms median wall-GPU; dispatches <=300 measured; D8+bookend; variance fields; fused attribution export at the new structure"
+    est_complexity: medium
+    notes: |
+      Seeded 2026-09-12 (P4-EXEC iterate decision). Same session shape
+      as P4-5 (bookended, detached, validation OFF, mmap). The primary
+      A/B is old-fused-vs-new-fused across sessions — NOT claim-grade;
+      the in-session bookends bound drift, and the gate verdicts are
+      absolute floors so cross-session comparability is not required
+      for them. Optional naive arm for continuity. 29.4 is reported
+      and judged at P4-EXEC, never gated. Agents prepare only.
+
   - id: P4-EXEC
     rank: 19
     title: "Phase 4 exit milestone (all P4 tasks done, exit criteria walked)"
-    status: in_progress
+    status: blocked
     started_at: 2026-09-11T17:17:29Z
-    depends_on: [P4-1, P4-2, P4-3, P4-4, P4-5]
+    depends_on: [P4-1, P4-2, P4-3, P4-4, P4-5, P4-6, P4-7, P4-8, P4-9, P4-11]
     blocks: [SPEC-P5]
     deliverable:
       file: "per docs/phases/phase-4.md"
@@ -1386,6 +1516,13 @@ tasks:
       measured levers are elementwise ~8.9 ms, fixed overhead ~1.17 ms,
       stream rate 84%->100% ~4.3 ms, attention-above-byte-floor, CPU
       loop ~1.3 ms). Gates stay unmodified per hard rule 6 either way.
+      2026-09-12 (walk run; decided by James): ITERATE — exit walk
+      presented with the full decomposition (criteria table + no-slack
+      budget close to 0.05 ms); James chose the iterate round, seeded
+      as P4-6..P4-11 (phase-4.md addendum). This milestone returned
+      in_progress -> blocked pending those tasks; the exit walk +
+      29.4 judgment re-run here after P4-11. See DECISIONS.md
+      2026-09-12 entry (also records the expanded campaign goals).
 
   - id: SPEC-P5
     rank: 20
@@ -1484,6 +1621,18 @@ tasks:
       in ~/Documents/imessage-intelligence-ideation.md §12. Nothing
       changes before CAMP-1: the Qwen3-1.7B @ 70d244cc / iPhone 15 Pro
       pins remain PLAN invariants through Phase 6.
+      2026-09-12 (decided by James at the P4-EXEC walk — binding goals
+      for this charter; full text in DECISIONS.md 2026-09-12): campaign
+      target is STRICTLY BETTER than MLX and llama.cpp — best tok/s AND
+      memory while preserving prediction accuracy; deploy every unused
+      lever incl. all MLX/llama.cpp strategies (near-roofline quant
+      matvec, split-K decode attention, pipelined/async submission, GPU
+      argmax, + whatever the survey finds); survey/hypothesize further
+      strategies and RECORD per-strategy effectiveness; the campaign
+      report includes an optimization-strategy survey with tradeoff
+      frontiers (speed vs memory vs accuracy) and use-cases — headline
+      better-than-both results plus how to push further given
+      acceptable sacrifices or specific use-cases.
 
   - id: SPEC-P7
     rank: 23.2

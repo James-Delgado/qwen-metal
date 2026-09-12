@@ -341,3 +341,50 @@ residency decision.
 - DECISIONS.md entries for every gate outcome, the before/after result,
   the judgment, and anything else decided/measured (standing
   discipline).
+
+---
+
+## ADDENDUM 2026-09-12 — Iterate round (P4-EXEC decision, James)
+
+The P4-5 session passed the dispatch gate (227 measured) but failed the
+decode floor (22.64 vs ≥24.0 tok/s) and the overhead gate (1.51 vs
+≤1.2 ms — an affine overhead model was discovered: ≈1.17 ms fixed/token
++ ≈1.5 µs/dispatch). At the P4-EXEC walk James decided to ITERATE
+inside Phase 4 rather than exit (DECISIONS.md 2026-09-12). This
+addendum records the round's scope; every gate and tolerance constant
+is unchanged, and the D5 fused-span mapping rule covers the new folds.
+
+Tasks (docs/PRIORITIES.yaml ranks 18.6–18.95):
+
+- **P4-6** — measure-first diagnosis of the ≈105 µs/dispatch
+  elementwise anomaly, then the norm→matvec folds (input-norm into
+  matvec3, post-norm into gateup_swiglu) — the D3 revisit explicitly
+  reserved for "if attribution says they pay"; the on-device
+  attribution now says they pay (8.86 ms, 23.7%, latency-bound).
+  Norm-species gate max(2⁻⁸·M, 2⁻¹¹) verbatim; dispatch pins update
+  red-first (expected ≈6/layer ⇒ ≈171/token, measured never derived).
+- **P4-7** — split-K / two-pass fused SDPA for occupancy (attention
+  ≈5.75 ms at window depth vs ≈1 ms byte floor; 16 threadgroups
+  today). Attention-species gate max(2⁻⁷·M, 2⁻¹¹) verbatim; edge
+  tests 1–5 re-passed; deterministic merge order (P4-2 precedent).
+- **P4-8** — GPU argmax on the GPU decode path (design change approved
+  by James — amends the Phase 2 "argmax stays CPU-side" choice for the
+  GPU pipeline only). Exact-equality contract vs CPU Argmax.firstIndex
+  incl. lowest-index tie-break (no new tolerance); CPU reference/oracle
+  chain untouched; kills the ≈605 KB/token logits readback.
+- **P4-9** — overhead anatomy: dissect the ≈1.17 ms fixed wall−GPU
+  cost (encode vs commit→start vs completion-wakeup) from existing
+  dual timestamps; report whether ≤1.2 ms is structurally passable and
+  what (if anything) cheap submission changes buy. Measure-first;
+  report, then act only on measured findings.
+- **P4-10 (optional, skip-eligible with a recorded note)** — quant
+  matvec kernel tuning toward the roofline (measured 83–84%; MLX-class
+  kernels are publicly near-roofline). Taken only if the Mac sanity
+  numbers after P4-6..P4-9 say the 29.4 shot needs it.
+- **P4-11 (owner: james)** — the re-run device session: same D8 +
+  bookend protocol, same three gates re-walked, interleaved
+  naive-vs-fused row optional (the fold/SDPA deltas are fused-vs-fused
+  across sessions — in-session bookends still bound drift).
+
+P4-EXEC then re-runs the exit walk with the new rows; the 29.4
+decode-vs-roofline judgment is recorded there as before.
