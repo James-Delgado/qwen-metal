@@ -1359,7 +1359,8 @@ tasks:
   - id: P4-6
     rank: 18.6
     title: "Elementwise dispatch-cost diagnosis (~105 us anomaly) + norm->matvec folds (input-norm into matvec3, post-norm into gateup)"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-12T04:41:14Z
     depends_on: []
     blocks: [P4-11]
     deliverable:
