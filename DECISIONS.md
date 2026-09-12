@@ -3187,3 +3187,90 @@ Two decisions on the P4-6 follow-through, made reviewing the P4-6 report:
   implementation** (the standalone block-shape `rmsnorm_f16` still runs
   once per token as the final norm — P4-10 notes, seed 2). It stays
   seeded in P4-10 rather than becoming a new task now.
+
+## 2026-09-12 — P4-7: split-K / two-pass fused SDPA — 128 attention threadgroups (was 16), 199 dispatches/token, Mac window 37.17 → 48.05 tok/s same-session
+
+**Structure.** `FusedSDPAKernel` reworked from one-threadgroup-per-query-
+head (16 threadgroups at the pinned dims — the occupancy ceiling P4-EXEC
+identified: attention ~5.75 ms at window depth on-device vs the ~1 ms
+byte floor) to the flash-decode / MLX `sdpa_vector_2pass` shape:
+
+- **Pass 1** (`sdpa_decode_split_f16`, numHeads×numSplits = 128
+  threadgroups at real dims, flat 1-D grid): positions 0..p partition
+  into **numSplits = 8** contiguous chunks (ceil division; contiguous
+  keeps cache reads coalesced). Each threadgroup runs the P4-2 loop body
+  verbatim over its chunk (per-simdgroup online softmax, `simd_sum`
+  score reduction, fixed-order in-threadgroup merge) and writes one fp32
+  partial state (m, l, acc[headDim]) to scratch. Empty chunks (shallow
+  depth) write the m = −inf sentinel.
+- **Pass 2** (`sdpa_decode_reduce_f16`, one threadgroup per head):
+  merges the 8 partial states **in fixed split order** with the same
+  rescale rule, divides by the merged denominator, stores fp16. p=0
+  stays the exact bitwise V-row copy (edge test 1: −0.0 and NaN
+  payloads survive), now in pass 2 with pass 1 early-outing.
+
+Both merges are fixed-order ⇒ the pair is bitwise deterministic across
+runs (P4-2 contract; test-pinned per depth in the new sweep). numSplits
+= 8 and 128 threads/threadgroup are STRUCTURAL constants, not
+tolerances (hard rule 6 untouched; interpolated into the MSL so Swift
+and shader cannot drift). Both passes always encode, so dispatch counts
+stay depth-independent. fp16 boundaries / fp32 arithmetic unchanged;
+the reduction-order deviation vs P4-2 is exactly the species the
+2026-09-12 James decision covers, judged at the same verbatim gates.
+
+**Memory accounting** (spec "Memory budget" says fusion adds no
+persistent allocations — surfaced, not silently deviated): the pass-1→2
+scratch is a GPU-private fp32 triple, ~66.5 KB at the pinned dims
+(16·8·(128+2)·4 B), lazily sized once and reused across layers/steps.
+Net vs the naive path the fused structure replaced: −450 KB (the P4-2
+online softmax removed the 512 KB scores+probs buffers). Inside the
+<10 MB activations line; no benchmark-visible footprint change.
+
+**Public API unchanged** ⇒ every P4-2 test re-ran verbatim on the new
+structure: edge tests 1–5 (p=0 bitwise, GQA mapping, p=4095 boundary +
+context-limit, adversarial orderings — max-first/max-last profiles now
+cross chunk boundaries at p=31 with chunk=4 — window-depth headDim 128),
+odd shapes, determinism, loud rejections. New tests: a split-boundary
+depth sweep (p = 0…17: empty/singleton/ragged chunk patterns, oracle
+diff at the verbatim attention-species gate max(2⁻⁷·M, 2⁻¹¹) + per-depth
+bitwise determinism) and a kernel-level structure pin (encodeSDPA
+encodes exactly 2 dispatches, measured). One implementation iteration
+recorded honestly: the first build hit an MSL front-end compile error
+(a `uint2` grid attribute cannot mix with scalar simdgroup attributes)
+— fixed to the flat 1-D grid; NO numeric gate was touched at any point,
+and all gates held on the first complete run.
+
+**Dispatch pins RED-FIRST** (P2-5 rule, quoted red before the kernel
+landed: 3 assertion failures on the old kernel): tiny fused 7/9 →
+**8/10**; real dims 171 → **199** with logits (197 without), MEASURED.
+≤300 gate met with margin; the on-device verdict remains P4-11's.
+Attribution export label now says "fused (P4-7 split-K SDPA + P4-3/P4-6
+folds)"; both SDPA dispatches ride the `.attention` class.
+
+**Verification:** full release suite (`swift test -c release`, NO skip
+flags — includes the CPU LogitMatchSuiteTests unlike the P4-6 quote):
+**"Executed 395 tests, with 3 tests skipped and 0 failures (0
+unexpected) in 1845.313"** (3 skips = the opt-in free-run/diagnostic
+harnesses; +2 tests vs P4-6 at like-for-like scope). Free-run
+divergence report re-run on the new arithmetic (opt-in harness):
+**NONE — all 5 prompts × 128 steps token-identical to CPU-quant.**
+
+**Mac rows (PROVISIONAL, benchmarks/results.md 2026-09-12 P4-7
+section) — SAME-SESSION before/after** (this session captured its own
+P4-6-structure reference rows, which reproduce the P4-6 rows to 0.2%):
+attribution at depth 83–146 — attention class 2.39 → 0.71 ms (−70% at
+SHALLOW depth), production GPU 21.36 @ 171 → 19.66 ms @ 199; decode —
+window **37.17 → 48.05 tok/s (+29%)**, median GPU 26.55 → 20.41 ms
+(−6.1 ms at window depth: the win grows with cache depth, as the
+occupancy analysis predicts), wall−GPU 0.290 → 0.296 ms (+28 reduce
+dispatches ≈ 6 µs on Mac; on-device expectation ~42 µs at the P4-5
+~1.5 µs/dispatch slope), window latency max/p50 tightened 1.15 → 1.03,
+zero stalls. Mac fractions never predict device fractions — but the
+iterate round's Mac cumulative now stands at 26.50 (P4-4) → 21.32
+(P4-6) → 20.41 ms/token GPU.
+
+**Follow-ups:** P4-10 gains seed 3 (fold the tiny pass-2 reduce into
+the o_proj matvec load, or a single-pass shallow-depth variant, if
+P4-11's attribution says the +28 dispatches matter — pins red-first if
+taken). Naive path and bf16 backend untouched (frozen Phase 2/3
+artifacts, spec D4). No other follow-ups discovered.

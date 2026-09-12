@@ -29,11 +29,11 @@ import QuartzCore
 /// not Qwen3-shaped (QK-norm, no attention biases), and each format's loader
 /// refuses the other format's file with a clear error.
 public final class GPUModel {
-    /// P4-2/P4-3/P4-6 (phase-4.md D2-D4 + the 2026-09-12 addendum): which
-    /// kernel structure the packed pipeline runs. `.naive` is the Phase 2/3
-    /// 21-dispatch layer (unfused scores → softmax → PV attention,
-    /// standalone elementwise kernels); `.fused` is the Phase 4 6-dispatch
-    /// layer (one-dispatch online-softmax SDPA plus the folding set:
+    /// P4-2/P4-3/P4-6/P4-7 (phase-4.md D2-D4 + the 2026-09-12 addendum):
+    /// which kernel structure the packed pipeline runs. `.naive` is the
+    /// Phase 2/3 21-dispatch layer (unfused scores → softmax → PV attention,
+    /// standalone elementwise kernels); `.fused` is the Phase 4 7-dispatch
+    /// layer (two-pass split-K online-softmax SDPA plus the folding set:
     /// norm-folded QKV concat, qk-norm/RoPE/append cluster, norm-folded
     /// gate+up+SwiGLU, residual-folded matvecs). Selectable ONLY on
     /// the packed (q4g64) pipeline — the bf16 backend runs the naive
@@ -89,9 +89,9 @@ public final class GPUModel {
     /// Compute dispatches encoded by the most recent `step`, measured at the
     /// dispatchThreads call sites (P2-5, spec D5): naive path 591 at the
     /// pinned dims with logits (21/layer × 28 + embedding + final norm +
-    /// lm_head), 589 without the logits tail; fused path 171 with logits
-    /// (6/layer × 28 + the same head/tail — P4-6, ≤300 gate; was 227 at
-    /// P4-3), 169 without.
+    /// lm_head), 589 without the logits tail; fused path 199 with logits
+    /// (7/layer × 28 + the same head/tail — P4-7's two-pass SDPA, ≤300
+    /// gate; was 171 at P4-6, 227 at P4-3), 197 without.
     public private(set) var lastStepDispatchCount: Int?
 
     /// Tokens whose KV entries currently occupy cache positions
@@ -107,8 +107,8 @@ public final class GPUModel {
     /// Present exactly on the fused kernel path (P4-2, spec D4).
     private let fusedSDPA: FusedSDPAKernel?
     /// Present exactly on the fused kernel path (P4-3/P4-6, spec D3 + the
-    /// 2026-09-12 addendum): the folding set that takes the packed pipeline
-    /// to 6 dispatches per layer.
+    /// 2026-09-12 addendum): the folding set that, with the two-pass SDPA
+    /// (P4-7), takes the packed pipeline to 7 dispatches per layer.
     private let foldedKernels: FoldedKernels?
     private let dispatchCounter = DispatchCounter()
 
@@ -711,10 +711,11 @@ public final class GPUModel {
             count: hidden, output: hiddenA)
     }
 
-    /// P4-3 (spec D3) + P4-6 (the 2026-09-12 addendum's norm→matvec folds):
-    /// the folded layer — 6 dispatches. Norm+matvec3 (input norm folded
-    /// into the QKV concat) → fused qk-norm/RoPE/append cluster → fused
-    /// SDPA → o_proj+residual → norm+gate+up+SwiGLU (post-norm folded) →
+    /// P4-3 (spec D3) + P4-6 (norm→matvec folds) + P4-7 (split-K SDPA):
+    /// the folded layer — 7 dispatches. Norm+matvec3 (input norm folded
+    /// into the QKV concat) → fused qk-norm/RoPE/append cluster → two-pass
+    /// SDPA (split partials + reduce) → o_proj+residual →
+    /// norm+gate+up+SwiGLU (post-norm folded) →
     /// down+residual. Every fold keeps the naive chain's fp16-boundary/
     /// fp32-accumulate semantics (FoldedKernels doc); the residual
     /// ping-pong (hiddenA → hiddenB → hiddenA) is unchanged, so the Tier-E

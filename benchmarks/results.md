@@ -501,6 +501,30 @@ verdicts are P4-11's on-device.
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-09-12 | Apple M2 Pro (Mac, dev machine) | decode-essay (84) | 640 (cap) | 26.59 | 26.88 | 0.285 | 171 | 37.10 (overall 37.08) | 26.97 / 30.15 / 30.44 / 30.53 | 0 (n=384) | PROVISIONAL, burst, warm, kernels FUSED (P4-6 folds), dev-loop sanity only. vs the P4-4 fused row: window 37.10 vs 31.16 tok/s, median GPU 26.59 vs 31.76 ms at 227→171 dispatches — directional Mac signal only (cross-session). Zero stalls, tight distribution (max/p50 ≈ 1.13). Output coherent (same computing-history essay species). |
 
+### 2026-09-12 — Mac P4-7 rows (PROVISIONAL): split-K two-pass SDPA, 199 dispatches/token
+
+P4-7 (iterate round): the P4-2 fused SDPA reworked to split-K / two-pass
+(flash-decode / MLX `sdpa_vector_2pass` precedent) — pass 1 splits cache
+positions into 8 contiguous chunks (numHeads×8 = 128 threadgroups at the
+pinned dims vs 16 before, the occupancy fix), pass 2 merges the fp32
+partial states per head in fixed split order (bitwise deterministic).
+Attention becomes 2 dispatches/layer ⇒ 199/token measured (≤300 gate).
+Same machine, protocol, artifact (d073af49…), and commands as the P4-6
+rows — and this session captured its OWN before rows (same build minus
+the kernel rework, same session), so the deltas below are same-session,
+not cross-session. Still PROVISIONAL dev-loop signal; claim-grade gate
+verdicts are P4-11's on-device.
+
+| Date | Device | matvec | attention | norm+elementwise | head/tail | Class-sum (median ms/tok) | Production GPU ms/tok @ dispatches | Sanity ratio | Notes |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-12 | Apple M2 Pro (Mac, dev machine) | 16.78 ms (78.3%) | 2.39 ms (11.2%) | 0.47 ms (2.2%) | 1.78 ms (8.3%) | 21.52 (span 21.61, wall 21.92) | 21.36 @ 171 | 1.01 (band 0.50–2.00) | PROVISIONAL, DIAGNOSTIC, kernels FUSED (P4-6 structure) — the same-session "before" reference for the P4-7 row below. Depth 83–146. Matches the P4-6 row (21.32 @ 171) to 0.2%. |
+| 2026-09-12 | Apple M2 Pro (Mac, dev machine) | 16.71 ms (84.7%) | 0.71 ms (3.6%) | 0.53 ms (2.7%) | 1.77 ms (9.0%) | 19.72 (span 19.79, wall 19.97) | 19.66 @ 199 | 1.00 (band 0.50–2.00) | PROVISIONAL, DIAGNOSTIC, kernels FUSED (P4-7 split-K SDPA), depth 83–146. vs same-session before: attention 2.39 → 0.71 ms (−70%) at SHALLOW depth — the split-K win grows with depth (see decode row); production GPU 21.36 → 19.66 ms. matvec/norm/head-tail classes unchanged within noise, as expected (kernels untouched). |
+
+| Date | Device | Prompt (tokens) | Generated | Median GPU ms/tok | Median wall ms/tok | Median wall−GPU ms | Dispatches/tok | Window tok/s (128–512) | Latency p50/p95/p99/max ms (window) | Stalls | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-12 | Apple M2 Pro (Mac, dev machine) | decode-essay (84) | 640 (cap) | 26.55 | 26.83 | 0.290 | 171 | 37.17 (overall 37.13) | 26.91 / 30.00 / 30.37 / 30.96 | 0 (n=384) | PROVISIONAL, burst, warm, kernels FUSED (P4-6 structure) — the same-session "before" reference. Reproduces the P4-6 row (37.10) to 0.2%. |
+| 2026-09-12 | Apple M2 Pro (Mac, dev machine) | decode-essay (84) | 640 (cap) | 20.41 | 20.71 | 0.296 | 199 | 48.05 (overall 48.07) | 20.81 / 21.24 / 21.30 / 21.32 | 0 (n=384) | PROVISIONAL, burst, warm, kernels FUSED (P4-7 split-K SDPA), dev-loop sanity only. vs same-session before: window 48.05 vs 37.17 tok/s (+29%), median GPU 26.55 → 20.41 ms (−6.1 ms at window depth vs −1.7 ms at shallow attribution depth — attention time scales with cache depth, so the occupancy fix pays more where it matters); wall−GPU 0.290 → 0.296 ms at 171→199 dispatches (the +28 reduce dispatches cost ~6 µs wall on Mac). Distribution TIGHTENED: max/p50 1.03 vs 1.15. Output coherent (same computing-history essay species). |
+
 ## Phase 0a — energy dry-run + corrections (PROVISIONAL)
 
 ### 2026-08-22 — sustained battery-delta cycles, iPhone 15 Pro (method VALIDATED)

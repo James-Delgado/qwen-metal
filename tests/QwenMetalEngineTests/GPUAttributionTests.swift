@@ -446,7 +446,8 @@ final class GPUAttributionTests: XCTestCase {
             dateStamp: "2026-09-08", deviceLabel: "TestDevice",
             osVersion: "macOS test", residency: .mmap)
         XCTAssertTrue(
-            fusedText.contains("fused (P4-2 SDPA + P4-3/P4-6 folds) kernel structure"),
+            fusedText.contains(
+                "fused (P4-7 split-K SDPA + P4-3/P4-6 folds) kernel structure"),
             fusedText)
         XCTAssertTrue(fusedText.contains("171"), fusedText)
     }

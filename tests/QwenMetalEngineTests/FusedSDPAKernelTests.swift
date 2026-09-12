@@ -485,6 +485,95 @@ final class FusedSDPAKernelTests: XCTestCase {
         assertAttentionGate(got, ref, "window-depth p=\(position), headDim 128")
     }
 
+    // MARK: - P4-7 split boundaries: every empty/partial/full chunk pattern
+
+    /// The split-K structure partitions positions 0...p into NUM_SPLITS
+    /// contiguous chunks (ceil division). Sweeping p = 0...2·NUM_SPLITS+1
+    /// exercises every boundary pattern: p+1 < NUM_SPLITS (trailing chunks
+    /// EMPTY — their partial state must not contribute), p+1 == NUM_SPLITS
+    /// (all chunks singleton), and p+1 not a multiple of NUM_SPLITS (ragged
+    /// final chunk). Odd headDim rides along (partially-filled lane stride).
+    /// Each depth diffs against the CPU oracle at the verbatim
+    /// attention-species gate; two encodes per depth pin determinism.
+    func testSplitBoundaryDepthSweepMatchesOracle() throws {
+        let context = try makeContextOrSkip()
+        let kernels = try FusedSDPAKernel(context: context)
+        let numSplits = FusedSDPAKernel.numSplits
+        let maxContext = 2 * numSplits + 2
+        let (kvHeads, numHeads, headDim) = (2, 4, 19)
+        for position in 0...(2 * numSplits + 1) {
+            let cache = try KVCache(
+                device: context.device, layers: 1, kvHeads: kvHeads,
+                maxContext: maxContext, headDim: headDim)
+            fillBits(cache.buffer, 0xABAB)
+            var rng = SplitMix64(seed: UInt64(100 + position))
+            var ks = [[Float16]](); var vs = [[Float16]]()
+            for j in 0...position {
+                let kRow = randomHalfs(count: kvHeads * headDim, rng: &rng)
+                let vRow = randomHalfs(count: kvHeads * headDim, rng: &rng)
+                for h in 0..<kvHeads {
+                    let dims = (h * headDim)..<((h + 1) * headDim)
+                    try writeCacheSlot(cache, layer: 0, component: .key, head: h,
+                                       position: j, values: Array(kRow[dims]))
+                    try writeCacheSlot(cache, layer: 0, component: .value, head: h,
+                                       position: j, values: Array(vRow[dims]))
+                }
+                ks.append(kRow); vs.append(vRow)
+            }
+            let q = randomHalfs(count: numHeads * headDim, rng: &rng)
+
+            let first = try runFusedSDPA(
+                context: context, kernels: kernels, cache: cache, layer: 0,
+                position: position, q: q, numHeads: numHeads)
+            let ref = try sdpaOracle(
+                q: q, ks: ks, vs: vs, numHeads: numHeads, kvHeads: kvHeads,
+                headDim: headDim, position: position)
+            assertAttentionGate(
+                first.map(Float.init), ref, "split-boundary sweep p=\(position)")
+            let again = try runFusedSDPA(
+                context: context, kernels: kernels, cache: cache, layer: 0,
+                position: position, q: q, numHeads: numHeads)
+            XCTAssertEqual(
+                first.map(\.bitPattern), again.map(\.bitPattern),
+                "split-boundary sweep p=\(position): bitwise determinism")
+        }
+    }
+
+    /// P4-7 structure pin at the kernel level: one `encodeSDPA` call encodes
+    /// exactly TWO dispatches (pass 1 partials + reduce), measured by the
+    /// P2-5 counter at the dispatch call sites — never derived.
+    func testEncodeSDPAEncodesTwoDispatches() throws {
+        let context = try makeContextOrSkip()
+        let kernels = try FusedSDPAKernel(context: context)
+        let counter = DispatchCounter()
+        kernels.dispatchCounter = counter
+        let (kvHeads, numHeads, headDim, maxContext) = (2, 4, 8, 4)
+        let cache = try KVCache(
+            device: context.device, layers: 1, kvHeads: kvHeads,
+            maxContext: maxContext, headDim: headDim)
+        var rng = SplitMix64(seed: 110)
+        for j in 0...1 {
+            for h in 0..<kvHeads {
+                try writeCacheSlot(cache, layer: 0, component: .key, head: h,
+                                   position: j,
+                                   values: randomHalfs(count: headDim, rng: &rng))
+                try writeCacheSlot(cache, layer: 0, component: .value, head: h,
+                                   position: j,
+                                   values: randomHalfs(count: headDim, rng: &rng))
+            }
+        }
+        let q = randomHalfs(count: numHeads * headDim, rng: &rng)
+        for position in [0, 1] {
+            counter.reset()
+            _ = try runFusedSDPA(
+                context: context, kernels: kernels, cache: cache, layer: 0,
+                position: position, q: q, numHeads: numHeads)
+            XCTAssertEqual(
+                counter.count, 2,
+                "p=\(position): the split-K SDPA is pass 1 + reduce, always")
+        }
+    }
+
     // MARK: - Odd shapes (lane striding: headDim not a multiple of the SIMD width)
 
     func testOddShapesMatchOracle() throws {
@@ -700,14 +789,14 @@ final class FusedPathRealArtifactSmokeTests: XCTestCase {
         // bitwise naive-vs-fused equality is NOT required).
         let prompt = try SharedCheckpoint.promptFixture("short_english")
         let fusedLogits = try fused.lastPositionLogits(ids: prompt.inputIds)
-        // P4-6 (edge test 8 species), real dims: the folded fused path
-        // MEASURES 171 dispatches/token with logits (6/layer × 28 +
-        // embedding + final norm + lm_head — the norm→matvec folds absorbed
-        // the two standalone block norms; was 227 at P4-3) — under the
-        // pre-committed ≤300 dispatch gate (DECISIONS.md 2026-09-05; the
-        // on-device gate verdict is P4-11's).
+        // P4-7 (edge test 8 species), real dims: the folded fused path
+        // MEASURES 199 dispatches/token with logits (7/layer × 28 +
+        // embedding + final norm + lm_head — the split-K SDPA is two
+        // dispatches: pass 1 partials + reduce; was 171 at P4-6, 227 at
+        // P4-3) — under the pre-committed ≤300 dispatch gate (DECISIONS.md
+        // 2026-09-05; the on-device gate verdict is P4-11's).
         let fusedDispatches = try XCTUnwrap(fused.lastStepDispatchCount)
-        XCTAssertEqual(fusedDispatches, 171)
+        XCTAssertEqual(fusedDispatches, 199)
         XCTAssertLessThanOrEqual(fusedDispatches, 300,
                                  "pre-committed Phase 4 dispatch gate")
         let naiveLogits = try naive.lastPositionLogits(ids: prompt.inputIds)

@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-09-08
+last_updated: 2026-09-12
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -1402,8 +1402,9 @@ tasks:
   - id: P4-7
     rank: 18.7
     title: "Split-K / two-pass fused SDPA (occupancy: >16 threadgroups at depth) + edge tests re-passed"
-    status: in_progress
+    status: done
     started_at: 2026-09-12T19:18:28Z
+    completed_at: 2026-09-12T21:23:55Z
     depends_on: []
     blocks: [P4-11]
     deliverable:
@@ -1418,6 +1419,20 @@ tasks:
       style) + small deterministic reduce — MLX's sdpa_vector_2pass is
       the ecosystem precedent. Hard rule 3: correctness tests pass
       before optimization iteration and re-pass after each.
+      2026-09-12 (done): landed as the two-pass FusedSDPAKernel rework
+      (pass 1: 8 contiguous position chunks × heads = 128 threadgroups
+      at real dims, fp32 partial online-softmax states to a ~66.5 KB
+      GPU-private scratch; pass 2: fixed-split-order merge — bitwise
+      deterministic; p=0 stays the exact bitwise V-row copy). API
+      unchanged: edge tests 1-5 + determinism/rejection re-ran
+      verbatim; new split-boundary depth sweep + 2-dispatch structure
+      pin. Attention-species gate held first run. Pins red-first:
+      tiny 7/9 -> 8/10, real 171 -> 199 MEASURED (<=300 gate).
+      Free-run NONE (5 prompts x 128 steps). Mac same-session
+      before/after: window 37.17 -> 48.05 tok/s (+29%), production
+      GPU 21.36@171 -> 19.66@199, attention class 2.39 -> 0.71 ms at
+      shallow depth. Reduce-fold seed appended to P4-10. See
+      DECISIONS.md 2026-09-12 P4-7 entry + results.md rows.
 
   - id: P4-8
     rank: 18.8
@@ -1496,6 +1511,13 @@ tasks:
       James 2026-09-12 for eventual implementation (DECISIONS entry;
       reduction-order divergence from the naive chain accepted as
       needed, judged against the existing Tier gates).
+      2026-09-12 (from P4-7): seed 3 — the split-K SDPA's pass-2
+      reduce is a tiny 16-threadgroup dispatch (~1.5 us device launch
+      cost, 28/token); if P4-11's attribution shows the extra
+      dispatches matter, candidates are folding the reduce into the
+      o_proj matvec's load (it consumes attnOut directly) or a
+      single-pass shallow-depth variant — either changes dispatch
+      pins red-first.
 
   - id: P4-11
     rank: 18.95
