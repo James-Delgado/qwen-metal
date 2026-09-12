@@ -1491,7 +1491,10 @@ tasks:
       speed x access. (2) The head-tail final norm still runs the
       standalone rmsnorm_f16 block shape (~176 us/dispatch on Mac,
       1 dispatch/token — the P4-6 diagnosis's cost signature; a
-      cooperative-reduction variant collapses it).
+      cooperative-reduction variant collapses it). Seed 2 endorsed by
+      James 2026-09-12 for eventual implementation (DECISIONS entry;
+      reduction-order divergence from the naive chain accepted as
+      needed, judged against the existing Tier gates).
 
   - id: P4-11
     rank: 18.95

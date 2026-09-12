@@ -3171,3 +3171,19 @@ P4-10's notes (threadgroup-cached normed-x variant; cooperative
 final-norm — the head-tail final norm still runs the block-shape
 `rmsnorm_f16` once per token). The naive path and bf16 backend are
 untouched (frozen Phase 2/3 artifacts, spec D4).
+
+## 2026-09-12 — Decision (James, in-conversation): reduction-order divergence from the naive chain is acceptable as needed; final-norm cooperative collapse endorsed
+
+Two decisions on the P4-6 follow-through, made reviewing the P4-6 report:
+
+- **Diverging from the naive approach's ordering of operations is
+  acceptable as needed** for performance work. The existing pre-committed
+  Tier gates remain the guardrail — a reordered reduction must still pass
+  the same species tolerance vs the same oracle (hard rule 6 untouched;
+  the P4-2 online-softmax and P4-6 cooperative-inverse-RMS precedents are
+  the model). The post-Phase-6 campaign is expected to take this as a
+  given, since it is solely performance-optimization work.
+- **The head-tail final-norm collapse is endorsed for eventual
+  implementation** (the standalone block-shape `rmsnorm_f16` still runs
+  once per token as the final norm — P4-10 notes, seed 2). It stays
+  seeded in P4-10 rather than becoming a new task now.
