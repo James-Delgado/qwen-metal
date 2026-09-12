@@ -1402,7 +1402,8 @@ tasks:
   - id: P4-7
     rank: 18.7
     title: "Split-K / two-pass fused SDPA (occupancy: >16 threadgroups at depth) + edge tests re-passed"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-12T19:18:28Z
     depends_on: []
     blocks: [P4-11]
     deliverable:
