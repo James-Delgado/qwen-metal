@@ -301,13 +301,17 @@ final class GPUQuantTierMTests: XCTestCase {
             rel: exp2(-7), slice: "layer0_attn_output (CPU-quant live)")
     }
 
-    /// P4-4 Tier-M at the SURVIVING attention slice on the FUSED path (spec
-    /// D5): the layer-0 attention module rebuilt from the P4-2/P4-3 kernels
-    /// — matvec3 (QKV concat) → qk-norm/RoPE/append cluster → fused SDPA →
-    /// o_proj via the residual-folded matvec fed a zero residual — against
-    /// the SAME live CPU-quant slice as the naive test above, at the
-    /// VERBATIM attention-species constant 2⁻⁷ (the outermost species the
-    /// span absorbs; no new constants — DECISIONS.md 2026-09-05 gates).
+    /// P4-4/P4-6 Tier-M at the SURVIVING attention slice on the FUSED path
+    /// (spec D5): the layer-0 attention module rebuilt from the production
+    /// fused kernels — norm-folded matvec3 (P4-6: the block input norm
+    /// folded into the QKV concat, fed the PRE-norm input) → qk-norm/RoPE/
+    /// append cluster → fused SDPA → o_proj via the residual-folded matvec
+    /// fed a zero residual — against the live CPU-quant slice
+    /// attention(inputNorm(embedding)), at the VERBATIM attention-species
+    /// constant 2⁻⁷ (the outermost species the span absorbs; no new
+    /// constants — DECISIONS.md 2026-09-05 gates; the standalone input-norm
+    /// boundary the fold erased retires per D5, replaced by this span and
+    /// the FoldedKernelTests norm-species tests).
     func testFusedAttentionOutputMatchesCPUQuant() throws {
         let model = try SharedQuantGPUModel.model()
         let cpu = try SharedQuantModel.model()
@@ -337,6 +341,8 @@ final class GPUQuantTierMTests: XCTestCase {
             for: "model.layers.0.self_attn.q_norm.weight")
         let kNormOffset = try model.weights.byteOffset(
             for: "model.layers.0.self_attn.k_norm.weight")
+        let inputNormOffset = try model.weights.byteOffset(
+            for: "model.layers.0.input_layernorm.weight")
 
         let cache = try KVCache(
             device: context.device, layers: 1, kvHeads: kvHeads,
@@ -352,9 +358,12 @@ final class GPUQuantTierMTests: XCTestCase {
             sinTable.contents().copyMemory(from: $0.baseAddress!, byteCount: $0.count)
         }
 
-        let referenceInput = try cpu.blocks[0].inputNorm(
-            try cpu.embedding(try promptIDs()))
-        let reference = try cpu.blocks[0].attention(referenceInput, seqLen: seqLen)
+        // P4-6: the GPU span starts BEFORE the input norm — fed the raw
+        // embedding rows, exactly like the production folded layer reads
+        // the raw residual stream; the oracle slice is unchanged.
+        let rawInput = try cpu.embedding(try promptIDs())
+        let reference = try cpu.blocks[0].attention(
+            try cpu.blocks[0].inputNorm(rawInput), seqLen: seqLen)
 
         let input = try makeEmptyBuffer(bytes: hidden * 2)
         let qkv = try makeEmptyBuffer(
@@ -370,18 +379,21 @@ final class GPUQuantTierMTests: XCTestCase {
         var gpuOutput: [Float] = []
         for position in 0..<seqLen {
             let row = Array(
-                referenceInput[(position * hidden)..<((position + 1) * hidden)])
+                rawInput[(position * hidden)..<((position + 1) * hidden)])
             let halves = row.map(Float16.init)
             halves.withUnsafeBytes {
                 input.contents().copyMemory(from: $0.baseAddress!, byteCount: $0.count)
             }
             try context.timedDispatch { encoder in
-                try folded.encodeMatvec3(
+                try folded.encodeNormMatvec3(
                     into: encoder,
                     a: qProj, outDimA: numHeads * headDim,
                     b: kProj, outDimB: kvHeads * headDim,
                     c: vProj, outDimC: kvHeads * headDim,
-                    inDim: hidden, input: input, output: qkv)
+                    inDim: hidden, input: input,
+                    normWeight: model.weights.buffer,
+                    normByteOffset: inputNormOffset,
+                    eps: eps, output: qkv)
                 try folded.encodeQKNormRoPEAppend(
                     into: encoder, qkv: qkv,
                     qNormWeight: model.weights.buffer,

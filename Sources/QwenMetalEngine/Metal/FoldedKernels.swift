@@ -1,13 +1,26 @@
 import Metal
 
 /// P4-3 (docs/phases/phase-4.md D3): the folding set for the fused (q4g64)
-/// kernel path — four kernels that take the packed pipeline from 19 to 8
-/// dispatches per layer:
+/// kernel path — four kernels that took the packed pipeline from 19 to 8
+/// dispatches per layer, plus the P4-6 norm→matvec folds (the 2026-09-12
+/// addendum's iterate round) that take it to 6:
 ///
 /// - `matvec3_q4_f16`: the three QKV matvecs as ONE dispatch over the
 ///   concatenated output rows (q | k | v), writing the `[numHeads + 2·kvHeads,
 ///   headDim]` qkv buffer the cluster kernel consumes. Same inner loop and
 ///   rounding as `matvec_q4_f16` — a matvec-only span (Tier K).
+/// - `norm_matvec3_q4_f16` / `norm_gateup_swiglu_q4_f16` (P4-6): the same
+///   two matvec spans with the preceding block RMSNorm folded into the
+///   load — the inverse RMS is computed ONCE per threadgroup by a
+///   cooperative strided+tree reduction, then each thread norms every
+///   input element on the fly, rounding to fp16 exactly where
+///   `rmsnorm_f16` stored it. The reduction is cooperative because the
+///   P4-6 diagnosis measured the redundant per-thread reduction as the
+///   elementwise cost itself (~176 µs/dispatch at the block shape on Mac;
+///   a first redundant-fold build measured that cost simply moving into
+///   the matvec class). The reduction ORDER differs from the CPU chain —
+///   covered by the pre-committed norm-species gate (spec D5 mapping
+///   rule), bitwise deterministic by construction.
 /// - `qknorm_rope_append_f16`: the 6-dispatch post-QKV elementwise cluster
 ///   (q-norm, k-norm, rope-q, rope-k, append-K, append-V) as ONE dispatch.
 ///   Q heads: per-head RMSNorm + RoPE → the query buffer. K heads: per-head
@@ -73,6 +86,73 @@ public final class FoldedKernels {
         return acc;
     }
 
+    // Cooperative per-threadgroup inverse RMS (P4-6): each thread sums a
+    // strided slice of the squares in fp32, a fixed tree combines the
+    // partials through threadgroup memory, and every thread reads the same
+    // result. The P4-6 diagnosis measured the REDUNDANT per-thread
+    // reduction as the elementwise cost itself (~176 µs/dispatch at the
+    // block shape on Mac), so the folded kernels must not replicate it per
+    // row — a first redundant-fold build measured the cost simply moving
+    // into the matvec class. The strided+tree order differs from the CPU
+    // chain's sequential sum — a reduction-order difference of the same
+    // species the fused SDPA's online softmax introduced (P4-2), covered
+    // by the pre-committed norm-species gate; the order is FIXED by
+    // construction, so outputs stay bitwise deterministic across runs.
+    // Callers launch these kernels with UNIFORM threadgroups (the host
+    // dispatch1DUniform helper) so every thread participates in the
+    // barriers — no early return may precede them.
+    inline float inverse_rms_cooperative(device const half *h, uint dim,
+                                         float eps,
+                                         threadgroup float *partial,
+                                         uint lid, uint tg) {
+        float mySum = 0.0f;
+        for (uint j = lid; j < dim; j += tg) {
+            float v = float(h[j]);
+            mySum += v * v;
+        }
+        partial[lid] = mySum;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint s = 128; s > 0; s >>= 1) {
+            if (lid < s && lid + s < tg) {
+                partial[lid] += partial[lid + s];
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        return 1.0f / sqrt(partial[0] / float(dim) + eps);
+    }
+
+    // matvec_row_q4 with the block RMSNorm folded into the input load:
+    // each element is normed and rounded to fp16 exactly where rmsnorm_f16
+    // stored it (half(w * (x * invRMS))), then consumed by the verbatim
+    // dot-product loop — the fold changes structure, not arithmetic.
+    inline float matvec_row_q4_normed(device const uint *q, ulong qElemOffset,
+                                      device const half *scales, ulong scalesElemOffset,
+                                      device const half *biases, ulong biasesElemOffset,
+                                      device const half *h,
+                                      device const ushort *nw, ulong nwElemOffset,
+                                      float invRMS, uint row, uint inDim) {
+        uint groupsPerRow = inDim / 64;
+        ulong qBase = qElemOffset + ulong(row) * (inDim / 8);
+        ulong groupBase = ulong(row) * groupsPerRow;
+        float acc = 0.0f;
+        uint c = 0;
+        for (uint g = 0; g < groupsPerRow; ++g) {
+            float s = float(scales[scalesElemOffset + groupBase + g]);
+            float b = float(biases[biasesElemOffset + groupBase + g]);
+            for (uint w = 0; w < 8; ++w) {
+                uint word = q[qBase + ulong(g) * 8 + w];
+                for (uint lane = 0; lane < 8; ++lane) {
+                    float xn = float(half(bf16_to_f32(nw[nwElemOffset + c])
+                        * (float(h[c]) * invRMS)));
+                    acc += (float(word & 0xFu) * s + b) * xn;
+                    word >>= 4;
+                    ++c;
+                }
+            }
+        }
+        return acc;
+    }
+
     // Three packed matvecs, one dispatch: out rows [0, outDimA) come from
     // triplet A, [outDimA, outDimA+outDimB) from B, the rest from C. All
     // three share the same input x (the normed hidden state).
@@ -114,6 +194,97 @@ public final class FoldedKernels {
                                 x, gid - outDimA - outDimB, inDim);
         }
         out[gid] = half(acc);
+    }
+
+    // P4-6: matvec3 with the input block RMSNorm folded into the load —
+    // h is the RAW residual stream; every thread recomputes invRMS then
+    // runs the normed dot loop. Same segment mapping as matvec3_q4_f16.
+    kernel void norm_matvec3_q4_f16(device const uint *qA        [[buffer(0)]],
+                                    constant ulong &qAOffset     [[buffer(1)]],
+                                    device const half *sA        [[buffer(2)]],
+                                    constant ulong &sAOffset     [[buffer(3)]],
+                                    device const half *bA        [[buffer(4)]],
+                                    constant ulong &bAOffset     [[buffer(5)]],
+                                    device const uint *qB        [[buffer(6)]],
+                                    constant ulong &qBOffset     [[buffer(7)]],
+                                    device const half *sB        [[buffer(8)]],
+                                    constant ulong &sBOffset     [[buffer(9)]],
+                                    device const half *bB        [[buffer(10)]],
+                                    constant ulong &bBOffset     [[buffer(11)]],
+                                    device const uint *qC        [[buffer(12)]],
+                                    constant ulong &qCOffset     [[buffer(13)]],
+                                    device const half *sC        [[buffer(14)]],
+                                    constant ulong &sCOffset     [[buffer(15)]],
+                                    device const half *bC        [[buffer(16)]],
+                                    constant ulong &bCOffset     [[buffer(17)]],
+                                    device const half *h         [[buffer(18)]],
+                                    device const ushort *normW   [[buffer(19)]],
+                                    constant ulong &normElemOffset [[buffer(20)]],
+                                    constant float &eps          [[buffer(21)]],
+                                    constant uint &outDimA       [[buffer(22)]],
+                                    constant uint &outDimB       [[buffer(23)]],
+                                    constant uint &outDimC       [[buffer(24)]],
+                                    constant uint &inDim         [[buffer(25)]],
+                                    device half *out             [[buffer(26)]],
+                                    uint gid [[thread_position_in_grid]],
+                                    uint lid [[thread_position_in_threadgroup]],
+                                    uint tg [[threads_per_threadgroup]]) {
+        threadgroup float partial[256];
+        float invRMS = inverse_rms_cooperative(h, inDim, eps, partial, lid, tg);
+        if (gid >= outDimA + outDimB + outDimC) return;
+        float acc;
+        if (gid < outDimA) {
+            acc = matvec_row_q4_normed(qA, qAOffset, sA, sAOffset, bA, bAOffset,
+                                       h, normW, normElemOffset, invRMS,
+                                       gid, inDim);
+        } else if (gid < outDimA + outDimB) {
+            acc = matvec_row_q4_normed(qB, qBOffset, sB, sBOffset, bB, bBOffset,
+                                       h, normW, normElemOffset, invRMS,
+                                       gid - outDimA, inDim);
+        } else {
+            acc = matvec_row_q4_normed(qC, qCOffset, sC, sCOffset, bC, bCOffset,
+                                       h, normW, normElemOffset, invRMS,
+                                       gid - outDimA - outDimB, inDim);
+        }
+        out[gid] = half(acc);
+    }
+
+    // P4-6: gate+up+SwiGLU with the post-attention block RMSNorm folded in.
+    // Both row dots consume the same on-the-fly normed input; each rounds
+    // to fp16 exactly where the unfused matvec stored (the gateup_swiglu
+    // boundary semantics carried over).
+    kernel void norm_gateup_swiglu_q4_f16(device const uint *qG        [[buffer(0)]],
+                                          constant ulong &qGOffset     [[buffer(1)]],
+                                          device const half *sG        [[buffer(2)]],
+                                          constant ulong &sGOffset     [[buffer(3)]],
+                                          device const half *bG        [[buffer(4)]],
+                                          constant ulong &bGOffset     [[buffer(5)]],
+                                          device const uint *qU        [[buffer(6)]],
+                                          constant ulong &qUOffset     [[buffer(7)]],
+                                          device const half *sU        [[buffer(8)]],
+                                          constant ulong &sUOffset     [[buffer(9)]],
+                                          device const half *bU        [[buffer(10)]],
+                                          constant ulong &bUOffset     [[buffer(11)]],
+                                          device const half *h         [[buffer(12)]],
+                                          device const ushort *normW   [[buffer(13)]],
+                                          constant ulong &normElemOffset [[buffer(14)]],
+                                          constant float &eps          [[buffer(15)]],
+                                          constant uint &outDim        [[buffer(16)]],
+                                          constant uint &inDim         [[buffer(17)]],
+                                          device half *out             [[buffer(18)]],
+                                          uint gid [[thread_position_in_grid]],
+                                          uint lid [[thread_position_in_threadgroup]],
+                                          uint tg [[threads_per_threadgroup]]) {
+        threadgroup float partial[256];
+        float invRMS = inverse_rms_cooperative(h, inDim, eps, partial, lid, tg);
+        if (gid >= outDim) return;
+        float g = float(half(matvec_row_q4_normed(
+            qG, qGOffset, sG, sGOffset, bG, bGOffset,
+            h, normW, normElemOffset, invRMS, gid, inDim)));
+        float u = float(half(matvec_row_q4_normed(
+            qU, qUOffset, sU, sUOffset, bU, bUOffset,
+            h, normW, normElemOffset, invRMS, gid, inDim)));
+        out[gid] = half((g / (1.0f + exp(-g))) * u);
     }
 
     // The post-QKV cluster, one dispatch. Thread (pair, role-head): role
@@ -244,6 +415,8 @@ public final class FoldedKernels {
     private let clusterPipeline: MTLComputePipelineState
     private let gateupPipeline: MTLComputePipelineState
     private let matvecResPipeline: MTLComputePipelineState
+    private let normMatvec3Pipeline: MTLComputePipelineState
+    private let normGateupPipeline: MTLComputePipelineState
 
     /// When set, every encoded dispatch increments it at the dispatch call
     /// site (P2-5 instrumentation; `GPUModel` attaches its per-step counter).
@@ -258,6 +431,8 @@ public final class FoldedKernels {
         clusterPipeline = try pipeline("qknorm_rope_append_f16")
         gateupPipeline = try pipeline("gateup_swiglu_q4_f16")
         matvecResPipeline = try pipeline("matvec_res_q4_f16")
+        normMatvec3Pipeline = try pipeline("norm_matvec3_q4_f16")
+        normGateupPipeline = try pipeline("norm_gateup_swiglu_q4_f16")
     }
 
     /// One packed triplet's buffers + byte offsets (GPUWeights convention:
@@ -317,6 +492,78 @@ public final class FoldedKernels {
         encoder.setBuffer(output, offset: 0, index: 23)
         dispatch1D(encoder, pipeline: matvec3Pipeline,
                    count: outDimA + outDimB + outDimC)
+    }
+
+    /// P4-6: y = concat(A·n, B·n, C·n) with n = rmsnorm(input) computed on
+    /// the fly — the input block norm folded into the QKV concat. `input`
+    /// is the RAW residual stream ([inDim] fp16); `normWeight` is the bf16
+    /// block-norm vector of `inDim` values (schema D1 pass-through).
+    public func encodeNormMatvec3(
+        into encoder: MTLComputeCommandEncoder,
+        a: Triplet, outDimA: Int, b: Triplet, outDimB: Int,
+        c: Triplet, outDimC: Int, inDim: Int,
+        input: MTLBuffer, normWeight: MTLBuffer, normByteOffset: Int,
+        eps: Float, output: MTLBuffer
+    ) throws {
+        let offsetsA = try QuantKernels.tripletElementOffsets(
+            a, outDim: outDimA, inDim: inDim)
+        let offsetsB = try QuantKernels.tripletElementOffsets(
+            b, outDim: outDimB, inDim: inDim)
+        let offsetsC = try QuantKernels.tripletElementOffsets(
+            c, outDim: outDimC, inDim: inDim)
+        try QuantKernels.requireCapacity(input, bytes: inDim * 2, name: "input")
+        try QuantKernels.requireCapacity(
+            output, bytes: (outDimA + outDimB + outDimC) * 2, name: "output")
+        let normElemOffset = try normWeightElementOffset(
+            byteOffset: normByteOffset, dim: inDim,
+            buffer: normWeight, name: "normWeight")
+
+        encoder.setComputePipelineState(normMatvec3Pipeline)
+        setTriplet(encoder, a, offsets: offsetsA, baseIndex: 0)
+        setTriplet(encoder, b, offsets: offsetsB, baseIndex: 6)
+        setTriplet(encoder, c, offsets: offsetsC, baseIndex: 12)
+        encoder.setBuffer(input, offset: 0, index: 18)
+        encoder.setBuffer(normWeight, offset: 0, index: 19)
+        setScalar(encoder, UInt64(normElemOffset), index: 20)
+        setScalar(encoder, eps, index: 21)
+        setScalar(encoder, UInt32(outDimA), index: 22)
+        setScalar(encoder, UInt32(outDimB), index: 23)
+        setScalar(encoder, UInt32(outDimC), index: 24)
+        setScalar(encoder, UInt32(inDim), index: 25)
+        encoder.setBuffer(output, offset: 0, index: 26)
+        dispatch1DUniform(encoder, pipeline: normMatvec3Pipeline,
+                          count: outDimA + outDimB + outDimC)
+    }
+
+    /// P4-6: out = silu(G·n) · (U·n) with n = rmsnorm(input) computed on
+    /// the fly — the post-attention block norm folded into gate+up+SwiGLU.
+    public func encodeNormGateUpSwiGLU(
+        into encoder: MTLComputeCommandEncoder,
+        gate: Triplet, up: Triplet, outDim: Int, inDim: Int,
+        input: MTLBuffer, normWeight: MTLBuffer, normByteOffset: Int,
+        eps: Float, output: MTLBuffer
+    ) throws {
+        let offsetsG = try QuantKernels.tripletElementOffsets(
+            gate, outDim: outDim, inDim: inDim)
+        let offsetsU = try QuantKernels.tripletElementOffsets(
+            up, outDim: outDim, inDim: inDim)
+        try QuantKernels.requireCapacity(input, bytes: inDim * 2, name: "input")
+        try QuantKernels.requireCapacity(output, bytes: outDim * 2, name: "output")
+        let normElemOffset = try normWeightElementOffset(
+            byteOffset: normByteOffset, dim: inDim,
+            buffer: normWeight, name: "normWeight")
+
+        encoder.setComputePipelineState(normGateupPipeline)
+        setTriplet(encoder, gate, offsets: offsetsG, baseIndex: 0)
+        setTriplet(encoder, up, offsets: offsetsU, baseIndex: 6)
+        encoder.setBuffer(input, offset: 0, index: 12)
+        encoder.setBuffer(normWeight, offset: 0, index: 13)
+        setScalar(encoder, UInt64(normElemOffset), index: 14)
+        setScalar(encoder, eps, index: 15)
+        setScalar(encoder, UInt32(outDim), index: 16)
+        setScalar(encoder, UInt32(inDim), index: 17)
+        encoder.setBuffer(output, offset: 0, index: 18)
+        dispatch1DUniform(encoder, pipeline: normGateupPipeline, count: outDim)
     }
 
     /// The fused post-QKV cluster (spec D3): per-head Q/K RMSNorm + RoPE at
@@ -516,6 +763,24 @@ public final class FoldedKernels {
         let width = min(pipeline.maxTotalThreadsPerThreadgroup, 256)
         encoder.dispatchThreads(
             MTLSize(width: count, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1))
+    }
+
+    /// UNIFORM threadgroups for the P4-6 norm-folded kernels: their
+    /// cooperative reduction runs threadgroup barriers, so every group must
+    /// be launched full (ragged non-uniform edge groups would diverge at
+    /// the barrier). Rows past `count` return after the reduction, before
+    /// any store; width is capped at 256 to match the kernels' threadgroup
+    /// array.
+    private func dispatch1DUniform(
+        _ encoder: MTLComputeCommandEncoder,
+        pipeline: MTLComputePipelineState, count: Int
+    ) {
+        dispatchCounter?.increment()
+        let width = min(pipeline.maxTotalThreadsPerThreadgroup, 256)
+        let groups = (count + width - 1) / width
+        encoder.dispatchThreadgroups(
+            MTLSize(width: groups, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1))
     }
 

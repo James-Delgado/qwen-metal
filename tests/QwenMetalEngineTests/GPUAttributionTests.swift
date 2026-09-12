@@ -439,15 +439,15 @@ final class GPUAttributionTests: XCTestCase {
             weightsFormat: .q4g64, kernelPath: .fused, promptTokenCount: 84,
             attributed: [attribution],
             productionGPUSeconds: [0.040],
-            productionDispatchCount: 227,
+            productionDispatchCount: 171,
             firstDecodePosition: 83, lastDecodePosition: 84,
             generatedTokenIds: [7, 9])
         let fusedText = fusedResult.exportText(
             dateStamp: "2026-09-08", deviceLabel: "TestDevice",
             osVersion: "macOS test", residency: .mmap)
         XCTAssertTrue(
-            fusedText.contains("fused (P4-2 SDPA + P4-3 folds) kernel structure"),
+            fusedText.contains("fused (P4-2 SDPA + P4-3/P4-6 folds) kernel structure"),
             fusedText)
-        XCTAssertTrue(fusedText.contains("227"), fusedText)
+        XCTAssertTrue(fusedText.contains("171"), fusedText)
     }
 }

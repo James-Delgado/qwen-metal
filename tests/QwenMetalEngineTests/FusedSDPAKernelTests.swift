@@ -700,12 +700,14 @@ final class FusedPathRealArtifactSmokeTests: XCTestCase {
         // bitwise naive-vs-fused equality is NOT required).
         let prompt = try SharedCheckpoint.promptFixture("short_english")
         let fusedLogits = try fused.lastPositionLogits(ids: prompt.inputIds)
-        // P4-3 edge test 8, real dims: the folded fused path MEASURES 227
-        // dispatches/token with logits (8/layer × 28 + embedding + final
-        // norm + lm_head) — under the pre-committed ≤300 dispatch gate
-        // (DECISIONS.md 2026-09-05; the on-device gate verdict is P4-5's).
+        // P4-6 (edge test 8 species), real dims: the folded fused path
+        // MEASURES 171 dispatches/token with logits (6/layer × 28 +
+        // embedding + final norm + lm_head — the norm→matvec folds absorbed
+        // the two standalone block norms; was 227 at P4-3) — under the
+        // pre-committed ≤300 dispatch gate (DECISIONS.md 2026-09-05; the
+        // on-device gate verdict is P4-11's).
         let fusedDispatches = try XCTUnwrap(fused.lastStepDispatchCount)
-        XCTAssertEqual(fusedDispatches, 227)
+        XCTAssertEqual(fusedDispatches, 171)
         XCTAssertLessThanOrEqual(fusedDispatches, 300,
                                  "pre-committed Phase 4 dispatch gate")
         let naiveLogits = try naive.lastPositionLogits(ids: prompt.inputIds)

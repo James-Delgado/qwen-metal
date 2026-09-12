@@ -76,7 +76,7 @@ public struct AttributionRunResult: Sendable {
         lines.append("date: \(dateStamp)")
         lines.append("device: \(deviceLabel) (\(osVersion))")
         let kernelDescription = kernelPath == .fused
-            ? "fused (P4-2 SDPA + P4-3 folds)"
+            ? "fused (P4-2 SDPA + P4-3/P4-6 folds)"
             : "naive (pre-fusion)"
         lines.append(
             "engine: weights \(weightsFormat.rawValue), residency "

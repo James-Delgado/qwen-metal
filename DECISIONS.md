@@ -3079,3 +3079,95 @@ Scope discipline unchanged: non-goal re-entries (quantized KV,
 speculative decoding, etc.) still require their recorded decisions at
 CAMP-1 per the existing charter-task structure; nothing enters Phase
 4–6 scope through this entry.
+
+## 2026-09-12 — P4-6: elementwise diagnosis (the "~105 µs/dispatch" was the block-norm kernel's redundant reduction, NOT launch cost) + norm→matvec folds — 171 dispatches/token, Mac fused −5.2 ms GPU
+
+**Diagnosis (measure-first, mandated by the iterate decision).** New
+committed harness: `DispatchCostDiagnosticTests` (opt-in sweep via
+`QWEN_DISPATCH_DIAG=1 swift test -c release --filter
+DispatchCostDiagnosticTests`; a sanity test always runs). One command
+buffer holding 84 back-to-back tiny dispatches under structural
+variations, median of 9, dual-timed. Mac (M2 Pro) results:
+
+| configuration | GPU µs/dispatch |
+|---|---|
+| residual-add, dependent chain, tracked, serial, dim 2048 | 3.6 |
+| same, UNTRACKED buffers | 3.9 |
+| same, independent buffers, serial | 4.2–4.7 |
+| same, independent, CONCURRENT dispatch-type encoder | 0.2–0.5 |
+| residual-add, dependent, dim 64 | 1.5–4.2 |
+| **rmsnorm, BLOCK shape (rows 1 × dim 2048)** | **175.9** |
+| rmsnorm, QK-NORM shape (rows 16 × dim 128) | 12.5 |
+
+- **The P4-5 "launch/latency-bound elementwise" hypothesis is REFUTED**:
+  dependent tiny dispatches cost ~3.5–4.7 µs GPU each; hazard tracking
+  is free (untracked identical); serial-encoder barriers are not the
+  cost. No config-level submission fix applies.
+- **The cost is the `rmsnorm_f16` kernel itself at the block shape**:
+  every one of its `dim` threads redundantly recomputes the row's
+  sum of squares sequentially (O(dim²) work) at ragged 16-wide 2D
+  occupancy — 50× the same-size residual-add. The qk-norm shape (same
+  element count, 16× less redundancy) is 14× cheaper.
+- Reconciliation with the on-device P4-5 numbers: 28 layers × 2 block
+  norms ≈ the measured 8.86 ms fused elementwise class (and the naive
+  class's 9.11 ms ≈ the same two norms + 9 genuinely-cheap dispatches)
+  — which is exactly why P4-3's fold set barely moved the class: it
+  removed only the cheap dispatches. The "~105 µs/dispatch" was the
+  class average of 2 expensive + 1 cheap.
+
+**Folds (input-norm → matvec3, post-norm → gate+up+SwiGLU).** New
+`norm_matvec3_q4_f16` / `norm_gateup_swiglu_q4_f16` kernels; the fused
+layer is now 6 dispatches (was 8). Every normed input element rounds to
+fp16 exactly where `rmsnorm_f16` stored it; the dot loop is
+`matvec_row_q4` verbatim.
+
+- **Deviation from the task note, driven by the diagnosis:** the seeded
+  task accepted "redundant per-row sum-of-squares" on the premise that
+  the cost was launch latency. The diagnosis refuted that premise, and
+  a first redundant-fold build CONFIRMED it directly: Mac matvec class
+  12.16 → 23.51 ms, production GPU 26.50 → 28.07 ms @ 171 — net WORSE
+  (the redundant reduction moved classes instead of disappearing). The
+  landed kernels therefore compute the inverse RMS **once per
+  threadgroup** (strided partial sums + fixed tree through threadgroup
+  memory, uniform threadgroups so barriers never diverge). The sum-of-
+  squares reduction ORDER differs from the CPU chain — the same
+  reduction-order species the P4-2 online softmax introduced, covered
+  by the verbatim norm-species gate max(2⁻⁸·M, 2⁻¹¹); bitwise
+  deterministic by construction (test-pinned). No tolerance touched
+  (hard rule 6).
+- Attribution mapping: the block-norm boundary is no longer sliceable
+  (spec D5) — its time rides the **matvec** class from P4-6 on; the
+  elementwise class is the cluster alone.
+- Dispatch pins updated RED-FIRST and re-measured (P2-5 rule): tiny
+  fused 9/11 → **7/9**; real dims 227 → **171** with logits (169
+  without), quoted red failures before the implementation landed.
+  ≤300 gate unchanged and met with margin.
+
+**Verification (all gates verbatim, all held first run on the
+cooperative build):** fold spans vs the unfused kernel chain at the
+norm-species gate on odd AND real dims; Tier-M fused attention module
+test updated to the production span (norm-folded matvec3 fed the
+PRE-norm input) at the verbatim 2⁻⁷ outermost species; Tier-E
+full-stack + 250-step logit suite re-passed on the fused default.
+Full release suite (`swift test -c release --skip
+LogitMatchSuiteTests`): **"Executed 388 tests, with 3 tests skipped
+and 0 failures (0 unexpected) in 1564.471"** (+7 tests vs P4-4: 2
+diagnostic, 5 fold; third skip = the opt-in diagnosis sweep).
+Free-run divergence report re-run on the new arithmetic (opt-in
+harness): **NONE — all 5 prompts × 128 steps token-identical to
+CPU-quant.**
+
+**Mac rows (PROVISIONAL, benchmarks/results.md 2026-09-12):**
+attribution — production GPU 21.32 ms/token @ 171 (P4-4 fused: 26.50 @
+227; −5.2 ms), norm+elementwise 10.74 → 0.52 ms, matvec 12.16 → 16.70
+ms (the folded matvecs carry the on-the-fly normed-input arithmetic);
+decode — window 37.10 tok/s vs 31.16 (P4-4), median GPU 26.59 ms,
+wall−GPU 0.285 ms, zero stalls. Cross-session Mac signal only; the
+gate verdicts are P4-11's. Floor math: the device floor needed
+−2.5 ms/token; Mac delivered −5.2 ms GPU on this lever alone.
+
+**Follow-ups seeded:** two Mac-measured matvec-tuning seeds appended to
+P4-10's notes (threadgroup-cached normed-x variant; cooperative
+final-norm — the head-tail final norm still runs the block-shape
+`rmsnorm_f16` once per token). The naive path and bf16 backend are
+untouched (frozen Phase 2/3 artifacts, spec D4).

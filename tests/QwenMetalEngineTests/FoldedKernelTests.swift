@@ -302,6 +302,156 @@ final class FoldedKernelTests: XCTestCase {
         try runGateUpComparison(outDim: 6144, inDim: 2048, seed: 22)
     }
 
+    // MARK: - P4-6: norm-folded matvec3 vs the unfused chain
+
+    /// bf16-exact block-norm weight vector, deterministic and non-trivial
+    /// (a mixup with an all-ones weight or a skipped norm is a hard gate
+    /// failure — the reference chain runs the real rmsnorm kernel).
+    private func normWeightValues(_ dim: Int) -> [Float] {
+        (0..<dim).map { Float(($0 * 7 % 43) - 21) * 0.03125 }
+    }
+
+    private func runNormMatvec3Comparison(
+        outA: Int, outB: Int, outC: Int, inDim: Int, seed: UInt64
+    ) throws {
+        let context = try makeContextOrSkip()
+        let device = context.device
+        var rng = SplitMix64(seed: seed)
+        let a = try randomTriplet(outDim: outA, inDim: inDim, device: device, rng: &rng)
+        let b = try randomTriplet(outDim: outB, inDim: inDim, device: device, rng: &rng)
+        let c = try randomTriplet(outDim: outC, inDim: inDim, device: device, rng: &rng)
+        let h = try makeBuffer(device, values: randomHalfs(inDim, rng: &rng))
+        let normWeight = try makeBuffer(
+            device, values: normWeightValues(inDim).map(bf16Bits))
+        let eps: Float = 1e-6
+
+        let decode = try DecodeKernels(context: context)
+        let folded = try FoldedKernels(context: context)
+        let total = outA + outB + outC
+
+        // Unfused reference chain: the real rmsnorm kernel, then the
+        // P4-3-proven matvec3 over its stored fp16 output.
+        let normed = try makeOutputBuffer(device, count: inDim, elementStride: 2)
+        let ref = try makeOutputBuffer(device, count: total, elementStride: 2)
+        try context.timedDispatch { encoder in
+            try decode.encodeRMSNorm(
+                into: encoder, input: h, weight: normWeight,
+                weightByteOffset: 0, rows: 1, dim: inDim, eps: eps,
+                output: normed)
+            try folded.encodeMatvec3(
+                into: encoder, a: a.folded, outDimA: outA,
+                b: b.folded, outDimB: outB, c: c.folded, outDimC: outC,
+                inDim: inDim, input: normed, output: ref)
+        }
+
+        let out = try makeOutputBuffer(device, count: total, elementStride: 2)
+        try context.timedDispatch { encoder in
+            try folded.encodeNormMatvec3(
+                into: encoder, a: a.folded, outDimA: outA,
+                b: b.folded, outDimB: outB, c: c.folded, outDimC: outC,
+                inDim: inDim, input: h,
+                normWeight: normWeight, normByteOffset: 0, eps: eps,
+                output: out)
+        }
+        assertNormSpecies(
+            readHalfs(out, count: total),
+            readHalfs(ref, count: total).map(Float.init),
+            "norm-folded matvec3")
+    }
+
+    func testNormMatvec3MatchesUnfusedChainOnOddDims() throws {
+        try runNormMatvec3Comparison(
+            outA: 67, outB: 33, outC: 45, inDim: 128, seed: 81)
+    }
+
+    /// Real QKV dims of the pinned model (2048 | 1024 | 1024 rows × 2048).
+    func testNormMatvec3MatchesUnfusedChainOnRealDims() throws {
+        try runNormMatvec3Comparison(
+            outA: 2048, outB: 1024, outC: 1024, inDim: 2048, seed: 82)
+    }
+
+    // MARK: - P4-6: norm-folded gate+up+SwiGLU vs the unfused chain
+
+    private func runNormGateUpComparison(
+        outDim: Int, inDim: Int, seed: UInt64
+    ) throws {
+        let context = try makeContextOrSkip()
+        let device = context.device
+        var rng = SplitMix64(seed: seed)
+        let gate = try randomTriplet(outDim: outDim, inDim: inDim, device: device, rng: &rng)
+        let up = try randomTriplet(outDim: outDim, inDim: inDim, device: device, rng: &rng)
+        let h = try makeBuffer(device, values: randomHalfs(inDim, rng: &rng))
+        let normWeight = try makeBuffer(
+            device, values: normWeightValues(inDim).map(bf16Bits))
+        let eps: Float = 1e-6
+
+        let decode = try DecodeKernels(context: context)
+        let folded = try FoldedKernels(context: context)
+
+        // Unfused reference chain: rmsnorm, then the P4-3-proven
+        // gate+up+SwiGLU fold over its stored fp16 output.
+        let normed = try makeOutputBuffer(device, count: inDim, elementStride: 2)
+        let ref = try makeOutputBuffer(device, count: outDim, elementStride: 2)
+        try context.timedDispatch { encoder in
+            try decode.encodeRMSNorm(
+                into: encoder, input: h, weight: normWeight,
+                weightByteOffset: 0, rows: 1, dim: inDim, eps: eps,
+                output: normed)
+            try folded.encodeGateUpSwiGLU(
+                into: encoder, gate: gate.folded, up: up.folded,
+                outDim: outDim, inDim: inDim, input: normed, output: ref)
+        }
+
+        let out = try makeOutputBuffer(device, count: outDim, elementStride: 2)
+        try context.timedDispatch { encoder in
+            try folded.encodeNormGateUpSwiGLU(
+                into: encoder, gate: gate.folded, up: up.folded,
+                outDim: outDim, inDim: inDim, input: h,
+                normWeight: normWeight, normByteOffset: 0, eps: eps,
+                output: out)
+        }
+        assertNormSpecies(
+            readHalfs(out, count: outDim),
+            readHalfs(ref, count: outDim).map(Float.init),
+            "norm-folded gate+up+SwiGLU")
+    }
+
+    func testNormGateUpSwiGLUMatchesUnfusedChainOnOddDims() throws {
+        try runNormGateUpComparison(outDim: 51, inDim: 192, seed: 91)
+    }
+
+    /// Real MLP dims of the pinned model (6144 × 2048).
+    func testNormGateUpSwiGLUMatchesUnfusedChainOnRealDims() throws {
+        try runNormGateUpComparison(outDim: 6144, inDim: 2048, seed: 92)
+    }
+
+    /// The norm-folded kernels are bitwise deterministic across runs (the
+    /// pipeline's incremental-replay contract depends on it).
+    func testNormFoldedKernelsDeterministicAcrossRuns() throws {
+        let context = try makeContextOrSkip()
+        let device = context.device
+        var rng = SplitMix64(seed: 93)
+        let t = try randomTriplet(outDim: 64, inDim: 128, device: device, rng: &rng)
+        let h = try makeBuffer(device, values: randomHalfs(128, rng: &rng))
+        let normWeight = try makeBuffer(
+            device, values: normWeightValues(128).map(bf16Bits))
+        let folded = try FoldedKernels(context: context)
+
+        func runOnce() throws -> [Float16] {
+            let out = try makeOutputBuffer(device, count: 64, elementStride: 2)
+            try context.timedDispatch { encoder in
+                try folded.encodeNormGateUpSwiGLU(
+                    into: encoder, gate: t.folded, up: t.folded,
+                    outDim: 64, inDim: 128, input: h,
+                    normWeight: normWeight, normByteOffset: 0, eps: 1e-6,
+                    output: out)
+            }
+            return readHalfs(out, count: 64)
+        }
+        assertBitwiseEqualHalfs(
+            try runOnce(), try runOnce(), "norm-folded determinism")
+    }
+
     // MARK: - Edge test 7: residual-folded matvec vs the unfused chain
 
     private func runMatvecResidualComparison(
@@ -675,6 +825,28 @@ final class FoldedKernelTests: XCTestCase {
             try kernels.encodeMatvecResidual(
                 into: $0, triplet: t.folded, outDim: 8, inDim: 64,
                 input: x, residual: shortRes, output: out)
+        }
+
+        // P4-6 norm-folded wrappers: misaligned norm offset, short norm
+        // weight (needs inDim bf16 values).
+        let normWeight64 = try makeBuffer(
+            device, values: (0..<64).map { _ in bf16Bits(1.0) })
+        try encodeExpecting(DecodeKernelError.misalignedWeightOffset(byteOffset: 3)) {
+            try kernels.encodeNormMatvec3(
+                into: $0, a: t.folded, outDimA: 8, b: t.folded, outDimB: 8,
+                c: t.folded, outDimC: 8, inDim: 64, input: x,
+                normWeight: normWeight64, normByteOffset: 3, eps: 1e-6,
+                output: out)
+        }
+        let shortNorm = try makeBuffer(
+            device, values: (0..<32).map { _ in bf16Bits(1.0) })
+        try encodeExpecting(QuantKernelError.bufferTooSmall(
+            buffer: "normWeight", requiredBytes: 128, actualBytes: 64)) {
+            try kernels.encodeNormGateUpSwiGLU(
+                into: $0, gate: t.folded, up: t.folded, outDim: 8,
+                inDim: 64, input: x,
+                normWeight: shortNorm, normByteOffset: 0, eps: 1e-6,
+                output: out)
         }
 
         // Cluster: odd headDim, rope table exceeded, misaligned norm offset.

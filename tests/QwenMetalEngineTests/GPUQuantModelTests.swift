@@ -368,19 +368,20 @@ final class GPUQuantModelTests: XCTestCase {
         }
     }
 
-    /// P4-3 edge test 8 (tiny-model pin): the folded fused path runs 8
-    /// dispatches/layer (input norm, matvec3, cluster, SDPA, o+res,
-    /// post-norm, gate+up+SwiGLU, down+res), and the count is MEASURED
-    /// (P2-5 rule): 1 layer → naive 22/24 becomes fused 9/11 (embedding 1 +
-    /// layer 8 + logits tail 2). Was 20/22 at P4-2 (SDPA only) — this pin
-    /// went red-first when the P4-3 folds landed.
-    func testFusedPathDispatchCountMeasuredEightPerLayer() throws {
+    /// P4-6 (edge test 8 species, tiny-model pin): the folded fused path
+    /// runs 6 dispatches/layer (norm+matvec3, cluster, SDPA, o+res,
+    /// norm+gate+up+SwiGLU, down+res — the P4-6 norm→matvec folds absorbed
+    /// the two standalone block norms), and the count is MEASURED (P2-5
+    /// rule): 1 layer → fused 7/9 (embedding 1 + layer 6 + logits tail 2).
+    /// Was 9/11 at P4-3 — this pin went red-first when the P4-6 folds
+    /// landed (and 20/22 at P4-2 before that).
+    func testFusedPathDispatchCountMeasuredSixPerLayer() throws {
         let model = try makeTinyPackedModel(kernelPath: .fused)
         try model.step(token: 1, computeLogits: false)
-        XCTAssertEqual(model.lastStepDispatchCount, 9)
+        XCTAssertEqual(model.lastStepDispatchCount, 7)
         for token in [2, 3] {
             try model.step(token: token, computeLogits: true)
-            XCTAssertEqual(model.lastStepDispatchCount, 11)
+            XCTAssertEqual(model.lastStepDispatchCount, 9)
         }
         let timing = try XCTUnwrap(model.lastStepTiming)
         XCTAssertGreaterThan(timing.gpuDuration, 0)

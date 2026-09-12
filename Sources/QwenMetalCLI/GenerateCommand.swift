@@ -21,7 +21,7 @@ usage: qwen-metal-cli generate --model-dir <dir> --prompt "<text>" [--max-tokens
   --backend     cpu (fp32 reference, default) or gpu (Metal fp16 + KV cache)
   --weights     bf16 (default) or q4g64 (the packed 4-bit artifact — needs a
                 *-q4g64.safetensors file beside the checkpoint)
-  --kernels     fused (default on gpu+q4g64 — the Phase 4 8-dispatch/layer
+  --kernels     fused (default on gpu+q4g64 — the Phase 4 6-dispatch/layer
                 structure) or naive (the Phase 2/3 21-dispatch structure,
                 kept for the P4-5 A/B row). gpu backend only; fused needs
                 q4g64 (the bf16 backend is permanently naive, spec D4)

@@ -479,6 +479,28 @@ bound). Last-gen per-token: median GPU 53.05 ms / wall−GPU 1.483 ms @
 burst window medians); window latency p50/p95/p99/max
 51.20/53.86/54.28/54.85 ms, stalls 0. phys_footprint (app) 547.3 MB.
 
+### 2026-09-12 — Mac P4-6 rows (PROVISIONAL): norm→matvec folds landed, 171 dispatches/token
+
+P4-6 (iterate round): the two block RMSNorms folded into their consuming
+matvecs (input-norm → matvec3, post-norm → gate+up+SwiGLU) with a
+cooperative per-threadgroup inverse-RMS reduction — the P4-6 diagnosis
+measured the standalone block-shape rmsnorm dispatch itself at ~176
+µs/dispatch on Mac (redundant O(dim²) per-thread reduction; NOT launch
+latency — dependent tiny dispatches cost ~3.5–4.7 µs, hazard tracking
+free), so the fold removes the reduction redundancy rather than the
+dispatch count per se. Same machine, protocol, artifact (d03b3fe3…), and
+commands as the 2026-09-11 P4-4 rows (fused is the default). Cross-session
+Mac comparisons are dev-loop directional signal only; the claim-grade gate
+verdicts are P4-11's on-device.
+
+| Date | Device | matvec | attention | norm+elementwise | head/tail | Class-sum (median ms/tok) | Production GPU ms/tok @ dispatches | Sanity ratio | Notes |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-12 | Apple M2 Pro (Mac, dev machine) | 16.70 ms (78.3%) | 2.33 ms (10.9%) | 0.52 ms (2.4%) | 1.78 ms (8.3%) | 21.38 (span 21.43, wall 21.64) | 21.32 @ 171 | 1.00 (band 0.50–2.00) | PROVISIONAL, DIAGNOSTIC, kernels FUSED (P4-6 folds), depth 83–146. vs P4-4 fused: production GPU 26.50 → 21.32 ms (−5.2 ms), norm+elementwise 10.74 → 0.52 ms (the class collapsed — only the cluster remains), matvec 12.16 → 16.70 ms (the folded matvecs carry the on-the-fly normed-input arithmetic; a threadgroup-cached normed-x variant is P4-10-scope). Norm dispatches now ride the matvec attribution class (spec D5: the erased boundary is no longer sliceable). |
+
+| Date | Device | Prompt (tokens) | Generated | Median GPU ms/tok | Median wall ms/tok | Median wall−GPU ms | Dispatches/tok | Window tok/s (128–512) | Latency p50/p95/p99/max ms (window) | Stalls | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-12 | Apple M2 Pro (Mac, dev machine) | decode-essay (84) | 640 (cap) | 26.59 | 26.88 | 0.285 | 171 | 37.10 (overall 37.08) | 26.97 / 30.15 / 30.44 / 30.53 | 0 (n=384) | PROVISIONAL, burst, warm, kernels FUSED (P4-6 folds), dev-loop sanity only. vs the P4-4 fused row: window 37.10 vs 31.16 tok/s, median GPU 26.59 vs 31.76 ms at 227→171 dispatches — directional Mac signal only (cross-session). Zero stalls, tight distribution (max/p50 ≈ 1.13). Output coherent (same computing-history essay species). |
+
 ## Phase 0a — energy dry-run + corrections (PROVISIONAL)
 
 ### 2026-08-22 — sustained battery-delta cycles, iPhone 15 Pro (method VALIDATED)

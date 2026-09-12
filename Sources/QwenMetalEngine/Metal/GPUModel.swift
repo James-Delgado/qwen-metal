@@ -29,12 +29,13 @@ import QuartzCore
 /// not Qwen3-shaped (QK-norm, no attention biases), and each format's loader
 /// refuses the other format's file with a clear error.
 public final class GPUModel {
-    /// P4-2/P4-3 (phase-4.md D2-D4): which kernel structure the packed
-    /// pipeline runs. `.naive` is the Phase 2/3 21-dispatch layer (unfused
-    /// scores → softmax → PV attention, standalone elementwise kernels);
-    /// `.fused` is the Phase 4 8-dispatch layer (one-dispatch online-softmax
-    /// SDPA plus the P4-3 folding set: QKV concat, qk-norm/RoPE/append
-    /// cluster, gate+up+SwiGLU, residual-folded matvecs). Selectable ONLY on
+    /// P4-2/P4-3/P4-6 (phase-4.md D2-D4 + the 2026-09-12 addendum): which
+    /// kernel structure the packed pipeline runs. `.naive` is the Phase 2/3
+    /// 21-dispatch layer (unfused scores → softmax → PV attention,
+    /// standalone elementwise kernels); `.fused` is the Phase 4 6-dispatch
+    /// layer (one-dispatch online-softmax SDPA plus the folding set:
+    /// norm-folded QKV concat, qk-norm/RoPE/append cluster, norm-folded
+    /// gate+up+SwiGLU, residual-folded matvecs). Selectable ONLY on
     /// the packed (q4g64) pipeline — the bf16 backend runs the naive
     /// structure permanently (it is the Phase 2 correctness artifact).
     /// FUSED is the packed default since P4-4 (spec D4); naive stays
@@ -88,8 +89,9 @@ public final class GPUModel {
     /// Compute dispatches encoded by the most recent `step`, measured at the
     /// dispatchThreads call sites (P2-5, spec D5): naive path 591 at the
     /// pinned dims with logits (21/layer × 28 + embedding + final norm +
-    /// lm_head), 589 without the logits tail; fused path 227 with logits
-    /// (8/layer × 28 + the same head/tail — P4-3, ≤300 gate), 225 without.
+    /// lm_head), 589 without the logits tail; fused path 171 with logits
+    /// (6/layer × 28 + the same head/tail — P4-6, ≤300 gate; was 227 at
+    /// P4-3), 169 without.
     public private(set) var lastStepDispatchCount: Int?
 
     /// Tokens whose KV entries currently occupy cache positions
@@ -104,8 +106,9 @@ public final class GPUModel {
     private let quantKernels: QuantKernels?
     /// Present exactly on the fused kernel path (P4-2, spec D4).
     private let fusedSDPA: FusedSDPAKernel?
-    /// Present exactly on the fused kernel path (P4-3, spec D3): the folding
-    /// set that takes the packed pipeline to 8 dispatches per layer.
+    /// Present exactly on the fused kernel path (P4-3/P4-6, spec D3 + the
+    /// 2026-09-12 addendum): the folding set that takes the packed pipeline
+    /// to 6 dispatches per layer.
     private let foldedKernels: FoldedKernels?
     private let dispatchCounter = DispatchCounter()
 
@@ -171,9 +174,9 @@ public final class GPUModel {
     /// alignment) already happened in `PackedCheckpoint`.
     ///
     /// - Parameter kernelPath: kernel structure (P4-2/P4-4, spec D4).
-    ///   `.fused` (the default since P4-4) runs the Phase 4 8-dispatch
-    ///   folded layer; `.naive` selects the Phase 2/3 21-dispatch structure
-    ///   for the P4-5 before/after row.
+    ///   `.fused` (the default since P4-4) runs the Phase 4 6-dispatch
+    ///   folded layer (P4-6); `.naive` selects the Phase 2/3 21-dispatch
+    ///   structure for the in-session before/after rows.
     public convenience init(
         packed: PackedCheckpoint, config: ModelConfig, context: MetalContext,
         residency: WeightsResidency = .mmap, maxContext: Int,
@@ -503,7 +506,9 @@ public final class GPUModel {
 
     /// fp32 view of the final-norm output — only meaningful when the most
     /// recent `step` had `computeLogits: true` (the buffer otherwise holds
-    /// the last layer's post-attention norm).
+    /// stale data: the last layer's post-attention norm on the naive path,
+    /// a previous logits step's final norm on the fused path, where the
+    /// P4-6 folds compute block norms in registers and never write it).
     func finalNormOutput() -> [Float] {
         readF16(normed, count: config.hiddenSize)
     }
@@ -706,12 +711,16 @@ public final class GPUModel {
             count: hidden, output: hiddenA)
     }
 
-    /// P4-3 (spec D3): the folded layer — 8 dispatches. Input norm →
-    /// matvec3 (QKV concat) → fused qk-norm/RoPE/append cluster → fused
-    /// SDPA → o_proj+residual → post-norm → gate+up+SwiGLU → down+residual.
-    /// Every fold keeps the naive chain's fp16-boundary/fp32-accumulate
-    /// semantics (FoldedKernels doc); the residual ping-pong (hiddenA →
-    /// hiddenB → hiddenA) is unchanged, so the Tier-E hook points hold.
+    /// P4-3 (spec D3) + P4-6 (the 2026-09-12 addendum's norm→matvec folds):
+    /// the folded layer — 6 dispatches. Norm+matvec3 (input norm folded
+    /// into the QKV concat) → fused qk-norm/RoPE/append cluster → fused
+    /// SDPA → o_proj+residual → norm+gate+up+SwiGLU (post-norm folded) →
+    /// down+residual. Every fold keeps the naive chain's fp16-boundary/
+    /// fp32-accumulate semantics (FoldedKernels doc); the residual
+    /// ping-pong (hiddenA → hiddenB → hiddenA) is unchanged, so the Tier-E
+    /// hook points hold. The norm-folded dispatches encode under the
+    /// `.matvec` attribution class — the block-norm boundary is no longer
+    /// sliceable (spec D5), so its time rides the matvec class from P4-6 on.
     private func encodeFoldedLayer(
         refs: LayerRefs, layer: Int, position: Int,
         encoderFor: (KernelClass) throws -> MTLComputeCommandEncoder
@@ -726,17 +735,14 @@ public final class GPUModel {
         let qkvBuf = qkvBuf!
 
         // h = hiddenA on entry. Attention half: hiddenB = h + attn(norm(h)).
-        try decodeKernels.encodeRMSNorm(
-            into: try encoderFor(.normElementwise), input: hiddenA,
-            weight: weights.buffer,
-            weightByteOffset: refs.inputNorm, rows: 1, dim: hidden,
-            eps: eps, output: normed)
-        try foldedKernels.encodeMatvec3(
+        try foldedKernels.encodeNormMatvec3(
             into: try encoderFor(.matvec),
             a: try q4Triplet(refs.qProj), outDimA: numHeads * headDim,
             b: try q4Triplet(refs.kProj), outDimB: kvHeads * headDim,
             c: try q4Triplet(refs.vProj), outDimC: kvHeads * headDim,
-            inDim: hidden, input: normed, output: qkvBuf)
+            inDim: hidden, input: hiddenA,
+            normWeight: weights.buffer, normByteOffset: refs.inputNorm,
+            eps: eps, output: qkvBuf)
         // Family order (PIN-1) inside the cluster: per-head Q/K RMSNorm,
         // THEN RoPE; k stores into the cache slot, v copies into its slot.
         try foldedKernels.encodeQKNormRoPEAppend(
@@ -756,15 +762,12 @@ public final class GPUModel {
             input: attnOut, residual: hiddenA, output: hiddenB)
 
         // MLP half: hiddenA = hiddenB + mlp(norm(hiddenB)).
-        try decodeKernels.encodeRMSNorm(
-            into: try encoderFor(.normElementwise), input: hiddenB,
-            weight: weights.buffer,
-            weightByteOffset: refs.postAttentionNorm, rows: 1, dim: hidden,
-            eps: eps, output: normed)
-        try foldedKernels.encodeGateUpSwiGLU(
+        try foldedKernels.encodeNormGateUpSwiGLU(
             into: try encoderFor(.matvec),
             gate: try q4Triplet(refs.gateProj), up: try q4Triplet(refs.upProj),
-            outDim: intermediate, inDim: hidden, input: normed, output: actBuf)
+            outDim: intermediate, inDim: hidden, input: hiddenB,
+            normWeight: weights.buffer, normByteOffset: refs.postAttentionNorm,
+            eps: eps, output: actBuf)
         try foldedKernels.encodeMatvecResidual(
             into: try encoderFor(.matvec), triplet: try q4Triplet(refs.downProj),
             outDim: hidden, inDim: intermediate,
