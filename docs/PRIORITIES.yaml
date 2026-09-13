@@ -1704,6 +1704,24 @@ tasks:
       frontiers (speed vs memory vs accuracy) and use-cases — headline
       better-than-both results plus how to push further given
       acceptable sacrifices or specific use-cases.
+      2026-09-13 (seeded from the P4-8 session — two survey axes for
+      the charter brief). (1) SAMPLING ARCHITECTURE: llama.cpp samples
+      CPU-side BECAUSE its rich sampler chain (grammars, penalties,
+      top-k/p) is CPU code — it pays the per-token logits readback P4-8
+      removed; MLX gets GPU sampling free from lazy device-side
+      composition over a device-resident logits handle (its async_eval
+      also pipelines step N+1's encode — bears on the P4-9 fixed-
+      overhead question). If samplers re-enter scope (non-goal today),
+      the device-vs-CPU fork and its interaction with the P4-8
+      exact-equality contract is a charter decision. (2) KV ALLOCATION
+      POLICY: MLX grows its cache in 256-token steps (footprint scales
+      with use); we and llama.cpp preallocate the full window (our
+      448 MiB dominates the 536 MB device footprint). Growth policy is
+      a memory-axis lever alongside KV-quantization re-entry; candidate
+      middle grounds: size-to-request-bound at decode start (no
+      mid-decode growth), or measure whether dirty-page accounting
+      already makes untouched cache pages free. Touching this touches
+      hard rule 4 — James-owned.
 
   - id: SPEC-P7
     rank: 23.2
