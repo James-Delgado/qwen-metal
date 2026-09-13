@@ -1437,7 +1437,8 @@ tasks:
   - id: P4-8
     rank: 18.8
     title: "GPU argmax on the GPU decode path (exact CPU-tie-break equality; kills the 605 KB/token logits readback)"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-13T04:45:59Z
     depends_on: []
     blocks: [P4-11]
     deliverable:
