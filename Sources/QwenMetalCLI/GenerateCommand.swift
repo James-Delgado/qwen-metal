@@ -168,8 +168,8 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
         // dispatch count. Engine-side aggregation (DecodeTimingCollector) so
         // the Phase 2 app reports the same numbers.
         var collector = DecodeTimingCollector()
-        let onStep: ((Int, [Float], Int) -> Void)? = gpuModel.map { gpu in
-            { _, _, _ in
+        let onToken: ((Int, Int) -> Void)? = gpuModel.map { gpu in
+            { _, _ in
                 if let timing = gpu.lastStepTiming,
                    let dispatches = gpu.lastStepDispatchCount {
                     collector.append(TokenStepRecord(
@@ -178,11 +178,14 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
             }
         }
 
+        // P4-8: token-only decode — the GPU backend selects each token
+        // on-GPU (4-byte readback); the CPU backend's default is unchanged
+        // (CPU argmax over its own logits).
         let decodeStart = Date()
         let generated = try DecodeLoop(model: model, maxContext: contextLimit)
-            .generate(
+            .generateTokens(
                 promptIds: promptIds, maxNewTokens: maxTokens,
-                eosTokenIds: eosTokenIds, onStep: onStep)
+                eosTokenIds: eosTokenIds, onToken: onToken)
         let decodeSeconds = Date().timeIntervalSince(decodeStart)
 
         print(tokenizer.decode(generated, skipSpecialTokens: true))

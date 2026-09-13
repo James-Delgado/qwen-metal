@@ -7,6 +7,18 @@ public protocol NextTokenLogitsSource {
     var vocabSize: Int { get }
     /// Full-vocab fp32 logits for the LAST position of `ids`.
     func lastPositionLogits(ids: [Int]) throws -> [Float]
+    /// The greedy next token for the LAST position of `ids` — MUST equal
+    /// `Argmax.firstIndex(lastPositionLogits(ids:))` exactly (the P4-8
+    /// exact-equality contract; lowest index wins ties). The default does
+    /// literally that; `GPUModel` overrides it to run the argmax reduction
+    /// on-GPU and read back 4 bytes instead of the full-vocab logits.
+    func nextGreedyToken(ids: [Int]) throws -> Int
+}
+
+extension NextTokenLogitsSource {
+    public func nextGreedyToken(ids: [Int]) throws -> Int {
+        Argmax.firstIndex(try lastPositionLogits(ids: ids))
+    }
 }
 
 /// Errors from the decode loop's input validation (phase-0-1.md CLI edge
@@ -75,6 +87,50 @@ public struct DecodeLoop {
         onStep: ((Int, [Float], Int) -> Void)? = nil,
         shouldStop: (() -> Bool)? = nil
     ) throws -> [Int] {
+        var lastLogits: [Float] = []
+        return try runLoop(
+            promptIds: promptIds, maxNewTokens: maxNewTokens,
+            eosTokenIds: eosTokenIds, shouldStop: shouldStop,
+            nextToken: { ids in
+                lastLogits = try model.lastPositionLogits(ids: ids)
+                return Argmax.firstIndex(lastLogits)
+            },
+            didAppend: onStep.map { onStep in
+                { step, token in onStep(step, lastLogits, token) }
+            })
+    }
+
+    /// P4-8: the production free-running form — token selection happens in
+    /// the model (`nextGreedyToken`; on the GPU backend the argmax reduction
+    /// runs on-GPU and 4 bytes come back instead of the full-vocab logits).
+    /// Token-identical to `generate` by the exact-equality contract;
+    /// `generate` stays as the logits-observing loop for the oracle suites,
+    /// the free-run report harness, and any caller that needs logits.
+    /// - Parameter onToken: called per step with (stepIndex, chosenToken),
+    ///   at the same point in the loop as `generate`'s `onStep`.
+    public func generateTokens(
+        promptIds: [Int],
+        maxNewTokens: Int,
+        eosTokenIds: Set<Int> = [],
+        onToken: ((Int, Int) -> Void)? = nil,
+        shouldStop: (() -> Bool)? = nil
+    ) throws -> [Int] {
+        try runLoop(
+            promptIds: promptIds, maxNewTokens: maxNewTokens,
+            eosTokenIds: eosTokenIds, shouldStop: shouldStop,
+            nextToken: { ids in try model.nextGreedyToken(ids: ids) },
+            didAppend: onToken)
+    }
+
+    /// The one loop body both entry points share — validation and every stop
+    /// condition (shouldStop, EOS, maxNewTokens, context full) live here
+    /// exactly once, so the logits path and the token path cannot drift.
+    private func runLoop(
+        promptIds: [Int], maxNewTokens: Int, eosTokenIds: Set<Int>,
+        shouldStop: (() -> Bool)?,
+        nextToken: ([Int]) throws -> Int,
+        didAppend: ((Int, Int) -> Void)?
+    ) throws -> [Int] {
         guard !promptIds.isEmpty else { throw DecodeError.emptyPrompt }
         guard promptIds.count < maxContext else {
             throw DecodeError.promptTooLong(
@@ -88,11 +144,10 @@ public struct DecodeLoop {
         var generated: [Int] = []
         for step in 0..<maxNewTokens {
             if shouldStop?() == true { break }
-            let logits = try model.lastPositionLogits(ids: ids)
-            let token = Argmax.firstIndex(logits)
+            let token = try nextToken(ids)
             generated.append(token)
             ids.append(token)
-            onStep?(step, logits, token)
+            didAppend?(step, token)
             if eosTokenIds.contains(token) { break }
             if ids.count >= maxContext { break }
         }

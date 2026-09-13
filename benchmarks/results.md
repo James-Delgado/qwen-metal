@@ -525,6 +525,25 @@ verdicts are P4-11's on-device.
 | 2026-09-12 | Apple M2 Pro (Mac, dev machine) | decode-essay (84) | 640 (cap) | 26.55 | 26.83 | 0.290 | 171 | 37.17 (overall 37.13) | 26.91 / 30.00 / 30.37 / 30.96 | 0 (n=384) | PROVISIONAL, burst, warm, kernels FUSED (P4-6 structure) — the same-session "before" reference. Reproduces the P4-6 row (37.10) to 0.2%. |
 | 2026-09-12 | Apple M2 Pro (Mac, dev machine) | decode-essay (84) | 640 (cap) | 20.41 | 20.71 | 0.296 | 199 | 48.05 (overall 48.07) | 20.81 / 21.24 / 21.30 / 21.32 | 0 (n=384) | PROVISIONAL, burst, warm, kernels FUSED (P4-7 split-K SDPA), dev-loop sanity only. vs same-session before: window 48.05 vs 37.17 tok/s (+29%), median GPU 26.55 → 20.41 ms (−6.1 ms at window depth vs −1.7 ms at shallow attribution depth — attention time scales with cache depth, so the occupancy fix pays more where it matters); wall−GPU 0.290 → 0.296 ms at 171→199 dispatches (the +28 reduce dispatches cost ~6 µs wall on Mac). Distribution TIGHTENED: max/p50 1.03 vs 1.15. Output coherent (same computing-history essay species). |
 
+### 2026-09-13 — Mac P4-8 row (PROVISIONAL): GPU argmax on the decode path, 200 dispatches/token
+
+P4-8 (iterate round): the free-running GPU decode loop now selects each
+token on-GPU (ArgmaxKernel, exact-equality contract vs CPU
+`Argmax.firstIndex` — pinned by test, no tolerance) and reads back 4
+bytes instead of the ~605 KB full-vocab logits. GPU work per token is
+unchanged except one added ~µs argmax dispatch (199 → 200 measured), so
+no attribution (DIAGNOSTIC) row: kernel classes are untouched and the
+removed cost lived CPU-side between command buffers. Same machine,
+protocol, artifact (d073af49…), and command as the P4-7 decode row —
+the comparison below is CROSS-SESSION (directional only; the on-device
+gate verdicts are P4-11's). The removed CPU-side cost was measured at
+~1.31 ms/token on-device (P4-5 span−wall) vs only ~0.1–0.2 ms on Mac,
+so the Mac delta is expectedly modest.
+
+| Date | Device | Prompt (tokens) | Generated | Median GPU ms/tok | Median wall ms/tok | Median wall−GPU ms | Dispatches/tok | Window tok/s (128–512) | Latency p50/p95/p99/max ms (window) | Stalls | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-13 | Apple M2 Pro (Mac, dev machine) | decode-essay (84) | 640 (cap) | 20.34 | 20.67 | 0.321 | 200 | 48.40 (overall 48.40) | 20.67 / 21.10 / 21.17 / 21.26 | 0 (n=384) | PROVISIONAL, burst, warm, kernels FUSED (P4-7 structure + P4-8 GPU argmax), dev-loop sanity only. vs the P4-7 row (CROSS-session): window 48.05 → 48.40 tok/s (+0.9%), window span p50 20.81 → 20.67 ms (−0.14 ms — the CPU-side readback+argmax leaving the loop, Mac-sized as expected); median GPU 20.41 → 20.34 ms (flat within noise: GPU work unchanged); wall−GPU 0.296 → 0.321 ms at 199→200 dispatches (the argmax dispatch now rides inside the command buffer). Output coherent (same computing-history essay species). |
+
 ## Phase 0a — energy dry-run + corrections (PROVISIONAL)
 
 ### 2026-08-22 — sustained battery-delta cycles, iPhone 15 Pro (method VALIDATED)

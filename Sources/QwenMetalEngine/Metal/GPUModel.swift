@@ -12,8 +12,11 @@ import QuartzCore
 ///
 /// Precision per spec D2: fp16 activations between kernels, fp32 accumulation
 /// inside, fp32 scores/softmax and logits; the RoPE kernel consumes the CPU
-/// `RoPE`'s fp32 tables, and argmax stays CPU-side in the shared `DecodeLoop`
-/// — GPU and CPU decode share one tie-break.
+/// `RoPE`'s fp32 tables. Argmax originally stayed CPU-side in the shared
+/// `DecodeLoop`; since P4-8 (design change approved 2026-09-12) the
+/// free-running decode path selects the token on-GPU under an exact-equality
+/// contract with `Argmax.firstIndex` — same tie-break, pinned by test — while
+/// `step(computeLogits:)` keeps returning full logits for the oracle suites.
 ///
 /// Weights come in exactly two formats (`WeightsFormat`), both consumed in
 /// registers (hard rule 1, nothing materialized):
@@ -91,7 +94,9 @@ public final class GPUModel {
     /// pinned dims with logits (21/layer × 28 + embedding + final norm +
     /// lm_head), 589 without the logits tail; fused path 199 with logits
     /// (7/layer × 28 + the same head/tail — P4-7's two-pass SDPA, ≤300
-    /// gate; was 171 at P4-6, 227 at P4-3), 197 without.
+    /// gate; was 171 at P4-6, 227 at P4-3), 197 without. The P4-8
+    /// token-selecting step encodes one extra dispatch (the argmax
+    /// reduction) on top of the with-logits count: fused 200 measured.
     public private(set) var lastStepDispatchCount: Int?
 
     /// Tokens whose KV entries currently occupy cache positions
@@ -110,6 +115,9 @@ public final class GPUModel {
     /// 2026-09-12 addendum): the folding set that, with the two-pass SDPA
     /// (P4-7), takes the packed pipeline to 7 dispatches per layer.
     private let foldedKernels: FoldedKernels?
+    /// P4-8: on-GPU token selection for the free-running decode path (both
+    /// kernel paths, both formats — it reads only the fp32 logits buffer).
+    private let argmaxKernel: ArgmaxKernel
     private let dispatchCounter = DispatchCounter()
 
     private let embeddingRef: MatrixRef
@@ -144,6 +152,7 @@ public final class GPUModel {
     // [numHeads + 2·kvHeads, headDim] (q heads, then k, then v).
     private let qkvBuf: MTLBuffer?
     private let logitsBuf: MTLBuffer    // fp32 [vocab]
+    private let argmaxBuf: MTLBuffer    // u32 [1] — P4-8 selected-token slot
     private let cosTable: MTLBuffer     // fp32 [maxContext·headDim/2]
     private let sinTable: MTLBuffer     // fp32 [maxContext·headDim/2]
 
@@ -301,11 +310,13 @@ public final class GPUModel {
         quantKernels = packed == nil ? nil : try QuantKernels(context: context)
         fusedSDPA = kernelPath == .fused ? try FusedSDPAKernel(context: context) : nil
         foldedKernels = kernelPath == .fused ? try FoldedKernels(context: context) : nil
+        argmaxKernel = try ArgmaxKernel(context: context)
         decodeKernels.dispatchCounter = dispatchCounter
         attentionKernels.dispatchCounter = dispatchCounter
         quantKernels?.dispatchCounter = dispatchCounter
         fusedSDPA?.dispatchCounter = dispatchCounter
         foldedKernels?.dispatchCounter = dispatchCounter
+        argmaxKernel.dispatchCounter = dispatchCounter
         kvCache = try KVCache(
             device: context.device, layers: config.numHiddenLayers,
             kvHeads: kvHeads, maxContext: maxContext, headDim: headDim)
@@ -347,6 +358,7 @@ public final class GPUModel {
             qkvBuf = try makeBuffer(bytes: (numHeads + 2 * kvHeads) * headDim * 2)
         }
         logitsBuf = try makeBuffer(bytes: config.vocabSize * 4)
+        argmaxBuf = try makeBuffer(bytes: 4)
 
         // The GPU RoPE kernel consumes the CPU reference's fp32 tables —
         // bit-identical angles by construction (P2-2).
@@ -385,6 +397,32 @@ public final class GPUModel {
         lastStepDispatchCount = dispatchCounter.count
         cachedTokens.append(token)
         return computeLogits ? readLogits() : nil
+    }
+
+    /// P4-8: one decode step that also SELECTS the next token on-GPU. The
+    /// forward pass, final norm + lm_head, and the argmax reduction all
+    /// encode into the same single command buffer (spec D5 — dual timing and
+    /// the dispatch count ride along; the argmax is one extra dispatch), and
+    /// the per-token readback is 4 bytes instead of the ~605 KB full-vocab
+    /// logits. Exact-equality contract (DECISIONS.md 2026-09-12): the
+    /// returned token is precisely `Argmax.firstIndex` of the logits this
+    /// step computed — lowest index wins ties, no tolerance constant. The
+    /// logits stay in `logitsBuf` untouched; `step(computeLogits:)` remains
+    /// the oracle suites' full-logits path.
+    public func stepSelectingToken(token: Int) throws -> Int {
+        let position = try validateStep(token: token)
+        dispatchCounter.reset()
+        lastStepTiming = try context.timedDispatch { encoder in
+            try encodeForward(
+                token: token, position: position,
+                computeLogits: true) { _ in encoder }
+            try argmaxKernel.encodeArgmax(
+                into: encoder, values: logitsBuf, count: config.vocabSize,
+                output: argmaxBuf)
+        }
+        lastStepDispatchCount = dispatchCounter.count
+        cachedTokens.append(token)
+        return Int(argmaxBuf.contents().load(as: UInt32.self))
     }
 
     /// P4-1 (phase-4.md D1): the DIAGNOSTIC attribution step. Runs the same
@@ -815,5 +853,23 @@ extension GPUModel: NextTokenLogitsSource {
         // The loop ran at least once (cachedTokens.count < ids.count holds in
         // both branches above) and its last iteration computed logits.
         return logits!
+    }
+
+    /// P4-8: the on-GPU token-selection form of `lastPositionLogits` — same
+    /// incremental-prefix contract, but the last step runs
+    /// `stepSelectingToken` so only the chosen token id crosses back to the
+    /// CPU. Token-identical to the default implementation (CPU argmax over
+    /// `lastPositionLogits`) by the exact-equality contract, pinned by test.
+    public func nextGreedyToken(ids: [Int]) throws -> Int {
+        guard !ids.isEmpty else {
+            throw ModelError.badInput(detail: "nextGreedyToken of an empty sequence")
+        }
+        if !(ids.count > cachedTokens.count && ids.starts(with: cachedTokens)) {
+            reset()
+        }
+        for i in cachedTokens.count..<(ids.count - 1) {
+            try step(token: ids[i], computeLogits: false)
+        }
+        return try stepSelectingToken(token: ids[ids.count - 1])
     }
 }

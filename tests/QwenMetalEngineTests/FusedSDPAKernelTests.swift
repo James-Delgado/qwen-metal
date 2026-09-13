@@ -834,5 +834,24 @@ final class FusedPathRealArtifactSmokeTests: XCTestCase {
         XCTAssertTrue(generated.allSatisfy { (0..<config.vocabSize).contains($0) },
                       "generated ids out of vocab range: \(generated)")
         print("FusedPathRealArtifactSmokeTests: prompt \(prompt.inputIds) -> \(generated)")
+
+        // P4-8, real dims: the production token-only loop (on-GPU argmax,
+        // 4-byte readback) is token-identical to the logits loop above, and
+        // the selecting step MEASURES 200 dispatches (199 + the argmax
+        // reduction) — still under the pre-committed ≤300 gate.
+        fused.reset()
+        let viaTokens = try DecodeLoop(model: fused, maxContext: 64)
+            .generateTokens(
+                promptIds: prompt.inputIds,
+                maxNewTokens: 8,
+                eosTokenIds: [151645, 151643])
+        XCTAssertEqual(
+            viaTokens, generated,
+            "P4-8 exact-equality contract: GPU-argmax free-run must be "
+                + "token-identical to the CPU-argmax free-run")
+        let selectingDispatches = try XCTUnwrap(fused.lastStepDispatchCount)
+        XCTAssertEqual(selectingDispatches, 200)
+        XCTAssertLessThanOrEqual(selectingDispatches, 300,
+                                 "pre-committed Phase 4 dispatch gate")
     }
 }

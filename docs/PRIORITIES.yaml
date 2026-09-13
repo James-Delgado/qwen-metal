@@ -1437,8 +1437,9 @@ tasks:
   - id: P4-8
     rank: 18.8
     title: "GPU argmax on the GPU decode path (exact CPU-tie-break equality; kills the 605 KB/token logits readback)"
-    status: in_progress
+    status: done
     started_at: 2026-09-13T04:45:59Z
+    completed_at: 2026-09-13T17:34:09Z
     depends_on: []
     blocks: [P4-11]
     deliverable:
@@ -1455,6 +1456,20 @@ tasks:
       free-running decode loop switches to the GPU-selected token).
       Measured CPU-side loop cost ~1.31 ms/token (span - wall).
       Greedy only — no sampler scope (PLAN non-goals).
+      2026-09-13 (done): landed as Metal/ArgmaxKernel.swift (order-free
+      64-bit-key max reduction; NaN/zero handling in integer bit tests,
+      fast-math-immune; NaN-at-index-0 latch special-cased) +
+      GPUModel.stepSelectingToken/nextGreedyToken (same single command
+      buffer, 4-byte readback) + DecodeLoop.generateTokens (shared loop
+      core; CLI + BenchGenerationRunner switched — app/sustained loop
+      ride along). Oracle chain untouched; generate/computeLogits paths
+      verbatim. Exact-equality pinned: ArgmaxKernelTests (8, incl.
+      10-seed arbitrary-bit-pattern sweep) + token-identity tests on
+      tiny bf16, tiny fused, and the real artifact. NEW measured pins:
+      selecting step tiny naive 25, tiny fused 11, real 200 (<=300 gate;
+      existing pins untouched). Release suite 411 tests / 3 opt-in
+      skips / 0 failures. Mac row: window 48.05 -> 48.40 tok/s
+      (cross-session, PROVISIONAL). See DECISIONS.md 2026-09-13 P4-8.
 
   - id: P4-9
     rank: 18.9

@@ -3274,3 +3274,87 @@ the o_proj matvec load, or a single-pass shallow-depth variant, if
 P4-11's attribution says the +28 dispatches matter — pins red-first if
 taken). Naive path and bf16 backend untouched (frozen Phase 2/3
 artifacts, spec D4). No other follow-ups discovered.
+
+## 2026-09-13 — P4-8: GPU argmax on the GPU decode path — 4-byte/token readback, 200 dispatches, exact CPU-tie-break equality
+
+**What landed.** The free-running GPU decode loop now selects each token
+on-GPU (implements the design change James approved 2026-09-12, which
+amended the Phase 2 "argmax stays CPU-side" choice for the GPU pipeline
+only). New `Metal/ArgmaxKernel.swift`: one dispatch, one threadgroup;
+each element maps to a 64-bit key (monotonic unsigned image of the fp32
+value in the high word, `~index` in the low word) and the kernel takes
+the MAX key — associative + commutative, so the result is bitwise
+deterministic under ANY reduction order (stronger than the P4-2/P4-7
+fixed-order arguments). `GPUModel.stepSelectingToken` encodes forward +
+final norm + lm_head + argmax into the SAME single command buffer (spec
+D5; dual timing and the dispatch count ride along) and reads back one
+u32 instead of the ~605 KB fp32 logits.
+
+**Exact-equality contract, no new constants (hard rule 6 untouched).**
+The pin is `==` vs CPU `Argmax.firstIndex` — the left-fold
+`values[i] > values[best]` scan. Its exact semantics, reproduced
+order-free: ties → lowest index; +0.0/−0.0 compare equal (canonicalized
+before the bit mapping, which would otherwise order them); a NaN never
+wins EXCEPT `values[0]` NaN, which the scan latches forever (index 0 is
+`best` by initialization and nothing compares greater than NaN) —
+special-cased at the result write. NaN/zero classification is done with
+integer bit tests, immune to Metal's default fast-math. Pinned by
+`ArgmaxKernelTests` (8 tests, held first run): crafted ties across
+grid-stride boundaries, NaN at 0 / mid / all-NaN / negative payloads,
+±inf, signed zeros, sizes 1…4097 straddling every partition edge,
+full-vocab 151936, and a 10-seed × 8192-element ARBITRARY-BIT-PATTERN
+sweep (uniform u32 reinterpreted as fp32) vs the CPU scan.
+
+**Wiring.** `NextTokenLogitsSource` gains a `nextGreedyToken(ids:)`
+requirement with a default implementation (CPU argmax over
+`lastPositionLogits` — `QwenModel` and the whole oracle chain
+untouched); `GPUModel` overrides it with the same incremental-prefix
+cache contract; `DecodeLoop.generateTokens` is the token-only loop
+sharing ONE private core with `generate` (every stop condition lives
+exactly once, so the paths cannot drift), and the production callers —
+CLI `generate` and `BenchGenerationRunner` (app + sustained loop) —
+switched to it (they never read the logits). `generate` +
+`step(computeLogits:)` remain verbatim for the Tier-E suites and the
+free-run report harness; a routing test proves the token path never
+fetches full logits, and pipeline tests pin token-identity of the two
+paths on tiny bf16, tiny packed/fused, AND the real artifact
+(GPU-argmax free-run == CPU-argmax free-run, token for token).
+
+**Dispatch pins.** Existing pins untouched (`step(computeLogits:)`
+counts unchanged — nothing went red). NEW measured pins for the
+selecting step (+1 argmax dispatch): tiny bf16 naive 24 → **25**, tiny
+packed fused 10 → **11**, real dims 199 → **200** with the ≤300 gate
+still met with margin. On-device expectation: the +1 dispatch costs
+~1.5 µs at the P4-5 slope vs the ~1.31 ms/token CPU-side readback+scan
+it removes (measured, P4-5 span−wall); gate verdicts remain P4-11's.
+
+**Verification (quoted).** Full release suite (`swift test -c release`,
+no skip flags): **"Executed 411 tests, with 3 tests skipped and 0
+failures (0 unexpected) in 1853.639 (1853.906) seconds"** (+16 tests vs
+P4-7's 395 at like-for-like scope; same 3 opt-in skips; same ~31 min
+pace). CLI end-to-end on the production path: coherent text, **"median
+GPU 19.40 ms, median wall 19.70 ms, median wall-GPU 0.304 ms, 200
+dispatches/token"**. Mac protocol row (decode-essay 84, 640 cap,
+PROVISIONAL, CROSS-session vs P4-7): window **48.05 → 48.40 tok/s**,
+window span p50 20.81 → 20.67 ms (−0.14 ms — the CPU-side cost leaving
+the loop, Mac-sized as expected; the on-device stake is the ~1.31 ms),
+median GPU flat (20.41 → 20.34 ms), wall−GPU 0.296 → 0.321 ms at
+199→200. benchmarks/results.md 2026-09-13 section.
+
+**Session observation (honest record, cost James's wall-clock).** Three
+full-suite background runs appeared to hang deterministically at the
+same test. A `sample(1)` of the "hung" process proved NO hang existed:
+the suite was healthily executing the CPU-quant teacher-forced suite (a
+multi-minute single test; ~13 GB fp32 oracle footprint — the documented
+macOS test-only carve-out), while `swift test`'s block-buffered stdout
+froze every log tail at the byte-identical flush boundary — a
+convincing counterfeit of a deterministic deadlock. The real
+interrupters were overnight sleep suspension and background-task kills.
+Fix was operational: run detached under `caffeinate` with a PTY
+(`script -q`) for line-buffered logs. Noted for future long suites; no
+engine follow-up warranted.
+
+**Follow-ups:** none new. P4-9 (overhead anatomy) is the next ready
+task and now the sole remaining gate lever for the ≤1.2 ms wall−GPU
+question — P4-8 deliberately does not move wall−GPU (its win is
+span-side). P4-10 seeds unchanged.

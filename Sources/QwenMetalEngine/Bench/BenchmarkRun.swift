@@ -125,11 +125,13 @@ public struct BenchGenerationRunner {
         var collector = DecodeTimingCollector()
         var prefillSeconds: Double?
         let start = Date()
+        // P4-8: the token-only path — on the GPU backend the argmax runs
+        // on-GPU and no full-vocab logits readback happens per token.
         let generated = try DecodeLoop(model: model, maxContext: maxContext)
-            .generate(
+            .generateTokens(
                 promptIds: promptIds, maxNewTokens: maxNewTokens,
                 eosTokenIds: eosTokenIds,
-                onStep: { step, _, token in
+                onToken: { step, token in
                     if step == 0 {
                         prefillSeconds = Date().timeIntervalSince(start)
                     }

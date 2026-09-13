@@ -388,6 +388,42 @@ final class GPUQuantModelTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(timing.wallDuration, timing.gpuDuration)
     }
 
+    // MARK: - P4-8 on-GPU token selection (packed/fused — the production path)
+
+    /// The P4-8 exact-equality contract on the PRODUCTION pipeline (packed +
+    /// fused): `stepSelectingToken` returns exactly `Argmax.firstIndex` of
+    /// the same step's logits, and the selecting step measures the logits
+    /// step + 1 dispatch (10 → 11; measured, P2-5 rule).
+    func testFusedSelectingStepMatchesCPUArgmaxAndMeasuresPlusOne() throws {
+        let logitsModel = try makeTinyPackedModel(kernelPath: .fused)
+        let selectingModel = try makeTinyPackedModel(kernelPath: .fused)
+
+        var token = 1
+        for step in 0..<4 {
+            let logits = try XCTUnwrap(
+                try logitsModel.step(token: token, computeLogits: true))
+            let cpuChoice = Argmax.firstIndex(logits)
+            let gpuChoice = try selectingModel.stepSelectingToken(token: token)
+            XCTAssertEqual(
+                gpuChoice, cpuChoice,
+                "step \(step): fused-path GPU-selected token must equal CPU argmax")
+            XCTAssertEqual(selectingModel.lastStepDispatchCount, 11)
+            token = cpuChoice
+        }
+    }
+
+    /// `generateTokens` (the production loop since P4-8) is token-identical
+    /// to `generate` over the fused packed backend.
+    func testGenerateTokensMatchesGenerateOnFusedPackedBackend() throws {
+        let viaLogits = try makeTinyPackedModel()
+        let viaTokens = try makeTinyPackedModel()
+        let reference = try DecodeLoop(model: viaLogits, maxContext: 16)
+            .generate(promptIds: [1, 2], maxNewTokens: 6)
+        let tokens = try DecodeLoop(model: viaTokens, maxContext: 16)
+            .generateTokens(promptIds: [1, 2], maxNewTokens: 6)
+        XCTAssertEqual(tokens, reference)
+    }
+
     /// The incremental-prefix contract holds bitwise on the fused path (the
     /// fused kernel is deterministic; FusedSDPAKernelTests pins that at the
     /// kernel level).
