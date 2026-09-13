@@ -1474,7 +1474,8 @@ tasks:
   - id: P4-9
     rank: 18.9
     title: "Overhead anatomy: dissect the ~1.17 ms fixed wall-GPU cost (encode vs commit->start vs completion-wakeup) — report"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-13T20:40:00Z
     depends_on: []
     blocks: [P4-11]
     deliverable:
