@@ -345,6 +345,20 @@ final class GPUModelTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(model.lastCallSpan).stepCount, 4)
     }
 
+    /// A call that throws mid-way (context full at step 5 with
+    /// maxContext 4) must leave NO span — a stale previous-call span
+    /// read after a failure would be reported as if it were current.
+    func testCallSpanNilAfterThrowingCall() throws {
+        let model = try makeTinyModel(maxContext: 4)
+        _ = try model.lastPositionLogits(ids: [1, 2, 3])
+        XCTAssertNotNil(model.lastCallSpan)
+        XCTAssertThrowsError(
+            _ = try model.lastPositionLogits(ids: [1, 2, 3, 4, 5]))
+        XCTAssertNil(
+            model.lastCallSpan,
+            "a failed call clears the span instead of leaving a stale one")
+    }
+
     // MARK: - Context limit (spec edge case 5, pipeline level)
 
     func testStepAtMaxContextThrowsContextFull() throws {

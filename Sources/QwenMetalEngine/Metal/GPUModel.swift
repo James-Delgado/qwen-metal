@@ -105,7 +105,8 @@ public final class GPUModel {
     /// call of a generation processes the whole prompt, so its span is the
     /// prefill span (callers capture it at that boundary; later decode
     /// calls overwrite it with their own one-step spans). nil before the
-    /// first call.
+    /// first call, and after a call that threw mid-way (cleared at call
+    /// entry — a failed call never leaves a stale span behind).
     public private(set) var lastCallSpan: ForwardCallSpan?
 
     /// Tokens whose KV entries currently occupy cache positions
@@ -892,7 +893,9 @@ extension GPUModel: NextTokenLogitsSource {
             reset()
         }
         // P5-1 (spec D1): the whole call is one dual-timed span — on the
-        // first call of a generation it is the prefill span.
+        // first call of a generation it is the prefill span. Cleared up
+        // front so a mid-call throw leaves nil, never a stale span.
+        lastCallSpan = nil
         let spanWallStart = CACurrentMediaTime()
         var spanGPUSeconds = 0.0
         var spanDispatches = 0
@@ -928,7 +931,9 @@ extension GPUModel: NextTokenLogitsSource {
         // P5-1 (spec D1): span the call — through the selecting step's
         // 4-byte argmax readback, so the span ends when the chosen token
         // (the last prompt position's output on a prefill call) is
-        // available on the CPU.
+        // available on the CPU. Cleared up front so a mid-call throw
+        // leaves nil, never a stale span.
+        lastCallSpan = nil
         let spanWallStart = CACurrentMediaTime()
         var spanGPUSeconds = 0.0
         var spanDispatches = 0
