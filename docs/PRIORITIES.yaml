@@ -1829,6 +1829,44 @@ tasks:
       pre-committed tolerances first (hard rule 6) — quality gain is
       real but small (one ~2^-11 round per boundary); sweep ALL such
       sites in one pass, not piecemeal.
+      2026-09-14 (seeded by James, same session — context-axis survey,
+      requested appended in full). (4) TOKEN RE-INDEXING / CONTEXT
+      SCHEMES: split by whether a cached token's logical position
+      changes after its key is roped into the cache (we store keys
+      post-RoPE, so re-indexing needs a delta-rotation kernel).
+      RE-INDEXING: (a) context shift (llama.cpp --ctx-shift): on
+      window-full, drop oldest N and shift survivors' positions by -N
+      via a K-shift delta-rotation kernel (rotations compose — exact,
+      no pre-RoPE value needed); value = unbounded generation at fixed
+      memory WITHOUT re-prefill — the clearest chat-product payoff.
+      (b) StreamingLLM / attention sinks: pin first ~4 tokens + recent
+      window, dense in-cache positions; value = stable perplexity on
+      infinite streams with a small fixed cache; caveat = fluency
+      preservation, not recall of the evicted middle. (c) Self-Extend
+      grouped-position remapping: floor-divide far positions into the
+      trained range, exact positions for the recent neighborhood;
+      value = context extension without fine-tuning. (d) ADJACENT, not
+      re-indexing: PI/NTK/YaRN rescale the position→angle map (touches
+      RoPE.init + tables, not the cache); Qwen3 ships YaRN configs —
+      the vendor-blessed, lowest-risk extension route. CONTRAST GROUP
+      — eviction WITHOUT re-indexing (H2O, SnapKV, TOVA): drop
+      low-attention tokens, keep survivors' absolute positions (RoPE
+      tolerates position gaps); composes with the rope-into-cache fold
+      with ZERO re-rotation machinery — cheapest to implement, but
+      quality-vs-memory is a research bet. Axis mapping: memory
+      (bounded window caps the 448 MiB cache), sustained speed
+      (decode attention is linear in cached length), capability
+      (context extension for the §12 A20 ambitions). Session ranking
+      (agent assessment, for the charter): context shift + K-shift is
+      the chat-product workhorse and exactly verifiable under existing
+      methodology (rotation composition diffs bit-for-bit vs CPU
+      reference); YaRN is lowest-risk for longer context. INTERACTION
+      FLAG: a quantized key cannot be cheaply delta-rotated
+      (dequant→rotate→requant, or cache pre-RoPE keys instead) — any
+      KV-quantization re-entry and any re-indexing scheme must be
+      chartered TOGETHER, not sequentially. All of these touch hard
+      rule 4 (preallocation) and the non-goals list — James-owned.
+      Product-side counterpart: ideation doc §16 (2026-09-14).
 
   - id: SPEC-P7
     rank: 23.2
