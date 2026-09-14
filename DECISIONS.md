@@ -3777,3 +3777,44 @@ signals.
   starts):** six judgment-derived items + the judgment-not-gate
   structure are flagged in the gates entry above and reported
   item-by-item in the session report per AGENT_OPERATION.md step 11.
+
+## 2026-09-14 — Phase 5 veto window CLOSED: gates approved; prefill floor amended 90 → 135 tok/s (decided by James)
+
+James reviewed the flagged items from the Phase 5 gates entry above
+item-by-item in conversation (summaries, derivations, risks in both
+directions, and alternatives for each) and closed the window by
+decision — the Phase 3/4 precedent:
+
+- **Six items approved as committed:** the M=8 microbench gate point
+  with the reused 0.70 fraction (≥30.69 GB/s effective weight-stream,
+  on-device); the 24.0 tok/s decode regression floor (Phase 4 constant
+  reused, no new number); the prefill-span metric-of-record definition
+  (prompt-forward only, excluding the first decode forward,
+  dual-timed, legacy TTFT-style field retained); the ≤64 MiB
+  preallocated scratch budget + chunk-size-reported-not-pinned
+  structure; the hard-rule-1 threadgroup-staging clarification
+  (transient on-chip tiles inside the consuming kernel permitted;
+  DRAM materialization stays forbidden); and the structural decision
+  that prefill-vs-MLX is JUDGED at P5-EXEC with a per-component
+  headroom decomposition, not gated.
+- **One item amended — TIGHTENED, never loosened (hard rule 6
+  direction check: this is a pre-test raise inside the veto window;
+  no Phase 5 test exists yet):** the prefill floor moves from the
+  proposed ≥90 tok/s to **≥135 tok/s** (warm tiled prefill of
+  prefill-summarize, 852 HF tokens, prefill-span median of ≥3
+  same-session repeats, on-device at P5-5). Basis: ≈3× the 45.3 tok/s
+  sequential structural ceiling (3 × 45.3 = 135.9; committed at the
+  round 135) — the 2×-ceiling option was offered as the minimal
+  non-delivery tripwire and James chose the stricter alternative
+  explicitly presented alongside it. Rationale: bandwidth math says a
+  tiled path with batching genuinely engaged clears 135 with margin;
+  a landing between 90 and 135 would more likely signal a
+  half-engaged pipeline (e.g. batching in the GEMMs but a serialized
+  bottleneck elsewhere) than a hard hardware limit. The ≈370 MLX
+  comparison remains judged, not gated.
+
+Hard rule 6 now binds all of the above unmodified (135 is the number
+that never loosens). docs/phases/phase-5.md D7/exit-criteria and the
+P5-5 / SPEC-P5 backlog notes are updated to 135 with an amendment
+note pointing here; this entry is the binding record. P5-1 may
+proceed with no open questions on the gates.

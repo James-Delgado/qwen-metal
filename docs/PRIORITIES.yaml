@@ -1752,6 +1752,10 @@ tasks:
       hard-rule-1 threadgroup-staging clarification are flagged in the
       gates entry — veto window is before P5-EXEC dependency work
       starts.
+      2026-09-14 (veto window CLOSED, James): all seven items
+      approved; prefill floor AMENDED 90 -> 135 tok/s (~3x ceiling;
+      tightened pre-test, hard rule 6 direction verified). Binding
+      record: DECISIONS.md 2026-09-14 "Phase 5 veto window CLOSED".
 
   # ---------- Phase 5 build tasks (seeded 2026-09-14 by SPEC-P5; spec: docs/phases/phase-5.md) ----------
   - id: P5-1
@@ -1840,7 +1844,8 @@ tasks:
     est_complexity: medium
     notes: |
       Gates walked on-device (DECISIONS.md 2026-09-14 Phase 5 gates
-      entry): prefill floor >= 90 tok/s (span median of >=3), GEMM
+      entry + veto-close amendment): prefill floor >= 135 tok/s (span
+      median of >=3; amended 90 -> 135 at the veto close, James), GEMM
       microbench >= 30.69 GB/s at M=8 (197-matrix sweep), decode
       warm-burst window median >= 24.0 (regression tripwire). Also:
       sequential-vs-tiled before/after interleaved with bookends,

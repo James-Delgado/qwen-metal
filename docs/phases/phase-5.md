@@ -213,10 +213,13 @@ reported — the 2026-08-26 principle):
   (never gated).
 - **Prefill floor (on-device, P5-5):** warm tiled prefill of the pinned
   prefill-summarize prompt (852 HF tokens), D1 span, median of ≥3
-  repeats ≥ **90 tok/s** — 2× the 45.3 tok/s sequential structural
-  ceiling: a tiled path that cannot double what sequential could ever do
-  did not engage batching. Deliberately far below the ≈370 MLX
-  aspiration, which is judged, not gated.
+  repeats ≥ **135 tok/s** — ≈3× the 45.3 tok/s sequential structural
+  ceiling (amended from the proposed 90 = 2× at the veto walk,
+  TIGHTENED by James before any Phase 5 test existed; binding record:
+  DECISIONS.md 2026-09-14 "Phase 5 veto window CLOSED"). A tiled path
+  landing below 3× the ceiling more likely signals a half-engaged
+  pipeline than a hardware limit. Still deliberately far below the
+  ≈370 MLX aspiration, which is judged, not gated.
 - **Decode regression floor (on-device, P5-5):** fused decode warm-burst
   window median ≥ **24.0 tok/s** in the same session (the committed
   Phase 4 constant reused as a regression tripwire — decode measured
@@ -331,8 +334,9 @@ allocations.
   row, per-component headroom quantified (D7; staleness rule points the
   final head-to-head at Phase 6).
 - Pre-committed gates walked ✓ = microbench fraction (≥30.69 GB/s @
-  M=8), prefill floor (≥90 tok/s), decode regression (≥24.0 tok/s),
-  Tier-M/E + KV-contents correctness suites on the tiled path.
+  M=8), prefill floor (≥135 tok/s, as amended at the veto close),
+  decode regression (≥24.0 tok/s), Tier-M/E + KV-contents correctness
+  suites on the tiled path.
 - DECISIONS.md entries for every gate outcome, the before/after result,
   the judgment, and anything else decided/measured (standing
   discipline).
