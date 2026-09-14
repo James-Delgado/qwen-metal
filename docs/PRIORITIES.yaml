@@ -1728,7 +1728,8 @@ tasks:
   - id: SPEC-P5
     rank: 20
     title: "Write Phase 5 spec (tiled prefill GEMM) with pre-committed gates"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-14T19:23:00Z
     depends_on: [P4-EXEC]
     blocks: [P5-EXEC]
     deliverable:
