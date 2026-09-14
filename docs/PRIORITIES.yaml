@@ -1761,7 +1761,8 @@ tasks:
   - id: P5-1
     rank: 20.1
     title: "Prefill-span instrumentation (metric of record, dual-timed, dispatch count) + CLI/app surfacing + Mac sequential 'before' prefill row"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-14T20:11:24Z
     depends_on: [SPEC-P5]
     blocks: [P5-4]
     deliverable:
