@@ -3358,3 +3358,91 @@ engine follow-up warranted.
 task and now the sole remaining gate lever for the ≤1.2 ms wall−GPU
 question — P4-8 deliberately does not move wall−GPU (its win is
 span-side). P4-10 seeds unchanged.
+
+## 2026-09-13 — P4-9: overhead anatomy — the fixed wall−GPU cost is scheduling + wakeup latency, not submission work; ≤1.2 needs restructuring, not tweaks
+
+The measure-first dissection of the P4-5 affine overhead model
+(≈1.17 ms fixed/token + ≈1.5 µs/dispatch on-device). New DIAGNOSTIC
+instrumentation (production path untouched — P4-1 invariance
+precedent): `OverheadAnatomy` samples the wall clock at the
+encode-done and commit-returned boundaries and captures the command
+buffer's scheduling-stage timestamps, so wall−GPU splits into four
+spans that telescope to it exactly: **encode** (buffer creation +
+kernel encoding), **commit call**, **commit→GPU-start** (scheduling
+latency, subdivided by the driver's kernel-stage timestamps), and
+**completion wakeup** (GPU-end → `waitUntilCompleted` return).
+`MetalContext.anatomyDispatch` is `timedDispatch`'s twin with the
+extra samples; `GPUModel.anatomyStepSelectingToken` runs the P4-8
+selecting step verbatim through it (production timing fields cleared,
+never populated — diagnostic numbers are never rows). Sanity +
+production-invariance tests always run; the sweep is opt-in
+(`QWEN_OVERHEAD_ANATOMY=1`, release build — encode is host code).
+
+**Measurement (Mac PROVISIONAL, M2 Pro, release, real q4g64 artifact,
+four arms round-robin per token in ONE session, 60 steps/arm, medians;
+fused = production 200-dispatch selecting step, naive arm = 592):**
+
+| span | fused @200 | naive @592 | per-span affine |
+|---|---|---|---|
+| encode | 0.094 ms | 0.172 ms | **0.20 µs/dispatch** + ≈0.054 ms fixed |
+| commit call | 0.004 ms | 0.004 ms | fixed ≈0.004 ms |
+| commit→GPU-start | 0.074 ms | 0.073 ms | **fixed ≈0.073 ms** (schedule stage ≈0.021 inside) |
+| completion wakeup | 0.128 ms | 0.134 ms | **fixed ≈0.130 ms** |
+| TOTAL wall−GPU | 0.306 ms | 0.381 ms | 0.19 µs/dispatch + ≈0.267 ms fixed |
+
+Cross-checks: the interleaved production reference measured 0.309 ms
+median — the anatomy harness reproduces production overhead (no
+distortion); and the derived Mac affine (0.19 µs/dispatch, 0.267 ms
+intercept) retro-predicts every historical Mac wall−GPU point
+(0.391 ms @ 591 since P2-5; 0.296–0.321 ms @ 199–200 in the
+P4-7/P4-8 rows).
+
+**Findings.** (1) The per-dispatch slope lives ENTIRELY in encode —
+CPU-side encoder calls; commit→GPU-start and wakeup are
+dispatch-count-independent. (2) The fixed cost decomposes ≈49%
+completion wakeup + ≈27% commit→GPU-start scheduling + ≈20% fixed
+encode + ≈2% commit call — i.e. **≈77% of the fixed cost is OS/driver
+latency around an idle GPU** (in the serial submit→wait loop the GPU
+is idle during every one of these spans), not CPU work our code
+performs. (3) The named cheap submission experiment ran interleaved:
+**unretained-references command buffers buy nothing** (total 0.296 vs
+0.306 ms, inside noise; encode 0.091 vs 0.094) — per-encoder resource
+retention is not the cost. Untracked-hazard experiments target GPU
+serialization (P4-6 already measured: nothing), not wall−GPU, and were
+not repeated.
+
+**Verdict on the ≤1.2 ms gate (task question).** At 200 dispatches the
+device model predicts 1.17 + 0.30 ≈ 1.47 ms, so the gate needs
+≥0.27 ms off the FIXED cost. If the device fixed cost splits like the
+Mac's (the structural claim this anatomy supports; device confirmation
+below), only the ≈20% fixed-encode slice is submission-level
+reachable, and the one named cheap lever measured zero. **≤1.2 ms is
+NOT structurally passable by submission-level tweaks in the current
+serial submit→wait loop.** It IS structurally passable by loop
+restructuring: P4-8's GPU argmax leaves the selected token in a GPU
+buffer, so token N+1's command buffer could consume it on-GPU
+(embedding gather reading the argmax output) and be encoded+committed
+BEFORE token N completes — overlapping all four fixed spans with GPU
+execution and reading the 4-byte token back off the critical path.
+That is a decode-loop design change (stop-check semantics, overhead
+metric semantics under pipelining) → seeded as decision task **PD-1
+(owner: james)**, informed by the device anatomy. Caveat, honestly
+held: Mac driver/scheduler structure may not mirror iOS — the device
+split is confirmed at P4-11 via the app diagnostics export seeded as
+**OA-1** (blocks P4-11 so the session captures it).
+
+Numbers here are Mac PROVISIONAL diagnosis inputs, never benchmark
+rows; no gate value moved (hard rule 6).
+
+**Verification (quoted).** Full release suite (`swift test -c release`,
+no skip flags): **"Executed 416 tests, with 4 tests skipped and 0
+failures (0 unexpected) in 25436.599 (25436.670) seconds"** — +5 tests
+vs P4-8's 411, 4th skip = the new opt-in sweep. Honest wall-clock
+note: the 7.1 h runtime (vs P4-8's 31 min at identical scope) was
+environmental, not a regression — the CPU-quant teacher-forced
+quality-gate test alone took 22045 s under severe machine-wide swap
+pressure (23/24 GB swap in use, xctest peak footprint 19.5 GB;
+process sampled healthy at 78–102% CPU throughout, the documented
+counterfeit-hang signature). Every test that ran, including the four
+always-run anatomy tests, passed first try; the P4-9 diff touches no
+production or oracle code.

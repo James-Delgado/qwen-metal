@@ -425,6 +425,42 @@ public final class GPUModel {
         return Int(argmaxBuf.contents().load(as: UInt32.self))
     }
 
+    /// P4-9 (phase-4.md 2026-09-12 addendum): the DIAGNOSTIC overhead-
+    /// anatomy step. Runs the P4-8 token-selecting step verbatim — same
+    /// `encodeForward`, same argmax reduction, one command buffer — through
+    /// `MetalContext.anatomyDispatch`, so the wall−GPU overhead of a real
+    /// decode token splits into encode / commit / commit→GPU-start /
+    /// completion-wakeup spans. Opt-in only: the production decode path
+    /// never calls this and its numbers are never benchmark rows (P4-1
+    /// invariance precedent); `lastStepTiming`/`lastStepDispatchCount` are
+    /// cleared, not populated — the returned tuple carries the diagnostic
+    /// record and its measured dispatch count instead. Advances the cache
+    /// exactly like `stepSelectingToken`, and the returned token obeys the
+    /// same exact-equality contract (identical encode ⇒ identical logits ⇒
+    /// identical argmax).
+    public func anatomyStepSelectingToken(
+        token: Int, unretainedReferences: Bool = false
+    ) throws -> (token: Int, anatomy: OverheadAnatomy, dispatchCount: Int) {
+        let position = try validateStep(token: token)
+        dispatchCounter.reset()
+        let anatomy = try context.anatomyDispatch(
+            unretainedReferences: unretainedReferences
+        ) { encoder in
+            try encodeForward(
+                token: token, position: position,
+                computeLogits: true) { _ in encoder }
+            try argmaxKernel.encodeArgmax(
+                into: encoder, values: logitsBuf, count: config.vocabSize,
+                output: argmaxBuf)
+        }
+        let dispatchCount = dispatchCounter.count
+        lastStepTiming = nil
+        lastStepDispatchCount = nil
+        cachedTokens.append(token)
+        return (Int(argmaxBuf.contents().load(as: UInt32.self)), anatomy,
+                dispatchCount)
+    }
+
     /// P4-1 (phase-4.md D1): the DIAGNOSTIC attribution step. Runs the same
     /// forward — same kernels, same encode order, arithmetic bitwise
     /// identical to `step` — but splits the encoding into one command buffer

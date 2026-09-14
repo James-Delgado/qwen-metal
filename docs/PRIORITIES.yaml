@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-09-12
+last_updated: 2026-09-13
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -1474,8 +1474,9 @@ tasks:
   - id: P4-9
     rank: 18.9
     title: "Overhead anatomy: dissect the ~1.17 ms fixed wall-GPU cost (encode vs commit->start vs completion-wakeup) — report"
-    status: in_progress
+    status: done
     started_at: 2026-09-13T20:40:00Z
+    completed_at: 2026-09-13T20:52:00Z
     depends_on: []
     blocks: [P4-11]
     deliverable:
@@ -1493,6 +1494,21 @@ tasks:
       (and via what), or failed-with-explanation. Cheap submission
       experiments (untracked hazards, unretained references) only if
       the measurement points at them.
+      2026-09-13 (done): landed as Metal/OverheadAnatomy.swift
+      (OverheadAnatomy record + MetalContext.anatomyDispatch) +
+      GPUModel.anatomyStepSelectingToken (diagnostic-only; production
+      untouched) + OverheadAnatomyTests (4 always-run sanity/invariance
+      tests + opt-in QWEN_OVERHEAD_ANATOMY=1 sweep). Mac anatomy
+      (interleaved fused@200 vs naive@592, medians): per-dispatch slope
+      lives ENTIRELY in encode (0.20 us/dispatch); commit->GPU-start
+      (~0.073 ms) and completion wakeup (~0.130 ms) are FIXED — ~77% of
+      the Mac fixed cost is OS/driver latency around an idle GPU.
+      Unretained-references experiment: zero effect. VERDICT: <=1.2 not
+      passable by submission tweaks in the serial submit->wait loop;
+      passable via pipelined GPU-driven decode (P4-8's argmax buffer
+      consumed on-GPU by token N+1) — seeded PD-1 (decision, james) +
+      OA-1 (app anatomy export so P4-11 confirms the device split).
+      See DECISIONS.md 2026-09-13 P4-9 entry.
 
   - id: P4-10
     rank: 18.91
@@ -1536,12 +1552,33 @@ tasks:
       single-pass shallow-depth variant — either changes dispatch
       pins red-first.
 
+  - id: OA-1
+    rank: 18.94
+    title: "App diagnostics export for the overhead anatomy (device split of the fixed wall-GPU cost, for P4-11)"
+    status: ready
+    depends_on: []
+    blocks: [P4-11]
+    deliverable:
+      file: "engine package (Bench anatomy report) + QwenMetalApp diagnostics wiring"
+      tests: "engine-side report formatting/aggregation tests on hand-built OverheadAnatomy records; app stays thin (no engine logic); sanity re-uses OverheadAnatomyTests conventions"
+    est_complexity: small
+    notes: |
+      Seeded 2026-09-13 by P4-9. The P4-9 verdict (fixed wall-GPU cost
+      is ~77% OS/driver scheduling+wakeup latency on Mac; <=1.2 not
+      passable by submission tweaks) rests on the Mac split mirroring
+      the device — iOS scheduler/driver may differ. Wire an anatomy
+      run (N interleaved anatomy steps + production reference, the
+      opt-in sweep's shape) into the app diagnostics export
+      (attribution-export precedent, P4-5) so James's P4-11 session
+      records the device span split alongside the gate re-walk.
+      Blocks P4-11 so the session can't run without it.
+
   - id: P4-11
     rank: 18.95
     title: "On-device iterate re-run (James): same D8+bookend protocol, decode/overhead/dispatch gates re-walked on the folded+split-K fused path"
     status: blocked
     owner: james
-    depends_on: [P4-6, P4-7, P4-8, P4-9]
+    depends_on: [P4-6, P4-7, P4-8, P4-9, OA-1]
     blocks: [P4-EXEC]
     deliverable:
       file: "benchmarks/results.md rows + DECISIONS.md entries"
@@ -1555,6 +1592,38 @@ tasks:
       absolute floors so cross-session comparability is not required
       for them. Optional naive arm for continuity. 29.4 is reported
       and judged at P4-EXEC, never gated. Agents prepare only.
+
+  - id: PD-1
+    rank: 18.96
+    title: "Decide: pipelined GPU-driven decode loop (token N+1 buffer consumes the GPU argmax output; submission latency overlapped)"
+    status: blocked
+    owner: james
+    depends_on: [P4-11]
+    blocks: []
+    deliverable:
+      file: DECISIONS.md
+      tests: "n/a (decision entry)"
+    est_complexity: small
+    notes: |
+      Seeded 2026-09-13 by P4-9. The overhead anatomy says the fixed
+      wall-GPU cost is dominated by OS/driver scheduling + completion-
+      wakeup latency around an idle GPU (~77% on Mac; device split
+      confirmed via OA-1 at P4-11), so <=1.2 ms is not reachable by
+      submission-level tweaks — the structural lever is pipelining:
+      P4-8's argmax leaves the selected token in a GPU buffer, so
+      token N+1's command buffer can consume it on-GPU (embedding
+      gather reading argmaxBuf) and be encoded+committed before token
+      N completes, overlapping ALL fixed spans with GPU execution;
+      the 4-byte token readback moves off the critical path. Design
+      change — James decides (AGENT_OPERATION pause rule): it touches
+      decode-loop semantics (stop check lags one speculative step,
+      discarded at the boundary) and the MEANING of the wall-GPU
+      overhead metric under pipelining (the OV#10 gate was defined on
+      the serial loop). Decision informed by the P4-11 device anatomy;
+      if approved, implementation task(s) get seeded then. Not
+      speculative-decoding scope (same greedy stream, no draft model)
+      — but the metric-semantics question is exactly why this waits
+      for a recorded decision.
 
   - id: P4-EXEC
     rank: 19
