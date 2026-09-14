@@ -1592,7 +1592,8 @@ tasks:
   - id: P4-11
     rank: 18.95
     title: "On-device iterate re-run (James): same D8+bookend protocol, decode/overhead/dispatch gates re-walked on the folded+split-K fused path"
-    status: ready
+    status: done
+    completed_at: 2026-09-14T16:45:00Z
     owner: james
     depends_on: [P4-6, P4-7, P4-8, P4-9, OA-1]
     blocks: [P4-EXEC]
@@ -1608,11 +1609,25 @@ tasks:
       absolute floors so cross-session comparability is not required
       for them. Optional naive arm for continuity. 29.4 is reported
       and judged at P4-EXEC, never gated. Agents prepare only.
+      2026-09-14 (done, James on-device): decode floor PASS 31.67
+      tok/s warm-burst window (n=4, 31.11-31.79; EXCEEDS the 29.4
+      target — formal judgment at P4-EXEC); dispatch gate PASS (200
+      fused / 592 naive, stable); overhead gate FAIL 1.38-1.45 ms
+      (affine re-fit ~1.25-1.4 us/dispatch + ~1.13 ms fixed — P4-9
+      confirmed). Claim-grade in-session fused +48.1% vs naive
+      (bookend drift 0.13). OA-1 anatomy: fixed cost = scheduling
+      0.52 + encode-fixed 0.34 + wakeup 0.18 ms; unretained refs zero
+      effect; encode slope 1.22 us/dispatch (6x Mac). Attribution:
+      elementwise 8.86 -> 0.39-0.43 ms; ~95% of GPU time is weight
+      streaming. Sustained plateau 23.6 (+22% vs P4-5). Gauge-of-
+      record footprint 538.2 MB (P4-5 gap closed). Rows:
+      results.md 2026-09-14; entry: DECISIONS.md 2026-09-14 P4-11.
+      P4-EXEC + PD-1 flipped to ready.
 
   - id: PD-1
     rank: 18.96
     title: "Decide: pipelined GPU-driven decode loop (token N+1 buffer consumes the GPU argmax output; submission latency overlapped)"
-    status: blocked
+    status: ready
     owner: james
     depends_on: [P4-11]
     blocks: []
@@ -1644,7 +1659,7 @@ tasks:
   - id: P4-EXEC
     rank: 19
     title: "Phase 4 exit milestone (all P4 tasks done, exit criteria walked)"
-    status: blocked
+    status: ready
     started_at: 2026-09-11T17:17:29Z
     depends_on: [P4-1, P4-2, P4-3, P4-4, P4-5, P4-6, P4-7, P4-8, P4-9, P4-11]
     blocks: [SPEC-P5]

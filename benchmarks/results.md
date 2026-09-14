@@ -544,6 +544,112 @@ so the Mac delta is expectedly modest.
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-09-13 | Apple M2 Pro (Mac, dev machine) | decode-essay (84) | 640 (cap) | 20.34 | 20.67 | 0.321 | 200 | 48.40 (overall 48.40) | 20.67 / 21.10 / 21.17 / 21.26 | 0 (n=384) | PROVISIONAL, burst, warm, kernels FUSED (P4-7 structure + P4-8 GPU argmax), dev-loop sanity only. vs the P4-7 row (CROSS-session): window 48.05 → 48.40 tok/s (+0.9%), window span p50 20.81 → 20.67 ms (−0.14 ms — the CPU-side readback+argmax leaving the loop, Mac-sized as expected); median GPU 20.41 → 20.34 ms (flat within noise: GPU work unchanged); wall−GPU 0.296 → 0.321 ms at 199→200 dispatches (the argmax dispatch now rides inside the command buffer). Output coherent (same computing-history essay species). |
 
+### 2026-09-14 — iPhone 15 Pro P4-11 rows (James on-device): iterate-round gates re-walked — decode floor PASS at 31.67 tok/s, 29.4 target exceeded
+
+Session conditions (one session, one build @ 93c4178, run in the listed
+order): DETACHED home-screen launches, Metal API validation OFF
+(recorded); device iPhone16,1 (= the pinned iPhone 15 Pro hardware
+identifier — James re-confirmed this is the same physical device as all
+prior rows), iOS 26.6.1; weights q4g64 (artifact d03b3fe3…, sha256
+re-verified on the dev machine this session), residency mmap; prompt
+decode-essay (84 tokens), burst cap 640, greedy. Battery health
+"Normal" (capacity % not recorded this session); state of charge 86%
+at session start, 84→79% across sustained, 79% at close (SoC per the
+2026-09-05 fields correction — the "battery health: 86" strings inside
+the burst exports are SoC). Kernel path via the P4-4 toggle; fused =
+P4-6 folds + P4-7 split-K SDPA + P4-8 GPU argmax (200 dispatches/token
+selecting; naive 592). Bookends F1/F-last (D8 addendum).
+phys_footprint gauge-of-record: **538.2 MB loaded** (attached
+footprint-only launch AFTER the timed session — closes the P4-5 gap);
+in-app cross-checks 538.7–549.3 MB. Artifact-citation correction, not
+an overwrite: the 2026-09-13 P4-8 Mac row above cites "artifact
+d073af49…" — stale hash (superseded at QR-3); the file on disk was and
+is d03b3fe3….
+
+| Run | Kernels | Cold/warm | Window tok/s (128–512) | Median GPU ms/tok | Median wall ms/tok | Wall−GPU ms | Dispatches/tok | Latency p50/p95/p99/max ms (window) | Stalls | phys_footprint (in-app) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| F0 | fused | cold | 31.11 (overall 31.17) | 30.61 | 31.93 | 1.445 | 200 | 31.94 / 34.25 / 36.18 / 36.73 | 0 (n=384) | 540.8 MB |
+| F1 (bookend) | fused | warm | 31.66 (31.72) | 30.27 | 31.52 | 1.384 | 200 | 31.53 / 32.76 / 33.87 / 34.69 | 0 | 549.3 MB |
+| N1a | naive | warm | 21.37 (21.26) | 45.18 | 47.17 | 1.969 | 592 | 47.17 / 50.76 / 51.69 / 52.07 | 0 | 542.6 MB |
+| N1b | naive | warm | 21.39 (21.28) | 45.19 | 47.07 | 1.953 | 592 | 47.08 / 50.81 / 51.73 / 52.35 | 0 | 542.8 MB |
+| F2 | fused | warm | 31.11 (31.10) | 30.77 | 32.18 | 1.441 | 200 | 32.18 / 33.27 / 33.65 / 34.03 | 0 | 540.8 MB |
+| F-last a (bookend) | fused | warm | 31.68 (31.73) | 30.12 | 31.49 | 1.393 | 200 | 31.50 / 32.82 / 34.01 / 34.29 | 0 | 548.8 MB |
+| F-last b | fused | warm | 31.79 (31.74) | 30.13 | 31.46 | 1.399 | 200 | 31.47 / 32.60 / 32.96 / 34.69 | 0 | 549.2 MB |
+
+**Gate verdicts (constants pre-committed 2026-09-05; hard rule 6 — no
+constant touched; iterate-round re-walk per the 2026-09-12 decision):**
+
+- **Decode floor ≥ 24.0 tok/s: PASS** — fused warm-burst window median
+  **31.67 tok/s** (n=4: 31.11/31.66/31.68/31.79, range 31.11–31.79;
+  cold 31.11). Also **exceeds the 29.4 tok/s absolute target** (formal
+  decode-vs-roofline judgment is P4-EXEC's). Cross-session context:
+  22.64 at P4-5 ⇒ +40% from the iterate round.
+- **Dispatch gate ≤ 300: PASS** — 200 measured on every fused row,
+  592 on every naive row, both perfectly stable.
+- **Overhead gate ≤ 1.2 ms: FAIL** — fused median wall−GPU 1.384–1.445
+  ms (median of warm runs ≈1.40). Two-point affine from this session's
+  burst rows: (1.96 − 1.40) ÷ (592 − 200) ≈ **1.4 µs/dispatch +
+  ≈1.11 ms fixed**; the anatomy runs below fit 1.25 µs + 1.13 ms —
+  the P4-5/P4-9 ≈1.17 ms fixed cost reproduced. See the anatomy
+  breakdown for where it lives.
+- **Before/after (D8 + bookend): CLAIM-GRADE — fused +48.1%.** Fused
+  31.67 (31.11–31.79, n=4) vs naive 21.38 (21.37–21.39, n=2)
+  interleaved in-session: ranges disjoint AND effect 10.29 tok/s ≫
+  bookend drift +0.13 (F1 31.66 → F-last b 31.79 — an unusually
+  drift-free session). Naive 21.38 vs P4-5's 20.68 shows the P4-8
+  GPU-argmax benefit riding the naive path (+3.4%, cross-session).
+- **Latency variance (D7, reported):** zero stalls in all 7 burst runs
+  + sustained; fused max/p50 ≈ 1.06–1.15.
+
+**On-device attribution (DIAGNOSTIC, D1 — never benchmark rows; cache
+depth 83–146, 32 attributed + 32 production interleaved; two runs per
+path this session — replicates agree):**
+
+| Kernels | matvec | attention | norm+elementwise | head/tail | Class-sum (median ms/tok) | Production GPU ms/tok @ dispatches | Sanity ratio |
+|---|---|---|---|---|---|---|---|
+| fused run 1 | 21.80 ms (76.4%) | 1.07 ms (3.8%) | 0.39 ms (1.4%) | 5.26 ms (18.5%) | 28.58 (span 28.65, wall 29.52) | 28.45 @ 199 | 1.00 |
+| fused run 2 | 22.38 ms (76.4%) | 1.20 ms (4.1%) | 0.43 ms (1.5%) | 5.28 ms (18.0%) | 29.12 (span 29.29, wall 30.18) | 28.89 @ 199 | 1.01 |
+| naive run 1 | 22.61 ms (57.7%) | 2.00 ms (5.1%) | 9.32 ms (23.8%) | 5.27 ms (13.4%) | 39.26 (span 39.35, wall 40.26) | 39.26 @ 591 | 1.00 |
+| naive run 2 | 22.45 ms (57.5%) | 1.99 ms (5.1%) | 9.32 ms (23.9%) | 5.29 ms (13.6%) | 39.16 (span 39.25, wall 40.15) | 39.05 @ 591 | 1.00 |
+
+Reading: the iterate round's targets collapsed as designed —
+**norm+elementwise 8.86 → 0.39–0.43 ms** (P4-6 folds; was 23.7% of GPU
+time at P4-5), attention 1.86 → 1.07–1.20 ms at depth ~115 (P4-7
+split-K). Weight streaming (matvec + lm_head-dominated head/tail)
+≈ 27.1–27.7 ms is now ≈95% of fused GPU time.
+
+**Overhead anatomy (DIAGNOSTIC, OA-1 exports — the P4-9 device
+confirmation; 32 production + 32 anatomy + 32 unretained round-robin
+per path, cache depth 83–178, medians):**
+
+| Span | fused @200 | naive @592 | per-span affine (device) |
+|---|---|---|---|
+| encode | 0.589 ms | 1.066 ms | **1.22 µs/dispatch** + ≈0.34 ms fixed |
+| commit call | 0.015 ms | 0.014 ms | fixed ≈0.015 ms |
+| commit→GPU-start | 0.552 ms | 0.615 ms | **fixed ≈0.52 ms** (schedule stage ≈0.09 inside; small residual slope) |
+| wakeup (GPU→CPU) | 0.184 ms | 0.176 ms | **fixed ≈0.18 ms** |
+| TOTAL wall−GPU | 1.383 ms | 1.873 ms | 1.25 µs/dispatch + ≈1.13 ms fixed |
+
+Production references measured alongside: 1.369 ms @ 200 / 1.888 ms @
+592 — the anatomy harness reproduces production overhead. Unretained-
+references arms: 1.345 / 1.860 ms — **zero effect on device too**
+(P4-9 Mac result confirmed). Device split of the ≈1.13 ms fixed cost:
+commit→GPU-start scheduling ≈46%, fixed encode ≈31%, wakeup ≈16%,
+commit ≈1% ⇒ ≈62% pure OS/driver latency around an idle GPU (Mac was
+≈77%); the device's encode share is larger than the Mac predicted
+(slope 1.22 vs 0.20 µs/dispatch — encoder calls ≈6× slower on A17
+Pro). Feeds PD-1.
+
+**Sustained (fused, ≥5-min regenerate loop, decode-essay, SoC
+84→79%):** 6 generations / 5.0 min: windows **31.59 → 26.50 → 23.70 →
+23.48 → 23.69** (gen 5 truncated by the duration bound, overall 24.14)
+— first-gen thermal step then a stable ≈23.5–23.7 plateau (vs P4-5's
+≈19.2–19.5 plateau: +22% sustained). Gens 0–4 each stopped at eos
+after 1297 tokens. Last-gen per-token: median GPU 39.91 ms /
+wall−GPU 1.406 ms @ 200 (all-tokens medians incl. depths ≫ window —
+not comparable to burst window medians); zero stalls. phys_footprint
+(in-app) 538.7 MB.
+
 ## Phase 0a — energy dry-run + corrections (PROVISIONAL)
 
 ### 2026-08-22 — sustained battery-delta cycles, iPhone 15 Pro (method VALIDATED)

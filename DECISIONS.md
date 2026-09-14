@@ -3474,3 +3474,78 @@ code; OA-1 executes nothing they cover): **"Executed 415 tests, with
 seconds"** (422 total minus their 7; +6 harness tests, all first-run
 green; same 4 opt-in skips). App build: xcodebuild Release,
 generic/platform=iOS, unsigned — BUILD SUCCEEDED.
+
+## 2026-09-14 — P4-11 (James, on-device): decode floor PASS at 31.67 tok/s (29.4 target EXCEEDED), dispatch gate PASS, overhead gate FAIL (anatomy-confirmed) — iterate round validated
+
+One detached session on the pinned iPhone 15 Pro (iPhone16,1 — James
+re-confirmed the same physical device as every prior row), iOS 26.6.1,
+validation OFF recorded, build 93c4178, q4g64 d03b3fe3… (sha256
+re-verified) mmap, decode-essay, D8 + bookend protocol. Full rows:
+benchmarks/results.md 2026-09-14 iPhone section. Per hard rule 6
+nothing below adjusts any gate.
+
+- **Decode floor (≥24.0 warm-burst window median): PASS — 31.67
+  tok/s** (n=4, range 31.11–31.79; cold 31.11), up from P4-5's 22.64
+  (+40% across the iterate round, cross-session context). **The
+  committed 29.4 tok/s absolute target is EXCEEDED in the warm-burst
+  window** — the formal decode-vs-roofline judgment is recorded at
+  P4-EXEC, but the input is unambiguous. llama.cpp's Phase 0 warm-burst
+  32.44 is now within ~2.4%; MLX's 39.2 remains the expanded-campaign
+  goal.
+- **Dispatch gate (≤300): PASS** — 200 measured on every fused row
+  (P4-7 structure + P4-8 argmax dispatch), 592 naive, zero
+  instability.
+- **Overhead gate (≤1.2 ms median wall−GPU): FAIL — fused 1.384–1.445
+  ms.** The session's two operating points re-fit the affine model:
+  burst rows ⇒ ≈1.4 µs/dispatch + ≈1.11 ms fixed; anatomy runs ⇒
+  1.25 µs/dispatch + ≈1.13 ms fixed — the P4-5/P4-9 ≈1.17 ms fixed
+  cost reproduced within noise.
+- **Overhead anatomy (OA-1 exports — the P4-9 device confirmation):**
+  device split of the ≈1.13 ms fixed cost: **commit→GPU-start
+  scheduling ≈0.52 ms (46%) + completion wakeup ≈0.18 ms (16%) ⇒ ≈62%
+  pure OS/driver latency around an idle GPU** (Mac was 77%); fixed
+  encode ≈0.34 ms (31%); commit ≈0.015. Per-span affine: the slope
+  lives in encode at **1.22 µs/dispatch (≈6× the Mac's 0.20)** —
+  A17 Pro encoder calls are expensive; scheduling and wakeup are
+  dispatch-count-independent, as on Mac. Unretained-references
+  experiment: **zero effect on device** (1.345 vs 1.383 ms, inside
+  noise) — the Mac result confirmed. NUANCE to the P4-9 verdict,
+  honestly recorded: encode is a larger share on-device than the Mac
+  predicted — total encode ≈0.59 ms @ 200 — so an encode-side rework
+  (e.g. indirect command buffers) could in principle shave ~0.2 ms and
+  reach ≈1.2 marginally; the P4-9 structural conclusion stands
+  (≈62–77% of fixed cost is OS latency submission tweaks cannot
+  reach), and pipelining (PD-1) remains the lever that removes the
+  ENTIRE ≈1.4 ms from the critical path rather than grazing the gate.
+  Anatomy was captured in a follow-up launch on the same day/build
+  after the timed session (DIAGNOSTIC — never rows; the first attempt
+  ran the attribution mode twice per path — kept as replicates).
+- **Before/after (D8 + bookend): CLAIM-GRADE — fused +48.1%
+  in-session.** Fused 31.67 (31.11–31.79) vs naive 21.38
+  (21.37–21.39): ranges disjoint, effect 10.29 tok/s ≫ bookend drift
+  0.13 tok/s (the most drift-free device session recorded). Naive
+  21.38 vs P4-5's 20.68 = the P4-8 argmax win riding the naive path
+  (+3.4%, cross-session).
+- **Attribution (two replicates per path, sanity 1.00–1.01):** the
+  iterate levers hit their targets — norm+elementwise **8.86 →
+  0.39–0.43 ms** (P4-6), attention 1.86 → 1.07–1.20 ms at depth ~115
+  (P4-7). Weight streaming (matvec + head/tail ≈27.1–27.7 ms) is now
+  ≈95% of fused GPU time — the engine is nearly pure-bandwidth-bound;
+  P4-10 (matvec tuning) is the remaining GPU-side lever and its
+  skip-or-take call belongs to the P4-EXEC walk.
+- **Sustained (fused 5-min loop):** windows 31.59 → 26.50 → 23.70 →
+  23.48 → 23.69 — first-gen thermal step to a stable **≈23.6 plateau
+  (vs P4-5's ≈19.3: +22% sustained)**; zero stalls; SoC 84→79%.
+- **Protocol notes:** phys_footprint gauge-of-record **538.2 MB
+  loaded** captured via an attached footprint-only launch AFTER the
+  timed session — the P4-5 gap is closed. Battery health "Normal";
+  capacity % not recorded this session (health-% field discipline
+  continues at Phase 6 per the 2026-09-05 correction). The 2026-09-13
+  P4-8 Mac row's "artifact d073af49…" citation was a stale hash
+  (superseded at QR-3) — corrected by note in results.md, row not
+  overwritten.
+
+P4-EXEC now re-runs the exit walk with these rows: two of three gates
+PASS; the overhead gate carries a failed-with-anatomy explanation and
+a named structural remedy awaiting the PD-1 decision (flipped ready,
+owner James). Seeded no other follow-ups.
