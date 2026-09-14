@@ -1728,10 +1728,11 @@ tasks:
   - id: SPEC-P5
     rank: 20
     title: "Write Phase 5 spec (tiled prefill GEMM) with pre-committed gates"
-    status: in_progress
+    status: done
     started_at: 2026-09-14T19:23:00Z
+    completed_at: 2026-09-14T19:30:00Z
     depends_on: [P4-EXEC]
-    blocks: [P5-EXEC]
+    blocks: [P5-EXEC, P5-1, P5-2]
     deliverable:
       file: docs/phases/phase-5.md
       tests: "prefill targets committed pre-phase"
@@ -1740,18 +1741,133 @@ tasks:
       threadgroup memory + simdgroup_matrix; prefill vs MLX separately.
       2026-08-26 (James): veto-flagged decisions reported directly in the
       conversation at spec write-out (AGENT_OPERATION.md step 11).
+      2026-09-14 (done): spec landed (docs/phases/phase-5.md, D1-D8) +
+      Phase 5 gates pre-committed in DECISIONS.md (batched-span
+      tolerances reused via the extended P4 mapping rule; GEMM
+      microbench fraction 0.70 x 43.84 at M=8; prefill floor 90 tok/s
+      = 2x the 45.3 sequential structural ceiling; decode regression
+      floor 24.0 reused; prefill-span metric pinned; prefill-vs-MLX
+      judged not gated). P5-1..P5-5 seeded below; P5-EXEC re-pointed.
+      NOTE for James: six judgment-derived gate items + the
+      hard-rule-1 threadgroup-staging clarification are flagged in the
+      gates entry — veto window is before P5-EXEC dependency work
+      starts.
+
+  # ---------- Phase 5 build tasks (seeded 2026-09-14 by SPEC-P5; spec: docs/phases/phase-5.md) ----------
+  - id: P5-1
+    rank: 20.1
+    title: "Prefill-span instrumentation (metric of record, dual-timed, dispatch count) + CLI/app surfacing + Mac sequential 'before' prefill row"
+    status: ready
+    depends_on: [SPEC-P5]
+    blocks: [P5-4]
+    deliverable:
+      file: "engine package (Decode/Bench instrumentation) + benchmarks/results.md (Mac row)"
+      tests: "edge test 12 (span wall >= GPU, per-engine token accounting, both paths report identically, legacy TTFT field still exports)"
+    est_complexity: small
+    notes: |
+      Spec D1: prefill span = prompt processing only, EXCLUDING the first
+      generated token's decode forward; prefill tok/s of record = prompt
+      tokens / span wall time; span GPU time + prefill dispatch count
+      recorded (reported, never gated). Mac PROVISIONAL sequential
+      "before" prefill row (prefill-summarize) lands with it — the
+      on-device "before" is P5-5's in-session job.
+
+  - id: P5-2
+    rank: 20.2
+    title: "Tiled q4g64 dequant-GEMM kernel (threadgroup + simdgroup_matrix) + correctness suite + M-sweep microbench harness + Mac sanity row"
+    status: ready
+    depends_on: [SPEC-P5]
+    blocks: [P5-3]
+    deliverable:
+      file: "engine package (Metal GEMM kernel + microbench)"
+      tests: "edge tests 1-2 (odd + real shapes, ragged M, M=1, group-boundary/nibble adversarial fixtures) at Tier K vs CPU-quant dequant x sgemm reference; test 13 (harness fraction math, sweep report shape)"
+    est_complexity: large
+    notes: |
+      Spec D3: C x K fp16 activations x q4g64 weights -> C x N fp16,
+      fp32 accumulate, threadgroup tiles + simdgroup_matrix (PLAN pin).
+      Dequant inside the consuming kernel (hard rule 1 + the recorded
+      threadgroup-staging clarification in the gates entry). Hard rule
+      3: correctness suite green BEFORE any optimization iteration.
+      Microbench: M-sweep (>= {8, 64, 512}) reporting GB/s + GFLOPS;
+      the M=8 fraction gate (>= 30.69 GB/s) binds ON-DEVICE at P5-5 —
+      Mac row is sanity only.
+
+  - id: P5-3
+    rank: 20.3
+    title: "Chunked batched prefill pipeline (batched norm/RoPE/append, causal attention per D4, last-position lm_head, preallocated scratch)"
+    status: blocked
+    depends_on: [P5-2]
+    blocks: [P5-4]
+    deliverable:
+      file: "engine package (GPU prefill path)"
+      tests: "edge tests 3-8, 10-11 (causal masking exact, chunk-boundary continuity, KV-after-prefill at norm species, ragged/short prompts, last-position-only lm_head + dispatch pins, decode handoff + free-run report, unchanged edge errors, scratch preallocation)"
+    est_complexity: large
+    notes: |
+      Spec D2/D4: chunk size C reported not pinned (task picks by
+      measurement; mlx-lm reference used 512); scratch preallocated at
+      load, <= 64 MiB, no materialized full C x L score matrix.
+      Attention: reuse P4-7 split-K SDPA per position first; batched
+      causal kernel only if the measured share says it pays. Gates:
+      extended span-mapping rule, no new constants (DECISIONS.md
+      2026-09-14 Phase 5 gates entry).
+
+  - id: P5-4
+    rank: 20.4
+    title: "Tiled prefill as packed-pipeline default + sequential toggle + Tier-M/E re-verification + free-run report + Mac 'after' rows"
+    status: blocked
+    depends_on: [P5-1, P5-3]
+    blocks: [P5-5]
+    deliverable:
+      file: "engine package (path selection) + CLI/app surfacing + benchmarks/results.md (Mac rows)"
+      tests: "edge test 9 (both paths load + smoke/spot check, DispatchCounter distinguishes, bf16 backend clean); Tier-M/E verbatim with tiled prefill engaged; free-run 128x5 REPORTED"
+    est_complexity: medium
+    notes: |
+      Spec D5: tiled default on the packed pipeline; sequential stays
+      selectable (CLI flag + app toggle) for the P5-5 in-session
+      before/after; bf16 backend keeps sequential permanently. Mac
+      PROVISIONAL "after" rows: tiled prefill + microbench sanity.
+
+  - id: P5-5
+    rank: 20.5
+    title: "On-device Phase 5 rows: prefill floor + M=8 microbench + decode regression gates, interleaved sequential-vs-tiled before/after, M-sweep report"
+    status: blocked
+    owner: james
+    depends_on: [P5-4]
+    blocks: [P5-EXEC]
+    deliverable:
+      file: "benchmarks/results.md rows + DECISIONS.md entries"
+      tests: "protocol pins (D8 + bookend verbatim; >=3 warm repeats median+range; detached, validation OFF recorded; mmap; prefill-summarize for prefill rows, decode-essay for decode regression)"
+    est_complexity: medium
+    notes: |
+      Gates walked on-device (DECISIONS.md 2026-09-14 Phase 5 gates
+      entry): prefill floor >= 90 tok/s (span median of >=3), GEMM
+      microbench >= 30.69 GB/s at M=8 (197-matrix sweep), decode
+      warm-burst window median >= 24.0 (regression tripwire). Also:
+      sequential-vs-tiled before/after interleaved with bookends,
+      M-sweep GB/s + GFLOPS report (the measured compute denominator),
+      phys_footprint, thermal/variance notes. Agents prepare only.
 
   - id: P5-EXEC
     rank: 21
-    title: "Execute Phase 5 per spec (tasks seeded by SPEC-P5)"
+    title: "Phase 5 exit milestone (all P5 tasks done, exit criteria walked, prefill-vs-MLX judgment)"
     status: blocked
-    depends_on: [SPEC-P5]
+    depends_on: [P5-1, P5-2, P5-3, P5-4, P5-5]
     blocks: [SPEC-P6]
     deliverable:
       file: "per docs/phases/phase-5.md"
       tests: "Phase 5 exit criteria (PLAN.md table)"
     est_complexity: medium
-    notes: "Milestone placeholder."
+    notes: |
+      2026-09-14: concrete tasks P5-1..P5-5 seeded by SPEC-P5; this
+      became the exit-criteria walk + close-out. Records the
+      prefill-vs-MLX judgment (vs the Phase 0 PROVISIONAL ~370 tok/s;
+      staleness rule points the final head-to-head at Phase 6) with
+      per-component headroom quantified (2026-09-07 north-star
+      binding). Close-out regenerates architecture.pdf + refreshes
+      README/newcomer docs per the standing *-EXEC rules. Veto window
+      on the six judgment-derived Phase 5 gate items closes before
+      work on this milestone's dependencies starts (gates entry,
+      2026-09-14).
 
   - id: SPEC-P6
     rank: 22
@@ -2185,7 +2301,7 @@ tasks:
   - id: KP-1
     rank: 30
     title: "Remove (or keep, with a decision) the naive kernel-path toggle on the packed pipeline after the P4-5 before/after row"
-    status: blocked
+    status: ready
     depends_on: [P4-5]
     blocks: []
     deliverable:
@@ -2200,6 +2316,30 @@ tasks:
       PACKED pipeline has served its purpose; this task removes the
       toggle (or records a decision to keep it as a diagnostic, wired
       like the mmap/wired toggle). Filler: never blocks the phase chain.
+      2026-09-14 (SPEC-P5 session): flipped blocked -> ready — the stale
+      block outlived its reason: P4-5 (the dependency) is done, and the
+      toggle's last scheduled consumer (P4-11's optional interleaved
+      naive-vs-fused row) is also done with Phase 4 exited. Note the
+      P4-11 rows show the toggle still earning its keep as a diagnostic
+      (the naive arm anchored the +48.1% claim) — "keep, with a
+      decision" is a live option.
+
+  - id: KP-2
+    rank: 30.1
+    title: "Remove (or keep, with a decision) the sequential-prefill toggle on the packed pipeline after the P5-5 before/after row"
+    status: blocked
+    depends_on: [P5-5]
+    blocks: []
+    deliverable:
+      file: "engine package (prefill-path option) + CLI/app toggle"
+      tests: "remaining suites green; bf16 backend (permanently sequential-prefill) untouched"
+    est_complexity: small
+    notes: |
+      Seeded 2026-09-14 by SPEC-P5 (spec D5): the KP-1 pattern applied
+      to the prefill path — sequential prefill stays selectable for the
+      P5-5 in-session sequential-vs-tiled before/after row; once that
+      row lands, this task removes the toggle or records a decision to
+      keep it as a diagnostic. Filler: never blocks the phase chain.
 
   - id: BW-1
     rank: 24

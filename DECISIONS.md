@@ -3655,3 +3655,125 @@ Bindings recorded with the approval:
   the bf16/naive paths keep the serial loop.
 - Amends nothing retroactively: all Phase 2–4 rows were measured on
   the serial loop and stand as recorded.
+
+## 2026-09-14 — Phase 5 gates pre-committed: batched-span tolerances (reused) + microbench fraction, prefill floor, decode regression floor
+
+Set BEFORE any Phase 5 code or test exists (PLAN.md invariant 4). Spec:
+docs/phases/phase-5.md. Grounding measurements (all recorded in prior
+entries / benchmarks/results.md; nothing invented): packed weights
+967,753,728 B ⇒ sequential prefill's structural ceiling at 100% of the
+measured 43.84 GB/s roofline is ≈22.1 ms/token ⇒ **≈45.3 tok/s**; the
+only on-device prefill row is Phase 2's 8.23 tok/s (bf16 naive,
+prefill-summarize 852 HF tokens in 103.5 s); Mac packed sequential
+prefill 23.8–28.6 tok/s (PROVISIONAL); MLX prefill ≈370 tok/s and
+llama.cpp ≈452 tok/s (Phase 0 PROVISIONAL); matvec microbench 35.29
+GB/s best on-device with the committed Phase 3 fraction 0.70 × 43.84 =
+30.69 GB/s; fused decode 31.67 tok/s with weight streaming ≈95% of GPU
+time (P4-11); A17 Pro encode ≈1.22 µs/dispatch.
+
+- **Correctness: NO new tolerance constants.** The P4 fused-span
+  mapping rule extends to batched prefill spans, gated vs the CPU-quant
+  oracle computing the same span at the loosest absorbed constant,
+  floor 2⁻¹¹: GEMM/elementwise-only spans at Tier K max(2⁻⁹·M, 2⁻¹¹);
+  norm-inclusive batched spans at max(2⁻⁸·M, 2⁻¹¹);
+  attention-inclusive spans (causal SDPA, per-position or batched) at
+  max(2⁻⁷·M, 2⁻¹¹). Pure copies/lookups EXACT (batched embedding
+  gather bitwise; v-side append while a copy). KV-cache contents after
+  batched prefill gate at the norm-species constant for every prompt
+  position (k-side; v-side exact while a copy). Tier-M constants
+  verbatim at surviving slices; Tier-E suite (250-step logit
+  checkpoints/fingerprints/top-64/tie-aware top-1 at ε_tie = 2⁻⁴·M64)
+  verbatim with the tiled prefill path engaged. Free-running
+  divergence stays REPORTED, not gated. Tiled-vs-sequential outputs
+  are NOT required to match bitwise (GEMM reduction order; the
+  2026-09-12 reduction-order decision); both gate against the same
+  oracle.
+- **GEMM microbench fraction gate: effective weight-stream ≥ 0.70 ×
+  43.84 = 30.69 GB/s at M=8, on-device** (P5-5), over all 197 packed
+  matrices (the P3-6 sweep protocol). Derivation: at M=8 the GEMM's
+  arithmetic intensity is 8× the matvec's but the kernel remains
+  weight-bandwidth-dominated, so the Phase 3 D7 fraction applies —
+  batching must not lose bandwidth the matvec already achieves
+  (35.29 GB/s measured). The M-sweep additionally REPORTS GB/s +
+  GFLOPS at M ∈ {8, 64, 512} minimum — the project's first measured
+  compute denominator (never gated; feeds the Phase 6 roofline).
+- **Prefill floor: warm tiled prefill of prefill-summarize (852 HF
+  tokens), prefill-span median of ≥3 same-session repeats ≥ 90 tok/s
+  on-device** (P5-5). Derivation: 2× the 45.3 tok/s sequential
+  structural ceiling — a tiled path that cannot double what sequential
+  could EVER do did not engage batching (tripwire for non-delivery);
+  deliberately far below the ≈370 MLX aspiration, which is judged, not
+  gated.
+- **Decode regression floor: fused decode warm-burst window median ≥
+  24.0 tok/s in the same P5-5 session** — the committed Phase 4
+  constant reused as a regression tripwire (decode measured 31.67 at
+  P4-11; a fall below 24.0 after prefill integration signals breakage,
+  not noise). Decode gains nothing in this phase; it must lose nothing.
+- **Prefill-vs-MLX is JUDGED, not gated:** P5-EXEC records the device
+  prefill rows against MLX's Phase 0 PROVISIONAL ≈370 tok/s (staleness
+  rule: the publishable head-to-head is Phase 6 same-session), with
+  remaining headroom quantified per measured component (weight stream,
+  GFLOPS vs the M-sweep curve, attention share, elementwise share,
+  per-chunk overhead) — the 2026-09-07 north-star binding.
+- **Prefill metric of record pinned (D1):** prefill tok/s = per-engine
+  prompt token count ÷ engine-measured prefill-span WALL time; the
+  span covers prompt processing only, ending when the last prompt
+  position's output is available, EXCLUDING the first generated
+  token's decode forward; dual-timed (GPU recorded alongside, hard
+  rule 7). The P2-6 TTFT-style field keeps exporting, honestly
+  labeled; rows cite the span.
+- **Protocol:** the Phase 3 D8 pins + Phase 4 bookend rule apply to
+  all Phase 5 device rows verbatim; the before/after row is
+  sequential-vs-tiled prefill interleaved in one session on one
+  build. Chunk size C is a reported parameter, not a pin (recorded
+  per row). Prefill scratch ≤ 64 MiB, preallocated at model load.
+- **Hard-rule-1 clarification (recorded, not a loosening):** staging
+  dequantized weight TILES in threadgroup (on-chip) memory inside the
+  consuming GEMM kernel is permitted — transient scratch that dies
+  with the threadgroup, the standard tiled-GEMM pattern. Materializing
+  dequantized weights to a device/DRAM buffer remains forbidden, which
+  is what the invariant was written against.
+
+Honest flag (surfaced for James, veto window = before P5-EXEC
+dependency work starts, the SPEC-P2/P3/P4 precedent): the tier reuses
+are derivations, but SIX items in this entry are judgment-derived —
+the M=8 gate point with the reused 0.70 fraction, the ≥90 tok/s
+prefill floor, reusing 24.0 as a decode regression floor, the
+prefill-span metric definition, the ≤64 MiB scratch budget +
+chunk-size-not-pinned structure, and the hard-rule-1
+threadgroup-staging clarification. Also flagged as a structural
+decision: prefill-vs-MLX as judgment rather than gate. Per hard rule
+6, once P5 tests exist these numbers never loosen; failures are bug
+signals.
+
+## 2026-09-14 — SPEC-P5: Phase 5 spec written; P5 build tasks seeded
+
+- **Spec landed: docs/phases/phase-5.md** (tiled prefill GEMM). The
+  PLAN phase-table row is covered: prefill benchmarked separately vs
+  MLX (device rows + P5-EXEC judgment), threadgroup memory +
+  simdgroup_matrix pinned as the kernel structure. The 2026-09-07
+  north-star binding is honored structurally: the M-sweep microbench
+  makes the phase produce the first measured compute-throughput
+  denominator, and P5-EXEC's judgment must decompose remaining
+  headroom per component.
+- **Design decisions (D1–D8, rationale in the spec):** prefill-span
+  metric of record + instrumentation before any comparison row;
+  chunked batched prefill (C reported not pinned; scratch preallocated
+  ≤64 MiB; last-position-only lm_head); tiled q4g64 dequant-GEMM with
+  the recorded hard-rule-1 threadgroup-staging clarification;
+  attention strategy = reuse P4-7 per-position SDPA first, batched
+  causal kernel only if measured to pay; sequential prefill stays
+  selectable for the in-session before/after (bf16 backend keeps it
+  permanently); correctness via the extended span-mapping rule (no new
+  constants); performance gates = microbench fraction @ M=8, ≥90
+  tok/s prefill floor, ≥24.0 decode regression floor;
+  prefill-vs-MLX judged at P5-EXEC; D8 + bookend protocol verbatim.
+- **Backlog:** P5-1..P5-5 seeded at ranks 20.1–20.5 (P5-5 owner:
+  james — device rows); P5-EXEC re-pointed at them and becomes the
+  exit-criteria walk + close-out (prefill-vs-MLX judgment,
+  architecture.pdf + README refresh per the standing *-EXEC rule).
+  Phase 6 (SPEC-P6) is unchanged downstream.
+- **NOTE for James (veto window before P5-EXEC dependency work
+  starts):** six judgment-derived items + the judgment-not-gate
+  structure are flagged in the gates entry above and reported
+  item-by-item in the session report per AGENT_OPERATION.md step 11.
