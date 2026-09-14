@@ -1808,6 +1808,27 @@ tasks:
       mid-decode growth), or measure whether dirty-page accounting
       already makes untouched cache pages free. Touching this touches
       hard rule 4 — James-owned.
+      2026-09-14 (seeded by James, RoPE walkthrough session — accuracy
+      axis). (3) EQUIVALENCE-PRESERVED FP16 ROUNDING BOUNDARIES: the
+      fused kernel path deliberately re-inserts every fp16 round the
+      unfused chain's DRAM boundaries imposed (spec D3), so values that
+      now live in registers still round to fp16 mid-kernel purely to
+      keep fused-vs-unfused bit-comparability and gate carry-over.
+      Known sites (FoldedKernels.swift header + kernels): norm output
+      rounds to fp16 before RoPE reads it (qknorm_rope_append_f16);
+      matvec accumulators round to fp16 exactly where the naive kernels
+      stored (matvec3_q4_f16, gateup_swiglu_q4_f16 — both row dots
+      round before SwiGLU — matvec_res_q4_f16 before the residual add);
+      norm-fold outputs round where rmsnorm_f16 stored
+      (norm_matvec3_q4_f16, norm_gateup_swiglu_q4_f16); FusedSDPAKernel
+      keeps the naive fp16-in/fp32-accumulate/fp16-out boundary. James
+      wants these addressed in the campaign: once the campaign
+      re-derives its own pre-committed gates, keep fp32 in registers
+      across fold boundaries and drop the artificial rounds. Costs
+      bit-equality with the unfused reference, so it REQUIRES new
+      pre-committed tolerances first (hard rule 6) — quality gain is
+      real but small (one ~2^-11 round per boundary); sweep ALL such
+      sites in one pass, not piecemeal.
 
   - id: SPEC-P7
     rank: 23.2
