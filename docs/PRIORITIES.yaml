@@ -1761,8 +1761,9 @@ tasks:
   - id: P5-1
     rank: 20.1
     title: "Prefill-span instrumentation (metric of record, dual-timed, dispatch count) + CLI/app surfacing + Mac sequential 'before' prefill row"
-    status: in_progress
+    status: done
     started_at: 2026-09-14T20:11:24Z
+    completed_at: 2026-09-14T22:38:16Z
     depends_on: [SPEC-P5]
     blocks: [P5-4]
     deliverable:
@@ -1776,6 +1777,19 @@ tasks:
       recorded (reported, never gated). Mac PROVISIONAL sequential
       "before" prefill row (prefill-summarize) lands with it — the
       on-device "before" is P5-5's in-session job.
+      2026-09-14 (done): landed as ForwardCallSpan (GPUModel per-call
+      accumulation: wall-bracketed, sum of per-step GPU + dispatches) +
+      PrefillSpan metric of record, wired runner -> GenerationMetrics ->
+      BenchmarkReport + CLI (app inherits via the shared runner/report;
+      legacy TTFT-style field kept exporting, relabeled honestly;
+      warm-prefix spans labeled loudly). 13 new/updated tests incl.
+      exact dispatch-sum pins ((P-1)*22+24 / +25) and wall>=GPU; suite
+      minus CPU logit gate 428 tests, 0 failures. Mac "before" row:
+      warm median 52.44 tok/s (852 tokens, span ~16.25 s, GPU ~15.87 s,
+      167,847 dispatches = exactly 851*197 + 200 — structural
+      cross-check). Ceiling-basis observation (prefill steps stream
+      ~0.793 GB, lm_head skipped) recorded in DECISIONS.md — no gate
+      touched. P5-4 stays blocked on P5-3.
 
   - id: P5-2
     rank: 20.2
@@ -2156,6 +2170,12 @@ tasks:
       re-forwards; GPUQuantLogitSuiteTests) and the quant free-run
       harness (~30 min release when opted in). Same lever applies:
       release-mode + documented --filter fast paths.
+      2026-09-14 (from P5-1): measured whole-suite figure for the
+      species — `swift test --skip LogitMatchSuiteTests` (debug) took
+      8092 s (~2h15m) wall, dominated by QuantQualityGateTests'
+      teacher-forced band suite (250 CPU-quant fp32 re-forwards at
+      -Onone). Phase 5 tasks will re-run this suite repeatedly; the
+      release-mode/--filter lever is getting more valuable each phase.
 
   - id: DEV-2
     rank: 25.5

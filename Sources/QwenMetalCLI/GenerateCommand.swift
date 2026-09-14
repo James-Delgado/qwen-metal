@@ -168,8 +168,17 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
         // dispatch count. Engine-side aggregation (DecodeTimingCollector) so
         // the Phase 2 app reports the same numbers.
         var collector = DecodeTimingCollector()
+        // P5-1 (phase-5.md D1): the first call of the generation processes
+        // the prompt — its engine-measured span is the prefill span (the
+        // prefill tok/s of record; GPU time + dispatch count reported).
+        var prefillSpan: PrefillSpan?
+        let promptTokenCount = promptIds.count
         let onToken: ((Int, Int) -> Void)? = gpuModel.map { gpu in
-            { _, _ in
+            { step, _ in
+                if step == 0, let span = gpu.lastCallSpan {
+                    prefillSpan = PrefillSpan(
+                        promptTokenCount: promptTokenCount, span: span)
+                }
                 if let timing = gpu.lastStepTiming,
                    let dispatches = gpu.lastStepDispatchCount {
                     collector.append(TokenStepRecord(
@@ -202,6 +211,12 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
             format: "%d prompt tokens, %d generated in %.1fs (%.2f tok/s, %@)",
             promptIds.count, generated.count, decodeSeconds,
             Double(generated.count) / max(decodeSeconds, 1e-9), backendNote))
+
+        // P5-1 (phase-5.md D1): the prefill span line — metric of record
+        // for prefill rows (gpu backend only, like the block below).
+        if let prefillSpan {
+            printStderr(prefillSpan.summaryLine)
+        }
 
         // P2-5 instrumentation block (gpu backend only): medians + the
         // wall−GPU dispatch-overhead metric (hard rule 7) and the canonical

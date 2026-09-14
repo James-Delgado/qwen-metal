@@ -650,6 +650,50 @@ wall−GPU 1.406 ms @ 200 (all-tokens medians incl. depths ≫ window —
 not comparable to burst window medians); zero stalls. phys_footprint
 (in-app) 538.7 MB.
 
+## Phase 5 — prefill span (D1 metric of record), Mac dev-loop (P5-1, PROVISIONAL)
+
+### 2026-09-14 — Mac sequential "before" prefill row, M2 Pro (P5-1)
+
+First rows citing the P5-1 prefill span (phase-5.md D1: prompt
+processing only, ending when the last prompt position's output is
+available, EXCLUDING the first generated token's decode forward;
+prefill tok/s = 852 prompt tokens ÷ span wall). Release build, CLI
+`generate --backend gpu --weights q4g64` (kernels fused — the P4-4
+default), prompt fed as rendered bytes + the recorded `$'\n\n'`
+workaround (CLI-1; tokenizes to the pinned 852). Sequential per-token
+prefill — the Phase 5 "before" arm; the on-device "before" is P5-5's
+in-session job. Mac numbers are dev-loop sanity only, never gated.
+
+| Date | Device | Prompt (tokens) | Run | Cold/warm | Prefill span wall s | Prefill tok/s (of record) | Span GPU s | Span wall−GPU s | Prefill dispatches | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-14 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | 1 | cold | 16.704 | 51.01 | 15.866 | 0.838 | 167847 | PROVISIONAL. First run after load (mmap page faults land here). |
+| 2026-09-14 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | 2 | warm | 16.232 | 52.49 | 15.868 | 0.364 | 167847 | PROVISIONAL. |
+| 2026-09-14 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | 3 | warm | 16.248 | 52.44 | 15.886 | 0.362 | 167847 | PROVISIONAL. **Warm median row: 52.44 tok/s** (warm range 52.40–52.49, n=3). |
+| 2026-09-14 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | 4 | warm | 16.260 | 52.40 | 15.892 | 0.368 | 167847 | PROVISIONAL. |
+
+Readings:
+
+- **Dispatch count is a structural cross-check, exact:** 851 non-final
+  prompt steps × 197 (fused, no logits tail) + 1 selecting step × 200
+  (P4-8 argmax pin) = **167,847 — measured identically on all 4 runs**
+  (DispatchCounter, never derived).
+- **Sequential prefill is cheaper per token than decode on the same
+  build:** span GPU ≈ 18.6 ms/prompt token vs decode median GPU
+  ≈ 21.4 ms — 851 of 852 prompt steps skip the final-norm + lm_head
+  tail (the tied lm_head triplet ≈ 0.175 GB/token of the decode
+  stream), and attention depth averages ~426 instead of ~860.
+- **~24% of the Mac roofline, matching the decode rows:** non-final
+  prefill steps stream ≈ 0.793 GB (0.968 GB minus the lm_head triplet)
+  ÷ 18.6 ms ≈ 43 GB/s vs the Mac triad 178.19 GB/s (decode: 0.968 ÷
+  21.4 ms ≈ 45 GB/s, ~25%) — same naive-by-design fraction story; the
+  Mac number does NOT predict the device fraction (standing
+  precedent). The A17 Pro structural ceiling for sequential prefill
+  stays ≈45.3 tok/s (43.84 GB/s roofline) — the number the Phase 5
+  tiled path must beat ≥3× on-device (135 floor, P5-5).
+- Decode sanity unchanged alongside: median GPU 21.34–21.49 ms @ 200
+  dispatches/token, wall−GPU 0.287–0.325 ms (8-token tail after each
+  prefill; not a decode row).
+
 ## Phase 0a — energy dry-run + corrections (PROVISIONAL)
 
 ### 2026-08-22 — sustained battery-delta cycles, iPhone 15 Pro (method VALIDATED)

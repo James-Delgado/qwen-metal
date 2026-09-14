@@ -192,6 +192,50 @@ final class GPUArgmaxDecodeTests: XCTestCase {
         }
     }
 
+    // MARK: - P5-1 call span on the token path (phase-5.md D1 — edge test 12)
+
+    /// `nextGreedyToken`'s call span sums every prompt step including the
+    /// selecting step: a 3-token prompt = 2 × 22 (no logits tail) + 25 (the
+    /// P4-8 selecting step's measured pin) — and wall brackets summed GPU.
+    func testNextGreedyTokenCallSpanSumsPromptSteps() throws {
+        let model = try makeTinyModel()
+        _ = try model.nextGreedyToken(ids: [1, 2, 3])
+        let span = try XCTUnwrap(model.lastCallSpan)
+        XCTAssertEqual(span.stepCount, 3)
+        XCTAssertEqual(span.dispatchCount, 2 * 22 + 25)
+        XCTAssertGreaterThan(span.gpuSeconds, 0)
+        XCTAssertGreaterThanOrEqual(
+            span.wallSeconds, span.gpuSeconds,
+            "span wall ≥ span GPU (edge test 12)")
+    }
+
+    /// End-to-end production wiring: the runner's GPU init captures the
+    /// prompt-processing call's span as the prefill span at the first token
+    /// boundary — later decode forwards (which overwrite the model's
+    /// `lastCallSpan`) must not leak into it. The legacy TTFT-style field
+    /// exports alongside (D1 continuity).
+    func testRunnerPrefillSpanFromGPUModel() throws {
+        let model = try makeTinyModel()
+        let runner = BenchGenerationRunner(
+            gpuModel: model, maxContext: 16, eosTokenIds: [])
+        let metrics = try runner.run(promptIds: [1, 2, 3], maxNewTokens: 3).metrics
+
+        let prefill = try XCTUnwrap(metrics.prefillSpan)
+        XCTAssertEqual(prefill.promptTokenCount, 3)
+        XCTAssertEqual(
+            prefill.span.stepCount, 3,
+            "prefill span covers the prompt call only — the first generated "
+            + "token's decode forward is excluded by construction")
+        XCTAssertEqual(prefill.span.dispatchCount, 2 * 22 + 25)
+        XCTAssertGreaterThan(prefill.span.gpuSeconds, 0)
+        XCTAssertGreaterThanOrEqual(
+            prefill.span.wallSeconds, prefill.span.gpuSeconds)
+        XCTAssertFalse(
+            prefill.summaryLine.contains("WARM PREFIX"),
+            "a cold-cache generation is a real prefill")
+        XCTAssertNotNil(metrics.prefillSeconds)
+    }
+
     // MARK: - DecodeLoop.generateTokens ≡ DecodeLoop.generate
 
     /// The production token-only loop and the logits-observing loop must

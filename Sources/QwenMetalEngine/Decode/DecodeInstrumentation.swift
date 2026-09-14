@@ -120,6 +120,82 @@ public struct LatencyVarianceStats: Sendable {
     }
 }
 
+/// P5-1 (phase-5.md D1): the engine-measured span of one
+/// `NextTokenLogitsSource` call — wall time bracketing the call (entry to
+/// the chosen token / logits being available), the SUM of the per-step
+/// command-buffer GPU durations (hard rule 7: dual timing, always), and the
+/// sum of compute dispatches. `GPUModel` records one for every
+/// `lastPositionLogits` / `nextGreedyToken` call; the FIRST call of a
+/// generation processes the whole prompt through the incremental-prefix
+/// loop, so its span is the prefill span — ending exactly when the last
+/// prompt position's output (the logits/argmax feeding the first generated
+/// token) is available, before any decode forward runs.
+public struct ForwardCallSpan: Sendable {
+    /// Forward passes the call actually ran (== the uncached suffix length).
+    public let stepCount: Int
+    /// Call entry → output available, including per-step host gaps and the
+    /// final readback. Wall ≥ GPU by construction (the GPU only executes
+    /// inside the call's command buffers).
+    public let wallSeconds: Double
+    /// Σ per-step command-buffer GPU execution times.
+    public let gpuSeconds: Double
+    /// Σ per-step compute dispatches (DispatchCounter — measured, not derived).
+    public let dispatchCount: Int
+
+    public init(
+        stepCount: Int, wallSeconds: Double, gpuSeconds: Double,
+        dispatchCount: Int
+    ) {
+        self.stepCount = stepCount
+        self.wallSeconds = wallSeconds
+        self.gpuSeconds = gpuSeconds
+        self.dispatchCount = dispatchCount
+    }
+}
+
+/// P5-1 (phase-5.md D1): the prefill metric of record. Prefill tok/s =
+/// per-engine prompt token count ÷ prefill-span WALL time; the span covers
+/// prompt processing only — it ends when the last prompt position's output
+/// is available and EXCLUDES the first generated token's decode forward.
+/// Span GPU time and prefill dispatch count ride along (reported, never
+/// gated). Binding definition: DECISIONS.md 2026-09-14 "Phase 5 gates
+/// pre-committed" (veto-approved same day).
+public struct PrefillSpan: Sendable {
+    /// The accounting basis: this engine's prompt tokenization count.
+    public let promptTokenCount: Int
+    /// The engine-measured span of the prompt-processing call.
+    public let span: ForwardCallSpan
+
+    public init(promptTokenCount: Int, span: ForwardCallSpan) {
+        self.promptTokenCount = promptTokenCount
+        self.span = span
+    }
+
+    /// The metric of record: prompt tokens ÷ span wall time.
+    public var tokensPerSecond: Double {
+        Double(promptTokenCount) / max(span.wallSeconds, 1e-9)
+    }
+
+    /// The one-line report form the CLI, BenchmarkReport, and the app share.
+    /// A warm-prefix mismatch (span steps ≠ prompt tokens — not a real
+    /// prefill) is labeled loudly instead of silently reported.
+    public var summaryLine: String {
+        var line = String(
+            format: "prefill span: %d tokens in %.3f s = %.2f tok/s (of "
+                + "record) — GPU %.3f s, %d dispatches (prompt processing "
+                + "only, excl. first decode forward)",
+            promptTokenCount, span.wallSeconds, tokensPerSecond,
+            span.gpuSeconds, span.dispatchCount)
+        if span.stepCount != promptTokenCount {
+            line += String(
+                format: " [WARM PREFIX: only %d of %d positions were "
+                    + "processed — not a prefill row]",
+                span.stepCount, promptTokenCount)
+        }
+        return line
+    }
+}
+
 /// Collects `TokenStepRecord`s during a generation (the CLI/app hook them in
 /// via `DecodeLoop`'s `onStep`) and computes the P2-5 aggregates.
 public struct DecodeTimingCollector: Sendable {

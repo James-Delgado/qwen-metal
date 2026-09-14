@@ -269,6 +269,74 @@ final class BenchHarnessTests: XCTestCase {
         XCTAssertLessThanOrEqual(prefill, metrics.wallSeconds)
     }
 
+    // MARK: - P5-1 prefill span (phase-5.md D1 — edge test 12)
+
+    /// The runner polls the call-span source exactly once — at the first
+    /// token boundary, when the model's last call was the prompt-processing
+    /// call — and accounts the span against the per-engine prompt token
+    /// count. The legacy TTFT-style field keeps exporting next to it.
+    func testRunnerBuildsPrefillSpanFromCallSpanSource() throws {
+        let source = ScriptedSource(vocabSize: 4) { _ in self.peaked(1) }
+        var spanPolls = 0
+        let runner = BenchGenerationRunner(
+            model: source, maxContext: 100, eosTokenIds: [],
+            callSpan: {
+                spanPolls += 1
+                return ForwardCallSpan(
+                    stepCount: 2, wallSeconds: 4.0, gpuSeconds: 3.0,
+                    dispatchCount: 44)
+            })
+        let metrics = try runner.run(promptIds: [0, 0], maxNewTokens: 3).metrics
+
+        XCTAssertEqual(
+            spanPolls, 1,
+            "polled once at the first token boundary — decode calls must "
+            + "not overwrite the captured prefill span")
+        let prefill = try XCTUnwrap(metrics.prefillSpan)
+        XCTAssertEqual(
+            prefill.promptTokenCount, 2,
+            "per-engine token accounting: the runner's own prompt id count")
+        XCTAssertEqual(prefill.span.stepCount, 2)
+        XCTAssertEqual(prefill.span.dispatchCount, 44)
+        XCTAssertEqual(prefill.tokensPerSecond, 0.5, accuracy: 1e-12)
+        XCTAssertNotNil(
+            metrics.prefillSeconds,
+            "legacy TTFT-style field still exports (D1 continuity)")
+    }
+
+    func testRunnerWithoutCallSpanSourceReportsNilPrefillSpan() throws {
+        let source = ScriptedSource(vocabSize: 4) { _ in self.peaked(1) }
+        let runner = BenchGenerationRunner(
+            model: source, maxContext: 100, eosTokenIds: [])
+        let metrics = try runner.run(promptIds: [0, 0], maxNewTokens: 2).metrics
+        XCTAssertNil(metrics.prefillSpan)
+        XCTAssertNotNil(metrics.prefillSeconds)
+    }
+
+    /// PrefillSpan math + report vocabulary: tok/s of record is prompt
+    /// tokens ÷ span WALL time; a warm-prefix mismatch is labeled loudly.
+    func testPrefillSpanMetricOfRecordAndWarmPrefixLabel() {
+        let cold = PrefillSpan(
+            promptTokenCount: 852,
+            span: ForwardCallSpan(
+                stepCount: 852, wallSeconds: 28.4, gpuSeconds: 27.0,
+                dispatchCount: 100_000))
+        XCTAssertEqual(cold.tokensPerSecond, 852 / 28.4, accuracy: 1e-9)
+        XCTAssertTrue(cold.summaryLine.contains("852 tokens"))
+        XCTAssertTrue(cold.summaryLine.contains("30.00 tok/s (of record)"))
+        XCTAssertFalse(cold.summaryLine.contains("WARM PREFIX"))
+
+        let warm = PrefillSpan(
+            promptTokenCount: 852,
+            span: ForwardCallSpan(
+                stepCount: 10, wallSeconds: 0.5, gpuSeconds: 0.4,
+                dispatchCount: 2000))
+        XCTAssertTrue(
+            warm.summaryLine.contains(
+                "[WARM PREFIX: only 10 of 852 positions were processed"),
+            "a partial-prefix call must never pass silently as a prefill row")
+    }
+
     // MARK: - MemoryFootprint (cross-check reader)
 
     func testPhysFootprintReadsANonTrivialValue() throws {

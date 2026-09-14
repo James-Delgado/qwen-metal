@@ -10,7 +10,8 @@ final class BenchmarkReportTests: XCTestCase {
     /// Builds a real DecodeTimingSummary through the collector (its
     /// memberwise init is deliberately not public).
     private func syntheticMetrics(
-        tokens: Int, dispatches: Int = 591
+        tokens: Int, dispatches: Int = 591,
+        prefillSpan: PrefillSpan? = nil
     ) -> GenerationMetrics {
         var collector = DecodeTimingCollector()
         for i in 0..<tokens {
@@ -24,7 +25,8 @@ final class BenchmarkReportTests: XCTestCase {
         return GenerationMetrics(
             promptTokenCount: 84, generatedTokenCount: tokens,
             wallSeconds: Double(tokens) * 0.25,
-            prefillSeconds: 21.0, stopReason: .maxNewTokens,
+            prefillSeconds: 21.0,
+            prefillSpan: prefillSpan, stopReason: .maxNewTokens,
             timing: collector.summary(),
             overallTokensPerSecond: collector.overallTokensPerSecond(),
             canonicalWindowTokensPerSecond:
@@ -64,10 +66,11 @@ final class BenchmarkReportTests: XCTestCase {
         XCTAssertTrue(text.contains("sampling: greedy"))
         XCTAssertTrue(text.contains("Metal API validation"))
         XCTAssertTrue(text.contains("generated: 640 tokens"))
-        // Prefill honesty note (spec D6): 84 tokens / 21 s = 4.00 tok/s.
+        // P5-1 (phase-5.md D1): the P2-6 TTFT-style field keeps exporting,
+        // honestly labeled as runner-clocked — rows cite the prefill span.
         XCTAssertTrue(text.contains(
-            "prefill: 84 tokens in 21.00 s (4.00 tok/s"))
-        XCTAssertTrue(text.contains("includes the first generated token's forward"))
+            "ttft-style (legacy P2-6 field, runner-clocked): "
+            + "84 prompt tokens, 21.00 s to first token available"))
         // Dual timing (hard rule 7): GPU, wall, AND the wall−GPU overhead.
         XCTAssertTrue(text.contains("median GPU 200.00 ms"))
         XCTAssertTrue(text.contains("median wall 250.00 ms"))
@@ -80,6 +83,39 @@ final class BenchmarkReportTests: XCTestCase {
         XCTAssertTrue(text.contains("phys_footprint"))
         XCTAssertTrue(text.contains("4096.0 MB"))
         XCTAssertTrue(text.contains("Xcode gauge is the metric of record"))
+    }
+
+    // MARK: - (P5-1) prefill span line (phase-5.md D1 — edge test 12)
+
+    /// The span line is the prefill metric of record: prompt tokens ÷ span
+    /// WALL time, with span GPU time and dispatch count reported alongside
+    /// (dual timing, hard rule 7) — and it coexists with the legacy field.
+    func testBurstExportCarriesPrefillSpanLine() throws {
+        let span = PrefillSpan(
+            promptTokenCount: 84,
+            span: ForwardCallSpan(
+                stepCount: 84, wallSeconds: 20.0, gpuSeconds: 19.25,
+                dispatchCount: 49_644))
+        let text = report(
+            mode: .burst,
+            burst: syntheticMetrics(tokens: 64, prefillSpan: span)).exportText()
+        XCTAssertTrue(text.contains(
+            "prefill span: 84 tokens in 20.000 s = 4.20 tok/s (of record) — "
+            + "GPU 19.250 s, 49644 dispatches (prompt processing only, "
+            + "excl. first decode forward)"), text)
+        XCTAssertTrue(
+            text.contains("ttft-style (legacy P2-6 field"),
+            "legacy TTFT-style field still exports next to the span (D1)")
+        XCTAssertFalse(text.contains("WARM PREFIX"))
+    }
+
+    /// No span (CPU backend / scripted source) → the line is absent, the
+    /// legacy field still renders.
+    func testExportWithoutPrefillSpanOmitsTheLine() throws {
+        let text = report(
+            mode: .burst, burst: syntheticMetrics(tokens: 64)).exportText()
+        XCTAssertFalse(text.contains("prefill span:"))
+        XCTAssertTrue(text.contains("ttft-style (legacy P2-6 field"))
     }
 
     // MARK: - (P3-5) rows record the weights format

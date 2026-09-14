@@ -123,13 +123,17 @@ public struct BenchmarkReport: Sendable {
         lines.append(String(
             format: "generated: %d tokens in %.1f s (stop: %@)",
             m.generatedTokenCount, m.wallSeconds, m.stopReason.rawValue))
+        // P5-1 (phase-5.md D1): the prefill span is the metric of record;
+        // the P2-6 TTFT-style field keeps exporting underneath, honestly
+        // labeled — rows cite the span.
+        if let span = m.prefillSpan {
+            lines.append(span.summaryLine)
+        }
         if let prefill = m.prefillSeconds {
             lines.append(String(
-                format: "prefill: %d tokens in %.2f s (%.2f tok/s — "
-                    + "sequential per spec D6; includes the first generated "
-                    + "token's forward)",
-                m.promptTokenCount, prefill,
-                Double(m.promptTokenCount) / max(prefill, 1e-9)))
+                format: "ttft-style (legacy P2-6 field, runner-clocked): "
+                    + "%d prompt tokens, %.2f s to first token available",
+                m.promptTokenCount, prefill))
         }
         if let t = m.timing {
             let dispatches = t.minDispatchCount == t.maxDispatchCount

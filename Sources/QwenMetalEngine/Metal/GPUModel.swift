@@ -99,6 +99,15 @@ public final class GPUModel {
     /// reduction) on top of the with-logits count: fused 200 measured.
     public private(set) var lastStepDispatchCount: Int?
 
+    /// P5-1 (phase-5.md D1): engine-measured span of the most recent
+    /// `lastPositionLogits` / `nextGreedyToken` call — wall bracketing the
+    /// call, Σ per-step GPU durations, Σ dispatches, steps run. The first
+    /// call of a generation processes the whole prompt, so its span is the
+    /// prefill span (callers capture it at that boundary; later decode
+    /// calls overwrite it with their own one-step spans). nil before the
+    /// first call.
+    public private(set) var lastCallSpan: ForwardCallSpan?
+
     /// Tokens whose KV entries currently occupy cache positions
     /// `0..<cachedTokens.count`, in order. `lastPositionLogits` extends this
     /// prefix incrementally and resets on any mismatch.
@@ -882,10 +891,23 @@ extension GPUModel: NextTokenLogitsSource {
         if !(ids.count > cachedTokens.count && ids.starts(with: cachedTokens)) {
             reset()
         }
+        // P5-1 (spec D1): the whole call is one dual-timed span — on the
+        // first call of a generation it is the prefill span.
+        let spanWallStart = CACurrentMediaTime()
+        var spanGPUSeconds = 0.0
+        var spanDispatches = 0
+        var spanSteps = 0
         var logits: [Float]?
         for i in cachedTokens.count..<ids.count {
             logits = try step(token: ids[i], computeLogits: i == ids.count - 1)
+            spanGPUSeconds += lastStepTiming?.gpuDuration ?? 0
+            spanDispatches += lastStepDispatchCount ?? 0
+            spanSteps += 1
         }
+        lastCallSpan = ForwardCallSpan(
+            stepCount: spanSteps,
+            wallSeconds: CACurrentMediaTime() - spanWallStart,
+            gpuSeconds: spanGPUSeconds, dispatchCount: spanDispatches)
         // The loop ran at least once (cachedTokens.count < ids.count holds in
         // both branches above) and its last iteration computed logits.
         return logits!
@@ -903,9 +925,28 @@ extension GPUModel: NextTokenLogitsSource {
         if !(ids.count > cachedTokens.count && ids.starts(with: cachedTokens)) {
             reset()
         }
+        // P5-1 (spec D1): span the call — through the selecting step's
+        // 4-byte argmax readback, so the span ends when the chosen token
+        // (the last prompt position's output on a prefill call) is
+        // available on the CPU.
+        let spanWallStart = CACurrentMediaTime()
+        var spanGPUSeconds = 0.0
+        var spanDispatches = 0
+        var spanSteps = 0
         for i in cachedTokens.count..<(ids.count - 1) {
             try step(token: ids[i], computeLogits: false)
+            spanGPUSeconds += lastStepTiming?.gpuDuration ?? 0
+            spanDispatches += lastStepDispatchCount ?? 0
+            spanSteps += 1
         }
-        return try stepSelectingToken(token: ids[ids.count - 1])
+        let token = try stepSelectingToken(token: ids[ids.count - 1])
+        spanGPUSeconds += lastStepTiming?.gpuDuration ?? 0
+        spanDispatches += lastStepDispatchCount ?? 0
+        spanSteps += 1
+        lastCallSpan = ForwardCallSpan(
+            stepCount: spanSteps,
+            wallSeconds: CACurrentMediaTime() - spanWallStart,
+            gpuSeconds: spanGPUSeconds, dispatchCount: spanDispatches)
+        return token
     }
 }

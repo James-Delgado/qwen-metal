@@ -3818,3 +3818,54 @@ that never loosens). docs/phases/phase-5.md D7/exit-criteria and the
 P5-5 / SPEC-P5 backlog notes are updated to 135 with an amendment
 note pointing here; this entry is the binding record. P5-1 may
 proceed with no open questions on the gates.
+
+## 2026-09-14 — P5-1: prefill-span instrumentation landed; Mac sequential "before" prefill row measured
+
+The D1 metric of record (pinned in the Phase 5 gates entry, veto-approved
+2026-09-14) is now engine-owned:
+
+- **Implementation:** `GPUModel` records a dual-timed `ForwardCallSpan`
+  for every `lastPositionLogits` / `nextGreedyToken` call — wall
+  bracketing the call (entry → chosen token/logits available on the CPU),
+  Σ per-step command-buffer GPU durations, Σ measured dispatches, steps
+  run. The first call of a generation processes the whole prompt through
+  the incremental-prefix loop, so its span IS the prefill span: it ends
+  when the last prompt position's output (the argmax feeding the first
+  generated token) is available, and the first generated token's decode
+  forward is a later, separate call — excluded by construction. New
+  `PrefillSpan` (prompt tokens ÷ span wall = tok/s of record; GPU +
+  dispatches reported, never gated) flows through `BenchGenerationRunner`
+  → `GenerationMetrics.prefillSpan` → `BenchmarkReport` + CLI print block
+  → the app's export (shared runner/report — zero app-code change). The
+  P2-6 TTFT-style `prefillSeconds` field keeps exporting, relabeled
+  honestly ("ttft-style (legacy P2-6 field, runner-clocked)"); a
+  warm-prefix span (steps ≠ prompt tokens) is labeled loudly, never
+  silently reported as a prefill.
+- **Tests (edge test 12, the parts that exist before the tiled path):**
+  span wall ≥ span GPU > 0 on the real tiny GPU model; exact dispatch
+  sums on both entry points ((P−1)·22+24 logits path, (P−1)·22+25 token
+  path — the P2-5/P4-8 measured pins); per-engine token accounting;
+  capture-at-step-0 (decode forwards don't leak in); cache-reset replay
+  coverage; legacy-field coexistence; report-line pins (red-first on the
+  relabel). Suite minus CPU logit gate: **428 tests, 4 skipped
+  (checkpoint-absent), 0 failures** (8092 s debug — see the DEV-1 note).
+- **Mac sequential "before" prefill row (PROVISIONAL, results.md Phase 5
+  section):** release CLI, gpu + q4g64 + fused, prefill-summarize 852.
+  Warm span median **16.248 s = 52.44 tok/s of record** (warm range
+  52.40–52.49, n=3; cold first run 51.01), span GPU ≈ 15.87–15.89 s
+  (≈18.6 ms/prompt token), prefill dispatches **167,847 on every run —
+  exactly 851×197 + 1×200**, a structural cross-check of the span
+  accounting against the fused-path dispatch pins.
+- **Observation (recorded, no gate implication):** sequential prefill
+  streams ≈0.793 GB/token (851 of 852 steps skip the tied lm_head
+  triplet ≈0.175 GB), so the committed 45.3 tok/s sequential structural
+  ceiling — derived from the full 0.968 GB/token — is slightly
+  conservative as a pure-bandwidth bound for the no-logits prefill steps
+  (≈55 tok/s at 100% of 43.84 GB/s on that byte basis). The 135 tok/s
+  prefill floor is ≥2.4× even that stricter basis; all gates stand
+  unmodified (hard rule 6). Mac per-token cost confirms the story:
+  prefill ≈18.6 ms GPU vs decode ≈21.4 ms on the same build ≈ the
+  lm_head stream + shallower average attention depth.
+- Prompt feeding for the Mac row used the recorded `$(cat)` + `$'\n\n'`
+  workaround (852 verified per run); CLI-1 (--prompt-file) remains the
+  clean fix.

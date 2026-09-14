@@ -301,6 +301,50 @@ final class GPUModelTests: XCTestCase {
             "wall brackets GPU — the difference is the dispatch overhead")
     }
 
+    // MARK: - P5-1 call span (phase-5.md D1 — edge test 12)
+
+    func testCallSpanNilBeforeFirstCall() throws {
+        let model = try makeTinyModel()
+        XCTAssertNil(model.lastCallSpan)
+    }
+
+    /// The logits entry point spans the whole uncached suffix: a 3-token
+    /// prompt runs 2 steps without the logits tail (22 dispatches each,
+    /// the P2-5 measured pin) + 1 with it (24) — and the span's wall
+    /// brackets its summed GPU time (dual timing, hard rule 7).
+    func testLastPositionLogitsCallSpanSumsAllPromptSteps() throws {
+        let model = try makeTinyModel()
+        _ = try model.lastPositionLogits(ids: [1, 2, 3])
+        let span = try XCTUnwrap(model.lastCallSpan)
+        XCTAssertEqual(span.stepCount, 3)
+        XCTAssertEqual(span.dispatchCount, 2 * 22 + 24)
+        XCTAssertGreaterThan(span.gpuSeconds, 0, "GPU did real work")
+        XCTAssertGreaterThanOrEqual(
+            span.wallSeconds, span.gpuSeconds,
+            "span wall ≥ span GPU (edge test 12)")
+    }
+
+    /// A decode continuation spans only its own single forward — the D1
+    /// prefill span EXCLUDES the first generated token's decode forward
+    /// by construction (it is a later, separate call).
+    func testDecodeCallSpanCoversOnlyTheNewSuffix() throws {
+        let model = try makeTinyModel()
+        _ = try model.lastPositionLogits(ids: [1, 2, 3])
+        _ = try model.lastPositionLogits(ids: [1, 2, 3, 4])
+        let span = try XCTUnwrap(model.lastCallSpan)
+        XCTAssertEqual(span.stepCount, 1)
+        XCTAssertEqual(span.dispatchCount, 24)
+    }
+
+    /// A non-extending ids shape resets and replays from scratch — the
+    /// span reports the work actually done (the full replay).
+    func testCallSpanCoversFullReplayAfterPrefixMismatch() throws {
+        let model = try makeTinyModel()
+        _ = try model.lastPositionLogits(ids: [1, 2, 3])
+        _ = try model.lastPositionLogits(ids: [2, 2, 3, 4])
+        XCTAssertEqual(try XCTUnwrap(model.lastCallSpan).stepCount, 4)
+    }
+
     // MARK: - Context limit (spec edge case 5, pipeline level)
 
     func testStepAtMaxContextThrowsContextFull() throws {

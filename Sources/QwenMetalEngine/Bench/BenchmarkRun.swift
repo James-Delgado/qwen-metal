@@ -43,10 +43,16 @@ public struct GenerationMetrics: Sendable {
     public let generatedTokenCount: Int
     /// Whole-generation wall time (prefill + decode), seconds.
     public let wallSeconds: Double
-    /// Wall time from generation start to the FIRST generated token's
-    /// completion — sequential prefill (spec D6) plus one decode forward,
-    /// stated as such wherever it's reported. nil when no token was produced.
+    /// Wall time from generation start to the FIRST generated token being
+    /// available — the P2-6 TTFT-style field, runner-clocked (it brackets
+    /// the prompt-processing call plus the runner's own loop glue). Kept
+    /// exporting for continuity (phase-5.md D1); rows cite `prefillSpan`.
+    /// nil when no token was produced.
     public let prefillSeconds: Double?
+    /// P5-1 (phase-5.md D1): the engine-measured prefill span — the metric
+    /// of record for prefill tok/s. nil when the model exposes no call span
+    /// (CPU backend / scripted sources without one) or no token was produced.
+    public let prefillSpan: PrefillSpan?
     public let stopReason: GenerationStopReason
     /// Per-token aggregates (median GPU/wall/overhead, dispatches/token).
     /// nil when no step records were collected.
@@ -61,6 +67,7 @@ public struct GenerationMetrics: Sendable {
     public init(
         promptTokenCount: Int, generatedTokenCount: Int, wallSeconds: Double,
         prefillSeconds: Double? = nil,
+        prefillSpan: PrefillSpan? = nil,
         stopReason: GenerationStopReason, timing: DecodeTimingSummary?,
         overallTokensPerSecond: Double?, canonicalWindowTokensPerSecond: Double?,
         latencyVariance: LatencyVarianceStats? = nil
@@ -69,6 +76,7 @@ public struct GenerationMetrics: Sendable {
         self.generatedTokenCount = generatedTokenCount
         self.wallSeconds = wallSeconds
         self.prefillSeconds = prefillSeconds
+        self.prefillSpan = prefillSpan
         self.stopReason = stopReason
         self.timing = timing
         self.overallTokensPerSecond = overallTokensPerSecond
@@ -93,19 +101,26 @@ public struct BenchGenerationRunner {
     public let eosTokenIds: Set<Int>
     /// Read after each step; returns the step's dual timing + dispatch count.
     public let stepRecord: (() -> TokenStepRecord?)?
+    /// P5-1 (phase-5.md D1): read once, right after the first step — the
+    /// model's span of the prompt-processing call. It becomes the
+    /// generation's `prefillSpan`.
+    public let callSpan: (() -> ForwardCallSpan?)?
 
     public init(
         model: any NextTokenLogitsSource, maxContext: Int,
-        eosTokenIds: Set<Int>, stepRecord: (() -> TokenStepRecord?)? = nil
+        eosTokenIds: Set<Int>, stepRecord: (() -> TokenStepRecord?)? = nil,
+        callSpan: (() -> ForwardCallSpan?)? = nil
     ) {
         self.model = model
         self.maxContext = maxContext
         self.eosTokenIds = eosTokenIds
         self.stepRecord = stepRecord
+        self.callSpan = callSpan
     }
 
     /// The production wiring: per-step records straight from the model's
-    /// dual timing + dispatch count (hard rule 7 — both clocks, always).
+    /// dual timing + dispatch count (hard rule 7 — both clocks, always),
+    /// and the prefill span from the model's call span (P5-1).
     public init(gpuModel: GPUModel, maxContext: Int, eosTokenIds: Set<Int>) {
         self.init(
             model: gpuModel, maxContext: maxContext, eosTokenIds: eosTokenIds,
@@ -114,7 +129,8 @@ public struct BenchGenerationRunner {
                       let dispatches = gpuModel.lastStepDispatchCount
                 else { return nil }
                 return TokenStepRecord(timing: timing, dispatchCount: dispatches)
-            })
+            },
+            callSpan: { gpuModel.lastCallSpan })
     }
 
     /// - Parameters:
@@ -129,6 +145,7 @@ public struct BenchGenerationRunner {
     ) throws -> GenerationRunResult {
         var collector = DecodeTimingCollector()
         var prefillSeconds: Double?
+        var prefillSpan: PrefillSpan?
         let start = Date()
         // P4-8: the token-only path — on the GPU backend the argmax runs
         // on-GPU and no full-vocab logits readback happens per token.
@@ -139,6 +156,12 @@ public struct BenchGenerationRunner {
                 onToken: { step, token in
                     if step == 0 {
                         prefillSeconds = Date().timeIntervalSince(start)
+                        // P5-1 (spec D1): the first call processed the
+                        // prompt — its span is the prefill span.
+                        if let span = callSpan?() {
+                            prefillSpan = PrefillSpan(
+                                promptTokenCount: promptIds.count, span: span)
+                        }
                     }
                     if let record = stepRecord?() { collector.append(record) }
                     onToken?(step, token)
@@ -164,6 +187,7 @@ public struct BenchGenerationRunner {
                 generatedTokenCount: generated.count,
                 wallSeconds: wallSeconds,
                 prefillSeconds: prefillSeconds,
+                prefillSpan: prefillSpan,
                 stopReason: stopReason,
                 timing: collector.summary(),
                 overallTokensPerSecond: collector.overallTokensPerSecond(),
