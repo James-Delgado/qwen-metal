@@ -9,12 +9,14 @@ import QwenMetalEngine
 struct BenchmarkView: View {
     /// Screen-local run modes: the two BenchmarkReport generation modes, the
     /// P3-6 dequant-matvec microbench (weights-only, no generation), and the
-    /// P4-1 diagnostic attribution run (never a benchmark row).
+    /// two diagnostic runs (never benchmark rows): P4-1 attribution and
+    /// OA-1 overhead anatomy.
     private enum RunMode: String, CaseIterable {
         case burst
         case sustained
         case microbench
         case attribution
+        case overheadAnatomy
     }
 
     @EnvironmentObject private var model: AppModel
@@ -78,6 +80,7 @@ struct BenchmarkView: View {
                         Text("sustained (≥5 min)").tag(RunMode.sustained)
                         Text("microbench").tag(RunMode.microbench)
                         Text("attribution").tag(RunMode.attribution)
+                        Text("overhead").tag(RunMode.overheadAnatomy)
                     }
                     .pickerStyle(.segmented)
                     .disabled(model.isRunning)
@@ -104,6 +107,12 @@ struct BenchmarkView: View {
                             + "(DIAGNOSTIC — never a benchmark row). "
                             + "decode-essay, 64 interleaved forwards; feeds "
                             + "the P4-EXEC roofline decomposition.")
+                            .font(.caption)
+                    case .overheadAnatomy:
+                        Text("OA-1 wall-GPU overhead anatomy (DIAGNOSTIC — "
+                            + "never a benchmark row). decode-essay, 96 "
+                            + "round-robin forwards; the device span split "
+                            + "for the P4-9 verdict (P4-11 session).")
                             .font(.caption)
                     }
                     TextField(
@@ -136,6 +145,8 @@ struct BenchmarkView: View {
                                         coldWarmNote: coldWarm)
                                 case .attribution:
                                     await model.runAttribution()
+                                case .overheadAnatomy:
+                                    await model.runOverheadAnatomy()
                                 }
                             }
                         }

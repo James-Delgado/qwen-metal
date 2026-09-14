@@ -3446,3 +3446,31 @@ process sampled healthy at 78–102% CPU throughout, the documented
 counterfeit-hang signature). Every test that ran, including the four
 always-run anatomy tests, passed first try; the P4-9 diff touches no
 production or oracle code.
+
+## 2026-09-14 — OA-1: app overhead-anatomy export (the P4-11 device instrument) — no new conventions
+
+Plumbing for the P4-9 device confirmation, AttributionHarness/app-mode
+precedent followed verbatim: engine-side `OverheadAnatomyRunner`
+round-robins production / anatomy / unretained-references arms per
+decode forward on one greedy stream (all arms are P4-8 selecting
+steps — token-identical by construction, pinned by test) and
+`OverheadAnatomyRunResult.exportText` renders the SAME seven-row span
+table as the P4-9 Mac sweep, so the P4-11 device entry lines up
+column-for-column. App benchmark screen gains the "overhead" mode
+(decode-essay, Stop, share/copy). One convention-following default:
+`BenchDefaults.overheadAnatomyDecodeTokens = 96` — 32 samples/arm,
+the P4-1 attribution rationale, ~5 s at device rates. The mode
+honors the kernel-path toggle, so fused + naive runs in one session
+give the device per-span affine split (the Mac two-point method).
+DIAGNOSTIC ONLY throughout; nothing measured this session (tiny-model
+numbers are test assertions, not findings).
+
+**Verification (quoted).** Release suite, scoped for a Bench-module+
+app diff (`swift test -c release --skip LogitMatchSuiteTests --skip
+QuantQualityGateTests` — the two multi-minute CPU-oracle suites the
+2026-09-13 full no-skip run just validated on this identical engine
+code; OA-1 executes nothing they cover): **"Executed 415 tests, with
+4 tests skipped and 0 failures (0 unexpected) in 941.599 (941.642)
+seconds"** (422 total minus their 7; +6 harness tests, all first-run
+green; same 4 opt-in skips). App build: xcodebuild Release,
+generic/platform=iOS, unsigned — BUILD SUCCEEDED.

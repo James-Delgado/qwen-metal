@@ -362,6 +362,51 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// OA-1 (seeded by P4-9): the overhead-anatomy diagnostic run —
+    /// decode-essay prompt, round-robin production/anatomy/unretained
+    /// forwards via the engine's OverheadAnatomyRunner. DIAGNOSTIC ONLY:
+    /// the export is never a benchmark row (the P4-11 device span split
+    /// James records comes from this button, labeled as diagnostic).
+    func runOverheadAnatomy() async {
+        guard !isRunning, !isLoading else { return }
+        isRunning = true
+        errorMessage = nil
+        lastReport = nil
+        stopFlag.reset()
+        defer { isRunning = false }
+        do {
+            let engine = try await loadEngineIfNeeded()
+            let promptText = try BundledPrompt.decodeEssay.text()
+            let stopFlag = self.stopFlag
+            statusLine = "overhead anatomy run (DIAGNOSTIC, "
+                + "\(BenchDefaults.overheadAnatomyDecodeTokens) forwards)…"
+            let report: String =
+                try await Task.detached(priority: .userInitiated) {
+                    let promptIds = engine.tokenizer.encode(promptText)
+                    let runner = OverheadAnatomyRunner(
+                        gpuModel: engine.gpuModel,
+                        maxContext: engine.contextLimit,
+                        eosTokenIds: engine.stopTokenIds)
+                    let result = try runner.run(
+                        promptIds: promptIds,
+                        decodeTokens: BenchDefaults.overheadAnatomyDecodeTokens,
+                        shouldStop: { stopFlag.isSet },
+                        onStep: { step in self.postProgress(step) })
+                    return result.exportText(
+                        dateStamp: Self.dateStamp(),
+                        deviceLabel: Self.deviceModelIdentifier(),
+                        osVersion: "iOS \(Self.osVersionString())",
+                        residency: engine.residency)
+                }.value
+            lastReport = report
+            statusLine = stopFlag.isSet
+                ? "overhead anatomy stopped early — partial diagnostic"
+                : "overhead anatomy complete"
+        } catch {
+            show(error)
+        }
+    }
+
     // MARK: - Internals
 
     /// Loads (off the main thread) if there is no engine for the selected

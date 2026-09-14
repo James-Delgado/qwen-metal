@@ -16,6 +16,11 @@ public enum BenchDefaults {
     /// (half attributed, half production reference). 64 keeps a run under a
     /// minute at Phase 3 rates while giving 32 samples per mode.
     public static let attributionDecodeTokens = 64
+    /// OA-1 overhead-anatomy runs: total round-robin decode forwards
+    /// (thirds: production reference / anatomy / unretained experiment).
+    /// 96 gives 32 samples per arm — the attribution rationale — in ~5 s
+    /// at Phase 4 device rates.
+    public static let overheadAnatomyDecodeTokens = 96
 }
 
 /// Why one generation ended. Inferred from the decode outcome — `DecodeLoop`

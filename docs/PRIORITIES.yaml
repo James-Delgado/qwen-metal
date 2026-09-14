@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-09-13
+last_updated: 2026-09-14
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -1555,8 +1555,9 @@ tasks:
   - id: OA-1
     rank: 18.94
     title: "App diagnostics export for the overhead anatomy (device split of the fixed wall-GPU cost, for P4-11)"
-    status: in_progress
+    status: done
     started_at: 2026-09-14T05:23:00Z
+    completed_at: 2026-09-14T14:02:00Z
     depends_on: []
     blocks: [P4-11]
     deliverable:
@@ -1573,11 +1574,25 @@ tasks:
       (attribution-export precedent, P4-5) so James's P4-11 session
       records the device span split alongside the gate re-walk.
       Blocks P4-11 so the session can't run without it.
+      2026-09-14 (done): landed as Bench/OverheadAnatomyHarness.swift
+      (OverheadAnatomyRunner: production/anatomy/unretained round-robin
+      on one greedy stream — all P4-8 selecting steps, token-identity
+      pinned; exportText renders the P4-9 seven-row span table) +
+      BenchDefaults.overheadAnatomyDecodeTokens=96 (32 samples/arm) +
+      app "overhead" benchmark mode (AppModel.runOverheadAnatomy,
+      mirrors attribution; honors the kernel-path toggle — fused+naive
+      runs in one P4-11 session give the device per-span affine split)
+      + OverheadAnatomyHarnessTests (6, first-run green). Release
+      suite minus the two CPU-oracle suites (fully covered by the
+      2026-09-13 no-skip run on identical engine code): 415 tests /
+      4 opt-in skips / 0 failures (942 s); iOS Release build verified
+      unsigned. See DECISIONS.md 2026-09-14 OA-1 entry. P4-11
+      unblocked (all deps done).
 
   - id: P4-11
     rank: 18.95
     title: "On-device iterate re-run (James): same D8+bookend protocol, decode/overhead/dispatch gates re-walked on the folded+split-K fused path"
-    status: blocked
+    status: ready
     owner: james
     depends_on: [P4-6, P4-7, P4-8, P4-9, OA-1]
     blocks: [P4-EXEC]
