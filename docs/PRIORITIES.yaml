@@ -1555,7 +1555,8 @@ tasks:
   - id: OA-1
     rank: 18.94
     title: "App diagnostics export for the overhead anatomy (device split of the fixed wall-GPU cost, for P4-11)"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-14T05:23:00Z
     depends_on: []
     blocks: [P4-11]
     deliverable:
