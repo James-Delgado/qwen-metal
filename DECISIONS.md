@@ -3549,3 +3549,109 @@ P4-EXEC now re-runs the exit walk with these rows: two of three gates
 PASS; the overhead gate carries a failed-with-anatomy explanation and
 a named structural remedy awaiting the PD-1 decision (flipped ready,
 owner James). Seeded no other follow-ups.
+
+## 2026-09-14 — P4-EXEC: Phase 4 exit criteria walked — Phase 4 EXITED (decided by James); 29.4 judgment: MET; P4-10 skipped
+
+The exit walk re-run with the P4-11 rows (the 2026-09-12 iterate
+decision's mandate), presented to James in-conversation with the
+criteria table, the D6 judgment draft, and the P4-10/PD-1 calls.
+Suite evidence on this engine code (unchanged since): the 2026-09-13
+full no-skip release run ("Executed 416 tests, with 4 tests skipped
+and 0 failures") + the 2026-09-14 OA-1 scoped run ("Executed 415
+tests, with 4 tests skipped and 0 failures"). Per hard rule 6 no
+gate value moves anywhere in this entry.
+
+**Exit criteria (docs/phases/phase-4.md, walked):**
+
+| Criterion | Verdict | Evidence |
+|---|---|---|
+| Fused GQA SDPA kernel, layered tests at the reused attention constant, re-passed through every iteration | MET | P4-2 edge tests 1–5 at max(2⁻⁷·M, 2⁻¹¹); re-passed through the P4-7 split-K rework |
+| RMSNorm/RoPE folding | MET | P4-3 fold set + P4-6 norm→matvec folds; fused layer = 6 dispatches |
+| Dispatches reduced, measured via wall−GPU: dispatch ≤300 AND overhead ≤1.2 ms | SPLIT | Dispatch PASS: 200 measured (591→200, 2.96×), stable. Overhead FAIL: 1.384–1.445 ms median (gate unmodified) |
+| Decode vs roofline judged: floor ≥24.0 + D6 judgment | MET | Floor PASS 31.67 tok/s (n=4, 31.11–31.79); judgment below |
+| Decode latency variance measured | MET | D7 p50/p95/p99/max + stall count on every Phase 4 row; zero stalls in all P4-11 runs |
+| DECISIONS entries for every gate outcome / before-after / judgment | MET | Per-task entries 2026-09-08 … 2026-09-14 + this close-out |
+
+**The overhead-gate failure, recorded honestly (criterion 3):** the
+gate misses by ≈0.2 ms and the P4-9/OA-1 anatomy attributes every
+component: device fixed cost ≈1.13 ms = scheduling 0.52 + fixed
+encode 0.34 + wakeup 0.18 + commit 0.015 ms — ≈62% OS/driver latency
+around an idle GPU that submission tweaks cannot reach (unretained
+references measured zero on Mac AND device); slope 1.22 µs/dispatch,
+entirely encode (A17 Pro encoder calls ≈6× Mac). The gate's tripwire
+purpose (dispatch reduction must show up in wall−GPU; catch encoder
+regressions) was served: wall−GPU shrank 1.9–2.0 → ≈1.40 ms and no
+regression exists. Named remedies on record: indirect-command-buffer
+encode rework (~0.2 ms, would graze the gate marginally) or
+pipelining (removes the entire ≈1.4 ms from the critical path —
+approved this session as PD-1, next entry).
+
+**D6 decode-vs-roofline judgment (mandatory at this milestone):
+the 29.4 tok/s absolute target is MET — measured 31.67 tok/s
+warm-burst window median (n=4, range 31.11–31.79), +7.7% over
+target.** Decomposition at the measured operating point (fused warm,
+≈31.5 ms/token wall), every ms attributed to a measured component,
+no unexplained slack (class-sum sanity 1.00–1.01):
+
+- GPU ≈30.1–30.3 ms + wall−GPU ≈1.38–1.40 ms (anatomy split above).
+- Weight streaming (matvec 21.8–22.4 + head/tail 5.26–5.28 ms) =
+  ≈27.1–27.7 ms, ≈95% of GPU time ⇒ implied stream rate ≈35 GB/s ≈
+  80% of the 43.84 GB/s measured roofline — consistent with the
+  P3-6 microbench (35.29 GB/s best).
+- Attention 1.07–1.20 ms at depth ~115 (P4-7 split-K); remaining
+  norm+elementwise 0.39–0.43 ms (P4-6 folds).
+- Residual to the weights-at-roofline ceiling (≈22.1 ms ⇒ ≈45
+  tok/s): the 80%-vs-100% stream rate — the campaign's quant-matvec
+  lever (P4-10 seeds), plus the overhead ≈1.4 ms (PIPE-1).
+
+**Decision (James): EXIT Phase 4** with criterion 3 recorded as
+split — the overhead gate stays FAILED on the record, unmodified
+(hard rule 6; nothing loosened), with the anatomy explanation above
+and the approved structural remedy (PD-1 → PIPE-1) as the deviation
+record per METHODOLOGY. Rationale: the phase's success metric is
+exceeded, the gate's diagnostic work is complete, and another
+in-phase round would chase ~0.2 ms of encode rework the campaign
+supersedes.
+
+**P4-10 SKIPPED (decided by James; the task's skip clause requires
+this note):** the seeded take-condition — "only if the 29.4 shot
+needs it" — measured FALSE at P4-11 (target exceeded without it;
+floor cleared by 32%). Its three seeds (threadgroup-cached normed-x
+matvec variant; cooperative final-norm collapse — already endorsed
+2026-09-12; split-K reduce fold) stay recorded in the task notes as
+campaign levers: with weight streaming at ≈95% of fused GPU time,
+matvec tuning is the primary GPU-side path toward MLX's 39.2.
+
+**Close-out actions:** Phase 4 EXITED; SPEC-P5 flipped to ready;
+architecture.pdf regenerated (v1.7) and README/CLAUDE.md status
+refreshed per the standing *-EXEC rules; PD-1 decided (next entry)
+and PIPE-1 seeded in the campaign chain.
+
+## 2026-09-14 — PD-1 DECIDED (James): pipelined GPU-driven decode APPROVED; implementation seeded as campaign task PIPE-1
+
+Decision made at the P4-EXEC walk with the P4-11 device anatomy in
+hand (the informing evidence PD-1 waited for). **Approved design:**
+P4-8's GPU argmax leaves the selected token in a GPU buffer; token
+N+1's command buffer consumes it on-GPU (embedding gather reading
+argmaxBuf) and is encoded+committed BEFORE token N completes —
+overlapping the entire fixed wall−GPU cost (device: scheduling
+≈0.52 + total encode ≈0.59 + wakeup ≈0.18 ms) with GPU execution;
+the 4-byte token readback moves off the critical path. Same greedy
+token stream — NOT speculative decoding (no draft model); the stop
+check lags one speculative step, discarded at the boundary.
+
+Bindings recorded with the approval:
+
+- **Metric semantics:** the OV#10 wall−GPU overhead metric was
+  defined on the serial submit→wait loop and its meaning changes
+  under pipelining. SPEC-P7 must pre-commit the pipelined-loop
+  overhead metric definition AND its gates BEFORE PIPE-1 code lands
+  (hard rule 6 discipline) — hence PIPE-1 is blocked on SPEC-P7,
+  not scheduled into Phase 5/6.
+- **Correctness contract:** token-stream exact equality vs the
+  serial loop on the pinned prompts, with the speculative boundary
+  step discarded correctly under every stop cause (eos,
+  context-limit, cap). CPU reference and oracle chain untouched;
+  the bf16/naive paths keep the serial loop.
+- Amends nothing retroactively: all Phase 2–4 rows were measured on
+  the serial loop and stand as recorded.

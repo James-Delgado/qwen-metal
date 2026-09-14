@@ -17,12 +17,14 @@
 
 ## Project status
 
-Phases 0–3 exited (as of 2026-09-05); Phase 4 (fused attention + dispatch
-reduction) is next — SPEC-P4 is the open task. Pinned model: Qwen/Qwen3-1.7B
-@ 70d244cc on iPhone 15 Pro. The engine decodes end-to-end from the packed
-4-bit q4g64 format on-device at 20.6 tok/s warm-burst (target 29.4); every
-pre-committed gate to date has held unmodified on its first run. See PLAN.md
-phase table for the roadmap and DECISIONS.md for the measurement ledger.
+Phases 0–4 exited (as of 2026-09-14); Phase 5 (tiled prefill GEMM) is next —
+SPEC-P5 is the open task. Pinned model: Qwen/Qwen3-1.7B @ 70d244cc on iPhone
+15 Pro. The fused engine decodes end-to-end from the packed 4-bit q4g64
+format on-device at 31.67 tok/s warm-burst — the committed 29.4 target
+(0.75 × MLX) is EXCEEDED. One Phase 4 gate is on record as FAILED with its
+anatomy (overhead 1.40 ms vs ≤1.2; ≈62% OS/driver latency; remedy PIPE-1
+approved for the campaign). See PLAN.md phase table for the roadmap and
+DECISIONS.md for the measurement ledger.
 
 ## Codebase map
 

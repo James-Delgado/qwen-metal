@@ -259,6 +259,9 @@ bpt = np.linspace(0.4, 3.7, 300)  # GB per token
 # Phase 3 (2026-09-05): packed q4g64 point added — ~0.97 GB/token weights,
 # warm-burst window median 20.61 tok/s (range 20.47–20.88); ~49% of roofline
 # end-to-end while the weights-only microbench runs at ~80% (DECISIONS.md P3-7).
+# Phase 4 (2026-09-14): fused point added — same ~0.97 GB/token, warm-burst
+# window median 31.67 tok/s (n=4, 31.11–31.79); ~70% of the packed ceiling,
+# past the 29.4 target; ~95% of GPU time is weight streaming (DECISIONS.md P4-11).
 for bw, c, ls, lab in [
     (43.84, BLUE, "-", "43.84 GB/s (MEASURED triad, iPhone 15 Pro)"),
     (51.2, "#93c5fd", "--", "51.2 GB/s (A17 Pro rated)"),
@@ -287,6 +290,10 @@ ax.scatter([0.97], [20.61], s=90, color=BLUE, marker="D", zorder=6)
 ax.annotate("qwen-metal P3 packed 4-bit (MEASURED):\n20.6 tok/s warm @ ~0.97 GB/token — 49% of\nroofline (weights-only microbench: 80%)", (0.97, 20.61),
             xytext=(0.5, 6), fontsize=8.5, color=BLUE,
             arrowprops=dict(arrowstyle="->", color=BLUE))
+ax.scatter([0.97], [31.67], s=110, color=PURPLE, marker="*", zorder=7)
+ax.annotate("qwen-metal P4 fused (MEASURED):\n31.67 tok/s warm @ ~0.97 GB/token —\npast the 29.4 target; ~95% of GPU time\nis weight streaming @ 80% of roofline", (0.97, 31.67),
+            xytext=(0.44, 55), fontsize=8.5, color=PURPLE,
+            arrowprops=dict(arrowstyle="->", color=PURPLE))
 ax.set_xlabel("Bytes read per generated token (GB)  ≈  packed weights + scales + KV reads", fontsize=9)
 ax.set_ylabel("Decode tokens / second (ceiling)", fontsize=9)
 ax.set_ylim(0, 130); ax.set_xlim(0.4, 3.7)
@@ -353,8 +360,8 @@ phases = [
     ("1", "CPU fp32 reference (macOS) — DONE 2026-08-23", "logit suite ≤1e-3, all 5 prompts, first run; tokenizer id-identical; 118 tests; post-phase audit hardening", 1.0, 2.5, GREEN, GREENF),
     ("2", "Naive Metal port + minimal KV cache — DONE 2026-08-25", "all fp16 gates held first run; free-run divergence none; 'before' 6.7–8.6 tok/s on-device; mmap default", 3.0, 2.0, GREEN, GREENF),
     ("3", "4-bit quant + fused dequant-matvec — DONE 2026-09-05", "all gates in-band; microbench 35.3 GB/s ≥ 30.7 gate; decode 20.6 tok/s (3.0×); mmap default", 4.5, 2.5, GREEN, GREENF),
-    ("4", "Fused attention + kernel fusion — NEXT (spec pending)", "GQA SDPA kernel; fold norm/RoPE; dispatches/token down; target: the ~17 ms/token non-matvec time", 6.5, 2.5, BLUE, BLUEF),
-    ("5", "Tiled prefill GEMM", "threadgroup memory + simdgroup_matrix; prefill vs MLX", 8.5, 2.0, PURPLE, PURPLEF),
+    ("4", "Fused attention + kernel fusion — DONE 2026-09-14", "fused SDPA + folds + GPU argmax: 200 disp/tok; 31.67 tok/s (29.4 target exceeded); overhead gate failed w/ anatomy → PIPE-1", 6.5, 2.5, GREEN, GREENF),
+    ("5", "Tiled prefill GEMM — NEXT (spec pending)", "threadgroup memory + simdgroup_matrix; prefill vs MLX ('before': 8.2–10.7 tok/s)", 8.5, 2.0, BLUE, BLUEF),
     ("6", "Benchmark writeup", "full cross-engine table; thermal + J/tok (battery-delta); roofline analysis", 10.0, 1.5, INK, "#e2e8f0"),
 ]
 ax.set_xlim(-0.2, 12.4); ax.set_ylim(-0.6, len(phases)*1.02); ax.axis("off")

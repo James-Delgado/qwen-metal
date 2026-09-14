@@ -65,7 +65,7 @@ def footer(canvas, doc):
     canvas.setFont("Helvetica", 7.5)
     canvas.setFillColor(GRAY)
     canvas.drawString(0.75 * inch, 0.45 * inch,
-                      "qwen-metal — Architecture & System Design  ·  v1.6  ·  2026-09-05")
+                      "qwen-metal — Architecture & System Design  ·  v1.7  ·  2026-09-14")
     canvas.drawRightString(letter[0] - 0.75 * inch, 0.45 * inch, f"Page {doc.page}")
     canvas.setStrokeColor(colors.HexColor("#e2e8f0"))
     canvas.line(0.75 * inch, 0.62 * inch, letter[0] - 0.75 * inch, 0.62 * inch)
@@ -86,7 +86,7 @@ S.append(Paragraph("Architecture &amp; System Design Document", ParagraphStyle(
 S.append(Paragraph("A from-scratch, single-model LLM inference engine in Swift + Metal for iPhone — "
                    "Qwen ~1.5–2B, 4-bit quantized — benchmarked head-to-head against MLX Swift and "
                    "llama.cpp on the same physical device.", SUB))
-S.append(Paragraph("Version 1.6 · September 5, 2026 (Phase 3 exit: packed 4-bit engine measured on-device) · Companion to PLAN.md, CLAUDE.md, DECISIONS.md, and the phase specs. "
+S.append(Paragraph("Version 1.7 · September 14, 2026 (Phase 4 exit: fused engine past the decode target on-device) · Companion to PLAN.md, CLAUDE.md, DECISIONS.md, and the phase specs. "
                    "Where this document and DECISIONS.md disagree, DECISIONS.md (the append-only log) wins.", CAP))
 S.append(HRFlowable(width="100%", color=INK, thickness=1.2, spaceAfter=10))
 
@@ -109,11 +109,16 @@ S.append(Paragraph(
     "window (generated tokens 128–512). Being able to account for the remaining gap is the point. Phase 2 (exited "
     "2026-08-25) put the deliberately naive bf16 engine on the device at <b>6.7–8.6 tok/s</b> decode (the 'before' row, "
     "PROVISIONAL). Phase 3 (exited 2026-09-05) packed the weights to 4-bit and fused dequantization into every "
-    "weight-consuming kernel: measured decode is now <b>20.61 tok/s</b> warm-burst at the canonical window (range "
+    "weight-consuming kernel: measured decode reached <b>20.61 tok/s</b> warm-burst at the canonical window (range "
     "20.47–20.88) — ~3.0× the Phase 2 row on a 3.56× weight-byte drop, 70% of the target — and the standalone "
     "dequant-matvec microbench sustains <b>35.3 GB/s</b> (80.5% of measured DRAM bandwidth), clearing its pre-committed "
-    "30.7 GB/s gate with the kernel still naive. Phases 4–5 own the remaining gap: the ~17 ms/token of non-matvec time "
-    "(attention, elementwise kernels, dispatch overhead) is Phase 4's explicit target.", BODY))
+    "30.7 GB/s gate with the kernel still naive. Phase 4 (exited 2026-09-14) attacked the remaining ~17 ms/token of non-matvec time: fused GQA SDPA (online softmax, split-K), "
+    "norm/RoPE/append and SwiGLU/residual folds, and GPU argmax cut dispatches to <b>200/token</b> (from 591) and "
+    "lifted measured decode to <b>31.67 tok/s</b> warm-burst — <b>the 29.4 tok/s target is exceeded</b> — with "
+    "attribution showing ~95% of GPU time as weight streaming at ~80% of roofline. One Phase 4 gate is on record "
+    "as FAILED with its anatomy: per-token wall−GPU overhead 1.40 ms vs the ≤1.2 ms gate, ~62% of it OS/driver "
+    "latency around an idle GPU; the approved structural remedy (pipelined GPU-driven decode, PIPE-1) is seeded "
+    "for the post-Phase-6 optimization campaign. Phase 5 (tiled prefill GEMM) is next.", BODY))
 S.append(Paragraph("1.1 · Non-goals (scope is a feature)", H2))
 S.append(Paragraph(
     "Breadth is where mature engines spend most of their engineering, and it teaches little per hour invested. Each "
@@ -243,8 +248,8 @@ S.append(Paragraph(
 S += fig(f"{D}/d5_roofline.png", CW * 0.92,
          "Figure 5 — Decode roofline with measured values: the 43.84 GB/s sustained triad curve, the measured "
          "MLX and llama.cpp rows, the committed 29.4 tok/s target, the fp16 counterfactual, the Phase 2 naive "
-         "bf16 'before' point (6.7–8.6 tok/s, 2026-08-25), and the Phase 3 packed 4-bit point (20.6 tok/s at "
-         "~0.97 GB/token, 2026-09-05).")
+         "bf16 'before' point (6.7–8.6 tok/s, 2026-08-25), the Phase 3 packed 4-bit point (20.6 tok/s at "
+         "~0.97 GB/token, 2026-09-05), and the Phase 4 fused point (31.67 tok/s, 2026-09-14 — past the target).")
 S.append(Paragraph(
     "Phase 2 put the first of our own points on this chart (PROVISIONAL, naive by design — no kernel has been "
     "optimized yet, per the correctness-first rule). The bf16 engine reads ~3.44 GB per token, a ~12.7 tok/s "
@@ -258,9 +263,16 @@ S.append(Paragraph(
     "while the weights-only dequant-matvec microbench sustains <b>35.3 GB/s ≈ 80% of roofline</b> through the very same "
     "kernel. That 80%-vs-49% split is the phase's diagnostic gift: the matvecs are no longer the bottleneck; the "
     "~17 ms/token of non-matvec time (attention over the fp16 cache, elementwise kernels, and the 591-dispatch "
-    "overhead) is, and it is exactly what Phase 4 exists to attack. Sustained decode settles at ~16.8–17.1 tok/s at "
-    "thermal equilibrium (sustained/burst ≈ 0.82); sequential prefill measured 8.2–10.7 tok/s (Phase 5's 'before' "
-    "number).", BODY))
+    "overhead) was — and Phase 4 (2026-09-14) attacked exactly that: the fused path (GQA SDPA with online softmax, "
+    "split-K for occupancy, norm/RoPE/append and SwiGLU/residual folds, GPU argmax) landed <b>200 dispatches/token</b> "
+    "and a measured <b>31.67 tok/s</b> warm-burst (n=4, 31.11–31.79) — ~70% of the 45.2 tok/s packed ceiling and past "
+    "the 29.4 target — with fused-vs-naive <b>+48%</b> claim-grade in one session. Attribution now shows ~95% of GPU "
+    "time as weight streaming at ~80% of roofline (norm+elementwise collapsed 8.86 → 0.4 ms; attention 1.1–1.2 ms). "
+    "The wall−GPU overhead gate (≤1.2 ms) FAILED at 1.40 ms and is recorded with its anatomy: ~62% is OS/driver "
+    "scheduling + wakeup latency around an idle GPU that submission tweaks measurably cannot reach; the approved "
+    "remedy — pipelined GPU-driven decode overlapping the whole fixed cost — is seeded for the campaign (PIPE-1). "
+    "Sustained decode plateaus at ~23.6 tok/s at thermal equilibrium (+22% vs the Phase 4 first session); sequential "
+    "prefill measured 8.2–10.7 tok/s (Phase 5's 'before' number).", BODY))
 S.append(Paragraph(
     "Prefill obeys different physics: processing the whole prompt at once is matrix-matrix work in which each weight "
     "read is reused across all prompt positions, so it is compute-bound and rewards classical GEMM engineering — "
@@ -269,8 +281,8 @@ S.append(Paragraph(
     "prefill still functions, merely slowly. The two phases are therefore always benchmarked as separate numbers.", BODY))
 S.append(Paragraph(
     "Two secondary kernel concerns round out the design. Dispatch overhead: each kernel launch costs fixed time, so "
-    "Phase 4 folds RMSNorm and RoPE into neighboring kernels and fuses scaled-dot-product attention (with the GQA head "
-    "mapping) into one kernel, measured as dispatches-per-token. And ALU balance: unpacking nibbles is not free — a "
+    "Phase 4 folded RMSNorm and RoPE into neighboring kernels and fused scaled-dot-product attention (with the GQA head "
+    "mapping) into one split-K kernel — measured as dispatches-per-token: 591 → 200. And ALU balance: unpacking nibbles is not free — a "
     "carelessly written fused kernel can make itself compute-bound on dequant arithmetic. The bit layout is therefore "
     "chosen so unpacking is a couple of shifts and masks with adjacent threads reading adjacent bytes (coalescing), and "
     "Instruments' limiter counters (ALU-limited vs. bandwidth-limited) are the arbiter whenever a kernel lands below "
@@ -414,7 +426,7 @@ S.append(table([
     ["1", "Full CPU fp32 forward pass; logits ≤1e-3 vs fp32 HF oracle on all fixture prompts, no loosening; mlx-lm sanity check recorded — EXITED 2026-08-23, all gates held first run"],
     ["2", "Incremental decode on the physical iPhone via preallocated cache + naive attention kernel; pre-committed fp16 gate vs CPU reference; 'before' row; mmap vs wired-copy comparison — EXITED 2026-08-25: all gates held first run, free-run divergence none, 'before' 6.7–8.6 tok/s, mmap default recorded"],
     ["3", "CPU-quant oracle exists; dequant tile test bit-exact; matvec within tolerance; quality gate passed; ~4× memory drop; matvec GB/s microbench — EXITED 2026-09-05: all gates in-band (quality at KL parity with mlx-lm after two recipe amendments), microbench 35.3 GB/s ≥ 30.7 gate, decode 20.6 tok/s (3.0× Phase 2), wired footprint 1.43 GB vs 4.3, mmap default closed"],
-    ["4", "Fused GQA SDPA replaces naive attention; norm/RoPE folded into neighbors; dispatches-per-token reduced; latency-vs-context measured — NEXT (spec SPEC-P4 pending)"],
+    ["4", "Fused GQA SDPA replaces naive attention; norm/RoPE folded into neighbors; dispatches-per-token reduced; latency variance measured — EXITED 2026-09-14: decode 31.67 tok/s (29.4 target exceeded), 200 dispatches/token, fused +48% claim-grade, ~95% of GPU time weight streaming @ 80% roofline; overhead gate FAILED 1.40 vs ≤1.2 ms, recorded with anatomy (~62% OS/driver latency) — remedy PIPE-1 (pipelined decode) approved for the campaign"],
     ["5", "Tiled prefill GEMM (threadgroup memory + simdgroup_matrix); prefill benchmarked separately vs MLX"],
     ["6", "Full cross-engine table (incl. optional Core ML column), sustained-thermal chart, J/tok with error bars, roofline analysis, honest gaps"],
 ], [0.55 * inch, 6.45 * inch]))
@@ -466,8 +478,8 @@ S.append(Spacer(1, 10))
 S.append(HRFlowable(width="100%", color=colors.HexColor("#e2e8f0"), thickness=0.8, spaceAfter=6))
 S.append(Paragraph(
     "Document lineage: this PDF renders the state of PLAN.md, CLAUDE.md, docs/phases/phase-0-1.md, "
-    "docs/phases/phase-2.md, docs/phases/phase-3.md, DECISIONS.md, and benchmarks/results.md as of 2026-09-05 "
-    "(Phase 3 exit) into one navigable artifact. It is a snapshot: when the build produces new "
+    "docs/phases/phase-2.md, docs/phases/phase-3.md, docs/phases/phase-4.md, DECISIONS.md, and benchmarks/results.md as of 2026-09-14 "
+    "(Phase 4 exit) into one navigable artifact. It is a snapshot: when the build produces new "
     "measurements or decisions, DECISIONS.md is updated first and this document is regenerated from it, not edited "
     "independently.", CAP))
 

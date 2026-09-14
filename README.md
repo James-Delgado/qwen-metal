@@ -19,20 +19,24 @@ assumed.
 
 ## Status
 
-**Phases 0–3 exited; Phase 4 (fused attention + dispatch reduction) is
-next** (as of 2026-09-05). The engine decodes Qwen3-1.7B end-to-end from its
-own packed 4-bit format (q4g64, ~0.97 GB) with dequantization fused into every
-weight-consuming kernel — every pre-committed correctness gate across all four
-phases has held unmodified on its first run, the packing recipe measures at KL
-parity with mlx-lm's 4-bit (quality gate in-band), and the GPU free-running
-trajectory is token-identical to its CPU oracle on all fixture prompts.
-Measured so far (iPhone 15 Pro, PROVISIONAL rows): DRAM bandwidth 43.84 GB/s;
-MLX baseline 39.2 tok/s decode (committed target: 29.4 = 0.75×); packed decode
-**20.6 tok/s** warm-burst (~3.0× the Phase 2 bf16 "before" row, 70% of target)
-at 1.43 GB resident (wired; 538 MB mmap phys_footprint); the weights-only
-dequant-matvec microbench sustains 35.3 GB/s (80% of roofline, clearing its
-pre-committed gate). The remaining gap is non-matvec time — Phase 4's target.
-Ledger: `DECISIONS.md`; rows: `benchmarks/results.md`.
+**Phases 0–4 exited; Phase 5 (tiled prefill GEMM) is next** (as of
+2026-09-14). The engine decodes Qwen3-1.7B end-to-end from its own packed
+4-bit format (q4g64, ~0.97 GB) through a fused kernel path — fused GQA SDPA
+with online softmax (split-K), norm/RoPE/append and SwiGLU/residual folds,
+GPU argmax — at 200 dispatches/token (was 591), with dequantization fused
+into every weight-consuming kernel. Every pre-committed correctness gate has
+held unmodified on its first run; the GPU free-running trajectory is
+token-identical to its CPU oracle on all fixture prompts. Measured (iPhone
+15 Pro): **decode 31.67 tok/s warm-burst** — **the committed 29.4 tok/s
+target (0.75 × MLX's measured 39.2) is exceeded** — at 538 MB mmap
+phys_footprint; sustained plateau ≈23.6 tok/s; fused-vs-naive +48%
+in-session (claim-grade). Attribution: ≈95% of GPU time is weight streaming
+at ≈80% of the measured 43.84 GB/s roofline. One Phase 4 gate is recorded
+FAILED with its full anatomy: per-token wall−GPU overhead 1.40 ms vs the
+≤1.2 ms gate — ≈62% is OS/driver latency around an idle GPU; the approved
+structural remedy (pipelined GPU-driven decode) is seeded for the
+post-Phase-6 optimization campaign. Ledger: `DECISIONS.md`; rows:
+`benchmarks/results.md`.
 
 ## Documents
 
