@@ -1794,7 +1794,8 @@ tasks:
   - id: P5-2
     rank: 20.2
     title: "Tiled q4g64 dequant-GEMM kernel (threadgroup + simdgroup_matrix) + correctness suite + M-sweep microbench harness + Mac sanity row"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-15T19:42:36Z
     depends_on: [SPEC-P5]
     blocks: [P5-3]
     deliverable:
