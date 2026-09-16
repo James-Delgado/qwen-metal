@@ -147,15 +147,19 @@ final class GPUQuantModelTests: XCTestCase {
         return try PackedCheckpoint(path: out)
     }
 
-    /// Mirrors the production default (fused since P4-4); naive-pinning
-    /// tests pass `.naive` explicitly.
+    /// Mirrors the production default (fused since P4-4, tiled prefill
+    /// since P5-4); naive-pinning tests pass `.naive` explicitly, and the
+    /// per-token DECODE-structure pins ask for `.sequential` prefill so
+    /// their subject (the Phase 4 fused step) never silently changes.
     private func makeTinyPackedModel(
-        maxContext: Int = 16, kernelPath: GPUModel.KernelPath = .fused
+        maxContext: Int = 16, kernelPath: GPUModel.KernelPath = .fused,
+        prefillPath: GPUModel.PrefillPath? = nil
     ) throws -> GPUModel {
         let context = try makeContextOrSkip()
         return try GPUModel(
             packed: try makePackedCheckpoint(), config: try tinyConfig(),
-            context: context, maxContext: maxContext, kernelPath: kernelPath)
+            context: context, maxContext: maxContext, kernelPath: kernelPath,
+            prefillPath: prefillPath)
     }
 
     // MARK: - Load-time validation (packed path)
@@ -348,9 +352,12 @@ final class GPUQuantModelTests: XCTestCase {
     func testFusedPathAgreesWithCPUQuantReferenceOnSyntheticModel() throws {
         let context = try makeContextOrSkip()
         let packed = try makePackedCheckpoint()
+        // Sequential prefill on purpose: this test's subject is the fused
+        // PER-TOKEN step; the tiled prompt path has its own oracle tests
+        // (PrefillPipelineTests).
         let gpu = try GPUModel(
             packed: packed, config: try tinyConfig(), context: context,
-            maxContext: 16, kernelPath: .fused)
+            maxContext: 16, kernelPath: .fused, prefillPath: .sequential)
         let cpu = try QwenModel(
             weights: packed, config: try tinyConfig(), maxSequenceLength: 16)
 
@@ -428,12 +435,18 @@ final class GPUQuantModelTests: XCTestCase {
     /// fused kernel is deterministic; FusedSDPAKernelTests pins that at the
     /// kernel level).
     func testFusedPathIncrementalMatchesFreshReplayBitwise() throws {
-        let model = try makeTinyPackedModel(kernelPath: .fused)
+        // Sequential prefill on purpose: a decode step (matvec) and a GEMM
+        // row reduce in different orders, so the mixed incremental-vs-
+        // replay case is NOT bitwise on the tiled default (spec D6); the
+        // tiled path's own prefix-invariance pin is in PrefillPipelineTests.
+        let model = try makeTinyPackedModel(
+            kernelPath: .fused, prefillPath: .sequential)
         _ = try model.lastPositionLogits(ids: [1, 2, 3])
         let incremental = try model.lastPositionLogits(ids: [1, 2, 3, 4])
         XCTAssertEqual(model.cachedTokens, [1, 2, 3, 4])
 
-        let fresh = try makeTinyPackedModel(kernelPath: .fused)
+        let fresh = try makeTinyPackedModel(
+            kernelPath: .fused, prefillPath: .sequential)
         let replay = try fresh.lastPositionLogits(ids: [1, 2, 3, 4])
         XCTAssertEqual(
             incremental, replay,

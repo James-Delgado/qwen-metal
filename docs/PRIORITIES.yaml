@@ -1866,8 +1866,9 @@ tasks:
   - id: P5-4
     rank: 20.4
     title: "Tiled prefill as packed-pipeline default + sequential toggle + Tier-M/E re-verification + free-run report + Mac 'after' rows"
-    status: in_progress
+    status: done
     started_at: 2026-09-16T14:23:15Z
+    completed_at: 2026-09-16T15:33:54Z
     depends_on: [P5-1, P5-3]
     blocks: [P5-5]
     deliverable:
@@ -1879,6 +1880,19 @@ tasks:
       selectable (CLI flag + app toggle) for the P5-5 in-session
       before/after; bf16 backend keeps sequential permanently. Mac
       PROVISIONAL "after" rows: tiled prefill + microbench sanity.
+      2026-09-16 (done): GPUModel(packed:) prefillPath/prefillChunkSize
+      are Optional — nil resolves to tiled on fused / sequential on the
+      naive arm, C = min(512, maxContext); explicit bad values still
+      reject at load. CLI `--prefill sequential|tiled` + `--prefill-chunk`
+      on generate; app "Prefill" segmented toggle (q4g64 + fused,
+      reload-on-switch); BenchmarkReport records prefillPath (+ C) and
+      q4g64 exports relabel "Phase 5 row". Tier-M/E + the 250-step
+      GPU-quant logit suite re-ran verbatim on the tiled default and
+      ALL held; free-run 128x5 REPORTED (see DECISIONS.md 2026-09-16
+      P5-4). Mac rows: warm tiled 234.85 tok/s median (C=512, 48,446
+      dispatches exact) vs 52.70 sequential same-session (context only);
+      gemm microbench sanity re-run. Seeded DI-1 (step-0 decode record
+      wrinkle). P5-5 flipped to ready (owner james).
 
   - id: PF-1
     rank: 20.46
@@ -1908,6 +1922,43 @@ tasks:
       at risk; otherwise close with a DECISIONS.md note (P5-2B
       precedent). Mac data point: C=512 tiled prefill already measured
       242.8 tok/s warm (P5-3 sweep, PROVISIONAL).
+      2026-09-16 (P5-4 Mac "after" rows, diagnostic): the tiled span
+      sustains ~0.71 TFLOPS effective = ~46% of the Mac M=512 GEMM
+      plateau (1.567 TFLOPS) — on Mac the non-GEMM share (SDPA loop,
+      norms, ~48k encodes) is roughly half the span. Mac fractions are
+      not predictive; the engage/close decision still waits on P5-5.
+
+  - id: DI-1
+    rank: 20.47
+    title: "Decide the step-0 decode record on the tiled prefill path (prompt call's last command buffer vs. excluded) — P2-5 per-token collector convention"
+    status: ready
+    depends_on: [P5-4]
+    blocks: []
+    deliverable:
+      file: "DECISIONS.md decision entry (+ BenchmarkRun/GenerateCommand/DecodeTimingCollector change if the convention changes)"
+      tests: "existing P2-5/P4-1/P5-1 record-count and span pins updated red-first if the convention changes; canonical-window rate pinned unchanged either way"
+    est_complexity: small
+    notes: |
+      Seeded 2026-09-16 by P5-4 (surfaced on the Mac tiled "after" rows,
+      benchmarks/results.md): the P2-5 per-token collector records
+      `lastStepTiming`/`lastStepDispatchCount` at generated-token 0,
+      i.e. the prompt-processing call's LAST command buffer. With
+      sequential prefill that was the last prompt position's selecting
+      step (200 dispatches, ~decode cost) so it passed as a decode
+      record; on the tiled default it is the last CHUNK (19,409
+      dispatches, ~1.4 s at 852 tokens), so `dispatches/token` prints
+      "UNSTABLE 200-19409", short-run `overall tok/s` is skewed, and
+      all-tokens-scope latency variance (runs < 512 tokens) carries a
+      ~1.4 s outlier. NOT affected: the canonical 128-512 window rate
+      (the P5-5 decode-regression gate metric), window-scope variance,
+      median GPU/wall over long runs, and the D1 prefill span (which
+      already owns that command buffer). Options: (a) exclude the
+      step-0 record whenever the call span covered > 1 step (changes
+      the per-token n by one on every row since Phase 2 — a P2-5
+      protocol convention change → James decides, METHODOLOGY 5/8);
+      (b) keep it and label the export line. Convention-setting →
+      present both to James before coding. Ranked ahead of P5-5 so the
+      device rows can carry the decided labeling.
 
   - id: P5-2B
     rank: 20.45
@@ -1939,7 +1990,7 @@ tasks:
   - id: P5-5
     rank: 20.5
     title: "On-device Phase 5 rows: prefill floor + M=8 microbench + decode regression gates, interleaved sequential-vs-tiled before/after, M-sweep report"
-    status: blocked
+    status: ready
     owner: james
     depends_on: [P5-4]
     blocks: [P5-EXEC]

@@ -80,6 +80,12 @@ final class AppModel: ObservableObject {
     /// the P4-5 interleaved before/after row. q4g64 only — the bf16 backend
     /// is permanently naive and ignores this.
     @Published var kernelPath: GPUModel.KernelPath = .fused
+    /// P5-4 (phase-5.md D5): tiled default; the sequential selection exists
+    /// for the P5-5 interleaved sequential-vs-tiled before/after row.
+    /// q4g64 + fused only — the bf16 backend keeps sequential prefill
+    /// permanently, and the naive kernel arm supports sequential only (the
+    /// engine resolves that; the picker hides itself there).
+    @Published var prefillPath: GPUModel.PrefillPath = .tiled
     @Published var isLoading = false
     @Published var isRunning = false {
         // A locked screen suspends the app mid-generation and ruins the
@@ -126,6 +132,25 @@ final class AppModel: ObservableObject {
             self.engine = nil
             loadSummary = nil
         }
+    }
+
+    /// Same contract for the prefill path (P5-4): the chunk scratch is
+    /// preallocated at load, so a toggle reloads. Only meaningful on
+    /// q4g64 + fused (elsewhere the engine runs sequential regardless).
+    func prefillPathChanged() {
+        if let engine, engine.weightsFormat == .q4g64,
+           engine.gpuModel.prefillPath != requestedPrefillPath() {
+            self.engine = nil
+            loadSummary = nil
+        }
+    }
+
+    /// The prefill path a load with the current toggles runs: the picker's
+    /// value on q4g64 + fused, the engine's sequential-only resolution on
+    /// the naive kernel arm (mirrors `GPUModel.defaultPrefillPath(for:)`).
+    private func requestedPrefillPath() -> GPUModel.PrefillPath {
+        kernelPath == .fused
+            ? prefillPath : GPUModel.defaultPrefillPath(for: kernelPath)
     }
 
     func loadModel() async {
@@ -214,7 +239,10 @@ final class AppModel: ObservableObject {
                 batteryNote: batteryNote, coldWarmNote: coldWarmNote,
                 residency: engine.residency,
                 weightsFormat: engine.weightsFormat,
-                kernelPath: engine.gpuModel.kernelPath, burst: metrics)
+                kernelPath: engine.gpuModel.kernelPath,
+                prefillPath: engine.gpuModel.prefillPath,
+                prefillChunkSize: engine.gpuModel.prefillChunkSize,
+                burst: metrics)
             statusLine = stopFlag.isSet
                 ? "burst stopped early — report reflects the partial run"
                 : "burst complete"
@@ -267,7 +295,10 @@ final class AppModel: ObservableObject {
                 batteryNote: batteryNote, coldWarmNote: coldWarmNote,
                 residency: engine.residency,
                 weightsFormat: engine.weightsFormat,
-                kernelPath: engine.gpuModel.kernelPath, sustained: result)
+                kernelPath: engine.gpuModel.kernelPath,
+                prefillPath: engine.gpuModel.prefillPath,
+                prefillChunkSize: engine.gpuModel.prefillChunkSize,
+                sustained: result)
             statusLine = "sustained loop complete"
         } catch is CancellationError {
             statusLine = "sustained loop aborted by Stop — no report"
@@ -414,15 +445,20 @@ final class AppModel: ObservableObject {
     private func loadEngineIfNeeded() async throws -> LoadedEngine {
         if let engine, engine.residency == residency,
            engine.weightsFormat == weightsFormat,
-           weightsFormat == .bf16 || engine.gpuModel.kernelPath == kernelPath {
+           weightsFormat == .bf16
+               || (engine.gpuModel.kernelPath == kernelPath
+                   && engine.gpuModel.prefillPath == requestedPrefillPath()) {
             return engine
         }
         let residency = self.residency
         let weightsFormat = self.weightsFormat
         let kernelPath = self.kernelPath
+        let prefillPath = requestedPrefillPath()
         statusLine = "loading model (weights \(weightsFormat.rawValue), "
             + "residency \(residency.rawValue)"
-            + (weightsFormat == .q4g64 ? ", kernels \(kernelPath.rawValue)" : "")
+            + (weightsFormat == .q4g64
+                ? ", kernels \(kernelPath.rawValue), prefill \(prefillPath.rawValue)"
+                : "")
             + ")…"
         let loaded: LoadedEngine =
             try await Task.detached(priority: .userInitiated) {
@@ -447,10 +483,13 @@ final class AppModel: ObservableObject {
                     // (P3-5 edge behavior — never a crash).
                     let packed = try PackedCheckpoint(
                         path: directory.requirePackedCheckpoint().path)
+                    // P5-4 (spec D5): the prefill toggle; tiled is the
+                    // fused default, sequential the P5-5 A/B arm. Chunk
+                    // size stays the engine's measured default (C=512).
                     gpu = try GPUModel(
                         packed: packed, config: config, context: metal,
                         residency: residency, maxContext: contextLimit,
-                        kernelPath: kernelPath)
+                        kernelPath: kernelPath, prefillPath: prefillPath)
                 }
                 let tokenizer = try await TextTokenizer(
                     modelFolder: directory.directoryURL)
@@ -467,11 +506,14 @@ final class AppModel: ObservableObject {
         engine = loaded
         loadSummary = String(
             format: "%@ — loaded in %.1f s, weights %@, residency %@, "
-                + "kernels %@, context %d",
+                + "kernels %@, prefill %@, context %d",
             loaded.modelDirectoryName, loaded.loadSeconds,
             loaded.weightsFormat.rawValue,
             loaded.residency.rawValue,
-            loaded.gpuModel.kernelPath.rawValue, loaded.contextLimit)
+            loaded.gpuModel.kernelPath.rawValue,
+            loaded.gpuModel.prefillPath == .tiled
+                ? "tiled (C=\(loaded.gpuModel.prefillChunkSize))" : "sequential",
+            loaded.contextLimit)
         return loaded
     }
 
@@ -528,6 +570,8 @@ final class AppModel: ObservableObject {
         batteryNote: String, coldWarmNote: String,
         residency: WeightsResidency, weightsFormat: WeightsFormat,
         kernelPath: GPUModel.KernelPath,
+        prefillPath: GPUModel.PrefillPath,
+        prefillChunkSize: Int,
         burst: GenerationMetrics? = nil,
         sustained: SustainedLoopResult? = nil
     ) -> String {
@@ -538,6 +582,8 @@ final class AppModel: ObservableObject {
             batteryHealthNote: batteryNote, coldOrWarmNote: coldWarmNote,
             residency: residency, weightsFormat: weightsFormat,
             kernelPath: kernelPath,
+            prefillPath: prefillPath,
+            prefillChunkSize: prefillPath == .tiled ? prefillChunkSize : nil,
             promptName: promptName,
             promptTokenCount: promptTokenCount, mode: mode,
             burst: burst, sustained: sustained,

@@ -152,7 +152,17 @@ final class PrefillPipelineTests: XCTestCase {
             prefillPath: .tiled, prefillChunkSize: chunkSize)
     }
 
+    /// The sequential comparator asks for `.sequential` explicitly — since
+    /// P5-4 the packed + fused default is `.tiled` (spec D5).
     private func makeSequentialModel(maxContext: Int = 16) throws -> GPUModel {
+        let context = try makeContextOrSkip()
+        return try GPUModel(
+            packed: try makePackedCheckpoint(), config: try tinyConfig(),
+            context: context, maxContext: maxContext, prefillPath: .sequential)
+    }
+
+    /// The production DEFAULT (no prefill arguments) — tiled since P5-4.
+    private func makeDefaultModel(maxContext: Int = 16) throws -> GPUModel {
         let context = try makeContextOrSkip()
         return try GPUModel(
             packed: try makePackedCheckpoint(), config: try tinyConfig(),
@@ -581,14 +591,40 @@ final class PrefillPipelineTests: XCTestCase {
             config: try tinyConfig(), context: context, maxContext: 16)
         XCTAssertEqual(bf16.prefillPath, .sequential)
 
-        // Default on the packed pipeline stays sequential at P5-3 (the
-        // flip is P5-4's deliverable — this pin goes red-first then).
+        // P5-4 (spec D5): TILED is the packed-pipeline default. An
+        // unspecified chunk size resolves to min(default C, maxContext) so
+        // the scratch is never sized beyond what a prompt can occupy; the
+        // resolved value is what `prefillChunkSize` reports (rows record
+        // it, spec D2).
         let defaulted = try GPUModel(
             packed: packed, config: try tinyConfig(), context: context,
             maxContext: 16)
-        XCTAssertEqual(defaulted.prefillPath, .sequential)
-        XCTAssertNil(defaulted.prefillScratch,
+        XCTAssertEqual(defaulted.prefillPath, .tiled,
+                       "P5-4: tiled is the packed-pipeline default")
+        XCTAssertEqual(defaulted.prefillChunkSize, 16,
+                       "unspecified C resolves to min(512, maxContext)")
+        XCTAssertNotNil(defaulted.prefillScratch,
+                        "the default (tiled) model preallocates its scratch")
+        let wide = try GPUModel(
+            packed: packed, config: try tinyConfig(), context: context,
+            maxContext: 1024)
+        XCTAssertEqual(wide.prefillChunkSize, GPUModel.defaultPrefillChunkSize,
+                       "a context ≥ 512 keeps the measured default C")
+
+        // The naive kernel arm (kept for the P4-5/P5-5 A/B rows) supports
+        // sequential prefill only, so an UNSPECIFIED prefill path resolves
+        // to `.sequential` there — the naive arm keeps loading. Asking for
+        // tiled + naive explicitly still fails at load (pinned above).
+        let naiveDefault = try GPUModel(
+            packed: packed, config: try tinyConfig(), context: context,
+            maxContext: 16, kernelPath: .naive)
+        XCTAssertEqual(naiveDefault.prefillPath, .sequential)
+        XCTAssertNil(naiveDefault.prefillScratch,
                      "sequential models allocate no prefill scratch")
+
+        // Explicit sequential on the fused arm stays selectable (D5: the
+        // P5-5 in-session before/after row).
+        XCTAssertEqual(try makeSequentialModel().prefillPath, .sequential)
     }
 
     // MARK: - Edge 11: scratch preallocation
@@ -654,5 +690,81 @@ final class PrefillPipelineTests: XCTestCase {
         XCTAssertThrowsError(try model.lastPositionLogits(ids: [1, 99]))
         XCTAssertNil(model.lastCallSpan,
                      "a failed tiled call must not leave the previous span")
+    }
+
+    // MARK: - Edge 9: prefill-path toggle (P5-4)
+
+    /// Both prefill paths load on the packed + fused pipeline — tiled via
+    /// the DEFAULT, sequential via the explicit option — and both pass the
+    /// shared full-stack spot check against the same CPU-quant oracle at
+    /// the pre-committed constant (Tier-E-shape; spec D6: tiled-vs-
+    /// sequential bitwise equality is NOT required). DispatchCounter tells
+    /// the paths apart on the same prompt: sequential runs the per-token
+    /// fused structure (4 × 8 no-logits steps + one 10-dispatch logits
+    /// step = 42), tiled runs ONE chunk (gather 1 + 13 fixed + 2·5 SDPA +
+    /// logits tail 3 = 27; the P5-3 measured pins, P2-5 rule).
+    func testBothPrefillPathsLoadPassSpotCheckAndCounterDistinguishes() throws {
+        let tiled = try makeDefaultModel()
+        let sequential = try makeSequentialModel()
+        XCTAssertEqual(tiled.prefillPath, .tiled)
+        XCTAssertEqual(sequential.prefillPath, .sequential)
+        XCTAssertEqual(tiled.kernelPath, sequential.kernelPath,
+                       "the toggle changes prompt processing only")
+
+        let ids = [1, 2, 3, 4, 5]
+        let ref = try makeCPUModel().lastPositionLogits(ids: ids)
+        let tiledLogits = try tiled.lastPositionLogits(ids: ids)
+        let sequentialLogits = try sequential.lastPositionLogits(ids: ids)
+        assertFullStack(tiledLogits, ref, "tiled default vs CPU-quant")
+        assertFullStack(sequentialLogits, ref, "sequential vs CPU-quant")
+
+        let tiledSpan = try XCTUnwrap(tiled.lastCallSpan)
+        let sequentialSpan = try XCTUnwrap(sequential.lastCallSpan)
+        XCTAssertEqual(tiledSpan.stepCount, 5)
+        XCTAssertEqual(sequentialSpan.stepCount, 5)
+        XCTAssertEqual(sequentialSpan.dispatchCount, 4 * 8 + 10)
+        XCTAssertEqual(tiledSpan.dispatchCount, 27)
+        XCTAssertNotEqual(tiledSpan.dispatchCount, sequentialSpan.dispatchCount,
+                          "DispatchCounter distinguishes the paths")
+
+        // Decode after the prompt is the SAME Phase 4 step on both paths.
+        _ = try tiled.lastPositionLogits(ids: ids + [6])
+        _ = try sequential.lastPositionLogits(ids: ids + [6])
+        XCTAssertEqual(tiled.lastStepDispatchCount, 10)
+        XCTAssertEqual(sequential.lastStepDispatchCount, 10)
+    }
+
+    // MARK: - Edge 12: instrumentation parity through the production runner
+
+    /// Both paths report the SAME fields through `BenchGenerationRunner`:
+    /// the engine-measured prefill span (D1 metric of record — wall ≥ GPU,
+    /// per-engine token accounting, no WARM PREFIX label on a cold
+    /// generation) AND the legacy TTFT-style field, with per-token decode
+    /// records following. Only the dispatch count differs.
+    func testRunnerReportsIdenticalPrefillFieldsOnBothPaths() throws {
+        let ids = [1, 2, 3, 4, 5]
+        var spans: [GPUModel.PrefillPath: PrefillSpan] = [:]
+        for model in [try makeDefaultModel(), try makeSequentialModel()] {
+            let metrics = try BenchGenerationRunner(
+                gpuModel: model, maxContext: 16, eosTokenIds: []
+            ).run(promptIds: ids, maxNewTokens: 3).metrics
+            let prefill = try XCTUnwrap(
+                metrics.prefillSpan, "\(model.prefillPath) span missing")
+            XCTAssertEqual(prefill.promptTokenCount, 5)
+            XCTAssertEqual(prefill.span.stepCount, 5,
+                           "\(model.prefillPath): the span covers the prompt call only")
+            XCTAssertGreaterThan(prefill.span.gpuSeconds, 0)
+            XCTAssertGreaterThanOrEqual(
+                prefill.span.wallSeconds, prefill.span.gpuSeconds)
+            XCTAssertFalse(prefill.summaryLine.contains("WARM PREFIX"))
+            XCTAssertNotNil(metrics.prefillSeconds,
+                            "\(model.prefillPath): legacy TTFT-style field exports")
+            XCTAssertEqual(metrics.generatedTokenCount, 3)
+            XCTAssertEqual(metrics.timing?.tokenCount, 3)
+            spans[model.prefillPath] = prefill
+        }
+        XCTAssertEqual(spans[.tiled]?.span.dispatchCount, 28,
+                       "selecting form: the single chunk gains the argmax dispatch")
+        XCTAssertEqual(spans[.sequential]?.span.dispatchCount, 4 * 8 + 11)
     }
 }

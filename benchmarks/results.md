@@ -694,6 +694,68 @@ Readings:
   dispatches/token, wall−GPU 0.287–0.325 ms (8-token tail after each
   prefill; not a decode row).
 
+### 2026-09-16 — Mac tiled "after" prefill rows, M2 Pro (P5-4)
+
+Tiled chunked prefill (P5-3) is the packed-pipeline DEFAULT as of P5-4
+(phase-5.md D5); same machine, artifact (q4g64 sha256 in DECISIONS.md),
+build type, prompt feeding (`$(cat …)` + `$'\n\n'`, 852 verified per run),
+CLI command, and D1 span metric as the 2026-09-14 sequential "before" rows
+above — `generate --backend gpu --weights q4g64 --max-tokens 8` (tiled is
+the default; `--prefill sequential` selects the per-token loop). Release
+build, Xcode 26.6 (17F113), macOS 26.5.1 (25F80). Chunk size C=512 (the
+P5-3 measured default; a reported parameter, spec D2). Dev-loop sanity
+only: the tiled-vs-sequential comparison here is context — the claim-grade
+before/after is P5-5's in-session interleaved A/B under D8 + bookends, and
+Mac fractions do not predict device fractions (standing precedent).
+
+| Date | Device | Prompt (tokens) | Run | Cold/warm | Prefill path | Prefill span wall s | Prefill tok/s (of record) | Span GPU s | Span wall−GPU s | Prefill dispatches | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-16 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | 1 | cold | tiled (C=512) | 4.078 | 208.91 | 3.492 | 0.586 | 48446 | PROVISIONAL. First run after load (mmap page faults + first-use costs land in wall, not GPU). |
+| 2026-09-16 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | 2 | warm | tiled (C=512) | 3.623 | 235.14 | 3.487 | 0.136 | 48446 | PROVISIONAL. |
+| 2026-09-16 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | 3 | warm | tiled (C=512) | 3.628 | 234.85 | 3.487 | 0.141 | 48446 | PROVISIONAL. **Warm median row: 234.85 tok/s** (warm range 234.72–235.14, n=3). |
+| 2026-09-16 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | 4 | warm | tiled (C=512) | 3.630 | 234.72 | 3.490 | 0.140 | 48446 | PROVISIONAL. |
+| 2026-09-16 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | x | warm | sequential | 16.167 | 52.70 | 15.783 | 0.384 | 167847 | PROVISIONAL, CONTEXT ONLY: one same-session sequential run via `--prefill sequential`, immediately after run 4 — reproduces the 2026-09-14 "before" rows (52.44 median) on this build. Not an A/B claim (single run, no bookends). |
+
+Readings:
+
+- **Dispatch count is a structural cross-check, exact:** 852 positions at
+  C=512 = chunk 1 (512 positions): 1 gather + 28 × (13 fixed + 2·512
+  per-position SDPA) = 29,037; chunk 2 (340 positions): 1 + 28 × (13 +
+  2·340) + 3 (last-row copy, final norm, lm_head) + 1 (argmax) = 19,409;
+  total **48,446 — measured identically on all 4 runs** (DispatchCounter,
+  never derived). The lm_head triplet streams ONCE per prompt (spec D2)
+  instead of once at the last sequential step.
+- **Same-session tiled/sequential ratio ≈ 4.46× on Mac** (234.85 vs
+  52.70 warm) — consistent with the P5-3 in-process sweep (242.82 at
+  C=512; that harness reused one loaded model across repeats, this row
+  is one fresh CLI process per run with a warm page cache). Span GPU
+  3.487 s ≈ 4.09 ms per prompt position vs 18.5 ms sequential.
+- **Span wall−GPU collapses 0.384 → 0.14 s warm:** 2 command buffers per
+  prefill instead of 852 — the per-command-buffer completion latency the
+  P4-9 anatomy attributed to scheduling/wakeup is paid twice, not 852
+  times. The cold run's 0.586 s is first-use cost (page faults, pipeline
+  warmup), GPU time identical to warm (3.492 vs 3.487).
+- **Mac-only compute view (diagnostic, not a design input):** the 196
+  layer GEMMs at M=852 are 2 × 1.409e9 × 852 ≈ 2.40 TFLOP (+ lm_head
+  once ≈ 0.6 GFLOP, attention ≈ 0.08 TFLOP), so the span sustains ≈ 0.71
+  TFLOPS effective ≈ 46% of the Mac M=512 GEMM plateau (1.567 TFLOPS,
+  microbench row below). The remainder is the per-position SDPA loop
+  (2C dispatches/layer serialized through the shared partial-state
+  scratch — PF-1 lever 1), the batched naive norms (PF-1 lever 2), and
+  ≈48k dispatch encodes. The device decomposition is P5-5/P5-EXEC's job
+  (spec D7 per-component headroom); Mac fractions are not predictive.
+- **Decode tail sanity unchanged alongside:** median GPU 21.32–21.36 ms @
+  200 dispatches/token on the 8-token tail after each prefill (P5-1:
+  21.34–21.49), wall−GPU 0.343–0.366 ms; not a decode row. One
+  instrumentation wrinkle surfaced (follow-up seeded, DECISIONS.md
+  2026-09-16 P5-4): the P2-5 per-token collector's step-0 record is the
+  prompt call's LAST command buffer — the last chunk (19,409 dispatches,
+  ≈1.4 s) on the tiled path, where sequential prefill's last step happened
+  to look like a decode step (200 dispatches) — so `dispatches/token`
+  reads "UNSTABLE 200–19409" and short-run `overall tok/s` is skewed. The
+  canonical 128–512 window (the P5-5 decode-regression metric) and
+  window-scope latency variance exclude token 0 and are unaffected.
+
 ## Phase 5 — tiled dequant-GEMM M-sweep microbench (D7, P5-2)
 
 Harness: per M, one command buffer running the SAME 197-matrix weight sweep
@@ -728,6 +790,22 @@ Xcode 26.6 (17F113), macOS 26.5.1 (25F80).
 | 2026-09-15 | Apple M2 Pro (Mac, dev machine) | 8 | 27.30 | 27.75 | 26.38–27.75 | 776 | 789 | PROVISIONAL, dev-loop sanity only — never gated (gate is on-device, P5-5). 46% of the Mac matvec aggregate (58.81) and ~15% of the Mac triad roofline (178.19): the m8 path is latency/structure-limited, not roofline-limited, on Mac. Mac fractions do not predict device fractions (standing precedent), but the gap vs the matvec bench is flagged as a P5-5 gate risk in DECISIONS.md — follow-up P5-2B seeded ahead of P5-5. |
 | 2026-09-15 | Apple M2 Pro (Mac, dev machine) | 64 | 6.49 | 6.50 | 6.41–6.50 | 1476 | 1479 | PROVISIONAL. Effective GB/s is the pinned normalization (see note above; actual W traffic 2×). |
 | 2026-09-15 | Apple M2 Pro (Mac, dev machine) | 512 | 0.85 | 0.86 | 0.83–0.86 | 1541 | 1567 | PROVISIONAL. Compute plateau ≈ 1.5 TFLOPS fp32 — the Mac end of the measured GFLOPS curve the Phase 6 roofline consumes (device curve lands at P5-5). Actual W traffic 16×. |
+
+### 2026-09-16 — Mac dev-loop sanity re-run at the default flip, M2 Pro (P5-4)
+
+Same command, protocol, and kernel as the 2026-09-15 row (the GEMM kernel is
+byte-identical since P5-2 — this re-run pins the microbench state on the
+build that makes tiled prefill the default; the run-to-run spread vs
+2026-09-15 is Mac variance, not a kernel change). mmap, 2 warmup + 10
+measured per M; spot checks passed at every M (max |Δ| 0.000851 at M=8,
+0.000915 at M=64/512 ≤ Tier-K 0.00737). Release build, Xcode 26.6 (17F113),
+macOS 26.5.1 (25F80).
+
+| Date | Device | M | Median eff. GB/s | Best | Min–max | Median GFLOPS | Best | Notes |
+|---|---|---|---|---|---|---|---|---|
+| 2026-09-16 | Apple M2 Pro (Mac, dev machine) | 8 | 27.84 | 27.90 | 27.13–27.90 | 791.99 | 793.65 | PROVISIONAL, dev-loop sanity only — never gated (gate is on-device, P5-5). +2% vs 2026-09-15 (27.30) on an unchanged kernel; the P5-2B device-gate risk flag stands unchanged. |
+| 2026-09-16 | Apple M2 Pro (Mac, dev machine) | 64 | 6.49 | 6.49 | 6.47–6.49 | 1476.24 | 1477.81 | PROVISIONAL. Effective GB/s is the pinned normalization (actual W traffic 2×). |
+| 2026-09-16 | Apple M2 Pro (Mac, dev machine) | 512 | 0.86 | 0.86 | 0.86–0.86 | 1566.56 | 1567.14 | PROVISIONAL. Compute plateau ≈ 1.57 TFLOPS fp32 — the denominator the P5-4 prefill "after" rows above are read against. Actual W traffic 16×. |
 
 ## Phase 0a — energy dry-run + corrections (PROVISIONAL)
 

@@ -28,6 +28,13 @@ public struct BenchmarkReport: Sendable {
     /// before/after rows are naive vs fused, so every row must record it.
     /// No default on purpose — the compiler forces call sites to label.
     public var kernelPath: GPUModel.KernelPath
+    /// Which prefill structure produced the row (P5-4, phase-5.md D5): the
+    /// P5-5 before/after rows are sequential vs tiled, so every row must
+    /// record it. No default on purpose, like `kernelPath`.
+    public var prefillPath: GPUModel.PrefillPath
+    /// The tiled chunk size C (spec D2: recorded on every tiled row).
+    /// Rendered only when `prefillPath == .tiled`.
+    public var prefillChunkSize: Int?
     public var promptName: String
     public var promptTokenCount: Int
     public var mode: Mode
@@ -44,6 +51,8 @@ public struct BenchmarkReport: Sendable {
         batteryHealthNote: String, coldOrWarmNote: String,
         residency: WeightsResidency, weightsFormat: WeightsFormat = .bf16,
         kernelPath: GPUModel.KernelPath,
+        prefillPath: GPUModel.PrefillPath,
+        prefillChunkSize: Int? = nil,
         promptName: String,
         promptTokenCount: Int, mode: Mode,
         burst: GenerationMetrics? = nil,
@@ -58,6 +67,8 @@ public struct BenchmarkReport: Sendable {
         self.residency = residency
         self.weightsFormat = weightsFormat
         self.kernelPath = kernelPath
+        self.prefillPath = prefillPath
+        self.prefillChunkSize = prefillChunkSize
         self.promptName = promptName
         self.promptTokenCount = promptTokenCount
         self.mode = mode
@@ -69,9 +80,10 @@ public struct BenchmarkReport: Sendable {
     public func exportText() -> String {
         var lines: [String] = []
         // bf16 rows are the Phase 2 correctness artifact; q4g64 rows are
-        // Phase 4 rows now (both kernel paths — the P4-5 naive arm is a
-        // Phase 4 A/B row, distinguished by the kernels field below).
-        let phase = weightsFormat == .bf16 ? "Phase 2" : "Phase 4"
+        // Phase 5 rows now (both prefill paths — the P5-5 sequential arm is
+        // a Phase 5 A/B row, distinguished by the prefill field below; the
+        // P4-era kernels field stays for the naive arm).
+        let phase = weightsFormat == .bf16 ? "Phase 2" : "Phase 5"
         lines.append("qwen-metal \(phase) row export (PROVISIONAL)")
         lines.append("date: \(dateStamp)")
         lines.append("device: \(deviceLabel) (iOS \(osVersion))")
@@ -79,10 +91,16 @@ public struct BenchmarkReport: Sendable {
         let engineDescription = weightsFormat == .bf16
             ? "naive fp16 GPU"
             : "q4g64 fused-dequant GPU"
+        let prefillLabel: String
+        if prefillPath == .tiled, let chunk = prefillChunkSize {
+            prefillLabel = "prefill tiled (C=\(chunk))"
+        } else {
+            prefillLabel = "prefill \(prefillPath.rawValue)"
+        }
         lines.append(
             "engine: qwen-metal \(engineDescription) — weights "
                 + "\(weightsFormat.rawValue), residency \(residency.rawValue), "
-                + "kernels \(kernelPath.rawValue)")
+                + "kernels \(kernelPath.rawValue), \(prefillLabel)")
         lines.append("prompt: \(promptName) (\(promptTokenCount) prompt tokens)")
         lines.append("mode: \(mode.rawValue) | cold/warm: \(orPlaceholder(coldOrWarmNote))")
         lines.append(

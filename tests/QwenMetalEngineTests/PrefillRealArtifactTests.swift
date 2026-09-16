@@ -47,6 +47,65 @@ final class PrefillRealArtifactTests: XCTestCase {
         XCTAssertEqual(tokens.count, 8)
     }
 
+    /// Edge test 9 on the REAL artifact (P5-4): the production DEFAULT
+    /// (tiled, C resolved to min(512, maxContext)) and the explicit
+    /// sequential option both load, both process the same prompt with a
+    /// per-engine-exact span, both continue into the unchanged fused
+    /// decode, and DispatchCounter tells them apart: sequential measures
+    /// (P−1)·197 + 200 on the selecting path (the P5-1 structural
+    /// cross-check), tiled a single-chunk count that is far smaller.
+    func testDefaultTiledAndSequentialBothLoadOnRealArtifact() throws {
+        try SharedQuantGPUModel.skipUnlessReady()
+        let packed = try PackedCheckpoint(
+            path: SharedQuantModel.packedURL.path,
+            expectedRevision: SharedCheckpoint.pinnedRevision)
+        let config = try ModelConfig(
+            jsonData: Data(SharedCheckpoint.pinnedConfigJSON.utf8))
+        let context = try SharedGPUModel.metalContext()
+        let tiled = try GPUModel(
+            packed: packed, config: config, context: context,
+            maxContext: SharedQuantGPUModel.maxContext)
+        let sequential = try GPUModel(
+            packed: packed, config: config, context: context,
+            maxContext: SharedQuantGPUModel.maxContext,
+            prefillPath: .sequential)
+        XCTAssertEqual(tiled.prefillPath, .tiled)
+        XCTAssertEqual(tiled.prefillChunkSize, SharedQuantGPUModel.maxContext)
+        XCTAssertEqual(sequential.prefillPath, .sequential)
+
+        let ids = try SharedCheckpoint.promptFixture("short_english").inputIds
+        let p = ids.count
+        let firstTiled = try tiled.nextGreedyToken(ids: ids)
+        let firstSequential = try sequential.nextGreedyToken(ids: ids)
+        XCTAssertTrue((0..<config.vocabSize).contains(firstTiled))
+        XCTAssertTrue((0..<config.vocabSize).contains(firstSequential))
+
+        let tiledSpan = try XCTUnwrap(tiled.lastCallSpan)
+        let sequentialSpan = try XCTUnwrap(sequential.lastCallSpan)
+        XCTAssertEqual(tiledSpan.stepCount, p)
+        XCTAssertEqual(sequentialSpan.stepCount, p)
+        XCTAssertEqual(sequentialSpan.dispatchCount, (p - 1) * 197 + 200)
+        XCTAssertEqual(
+            tiledSpan.dispatchCount,
+            1 + 28 * (13 + 2 * p) + 3 + 1,
+            "one chunk: gather + 28·(13 fixed + 2·P SDPA) + logits tail 3 + argmax")
+        XCTAssertLessThan(tiledSpan.dispatchCount, sequentialSpan.dispatchCount)
+        XCTAssertGreaterThanOrEqual(tiledSpan.wallSeconds, tiledSpan.gpuSeconds)
+        XCTAssertGreaterThanOrEqual(
+            sequentialSpan.wallSeconds, sequentialSpan.gpuSeconds)
+
+        for model in [tiled, sequential] {
+            model.reset()
+            let tokens = try DecodeLoop(
+                model: model, maxContext: SharedQuantGPUModel.maxContext
+            ).generateTokens(promptIds: ids, maxNewTokens: 4, eosTokenIds: [])
+            XCTAssertEqual(tokens.count, 4)
+            XCTAssertEqual(model.lastStepDispatchCount, 200,
+                           "\(model.prefillPath): decode after the prompt is the "
+                           + "unchanged fused selecting step")
+        }
+    }
+
     /// QWEN_PREFILL_CHUNK_SWEEP=1 opt-in: the spec D2 chunk-size selection
     /// harness — warm tiled prefill of the pinned prefill-summarize prompt
     /// (852 HF tokens) at candidate C values, median of 3 warm repeats per

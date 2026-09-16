@@ -52,6 +52,13 @@ QwenMetalApp.entitlements   Increased Memory Limit (Phase 2 needs ~4.0 GB)
   - Kernels toggle naive / fused (q4g64 only; P4-4, phase-4.md D4) — fused is
     the default; naive exists for the P4-5 interleaved before/after row.
     Same reload-on-switch contract; every row export records the path.
+  - Prefill toggle sequential / tiled (q4g64 + fused only; P5-4, phase-5.md
+    D5) — tiled (chunked batched prefill, C=512) is the default; sequential
+    exists for the P5-5 interleaved sequential-vs-tiled before/after row
+    (prefill-summarize burst). Same reload-on-switch contract; every row
+    export records the prefill path and C. The naive kernel arm runs
+    sequential prefill only (the picker hides there); bf16 is always
+    sequential.
   - Row export: all fields (dual timing medians, wall−GPU overhead,
     dispatches/token, canonical-window rate, prefill note, phys_footprint
     cross-check, PROVISIONAL marker) as shareable/copyable text. The Xcode

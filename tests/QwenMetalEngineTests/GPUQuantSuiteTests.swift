@@ -439,6 +439,18 @@ final class GPUQuantTierETests: XCTestCase {
         XCTAssertEqual(try SharedQuantGPUModel.model().kernelPath, .fused)
     }
 
+    /// P5-4 (phase-5.md D5): the shared model's prompt processing is the
+    /// production DEFAULT prefill path — TILED — so the Tier-E logit suite
+    /// below re-verifies the tiled prefill (first call = the whole prompt
+    /// as one chunk) feeding the unchanged fused decode. The chunk size
+    /// resolves to min(512, maxContext) = 256 here; every suite prompt is
+    /// shorter, so it is one chunk exactly as at the production C.
+    func testSharedModelRunsTheTiledPrefillDefault() throws {
+        let model = try SharedQuantGPUModel.model()
+        XCTAssertEqual(model.prefillPath, .tiled)
+        XCTAssertEqual(model.prefillChunkSize, SharedQuantGPUModel.maxContext)
+    }
+
     /// Tier-E gate 2⁻⁵ on both full-stack slices: the pinned prompt's 5
     /// tokens through the wired packed pipeline (computeLogits at every
     /// position so the final-norm hook point is populated per row), oracle

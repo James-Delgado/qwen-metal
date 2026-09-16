@@ -56,18 +56,29 @@ public final class GPUModel {
     /// SDPA, last-position-only lm_head). Tiled exists exactly on the
     /// packed + fused pipeline (the bf16 backend keeps sequential prefill
     /// permanently). Decode — every single-token step after the prompt —
-    /// is the unchanged Phase 4 path on BOTH settings. Sequential remains
-    /// the default at P5-3; P5-4 flips the packed-pipeline default and
-    /// surfaces the toggle (CLI flag + app switch) for the P5-5
-    /// before/after row.
+    /// is the unchanged Phase 4 path on BOTH settings. TILED is the packed
+    /// (fused) default since P5-4 (spec D5); sequential stays selectable
+    /// (CLI `--prefill`, app "Prefill" toggle) for the P5-5 in-session
+    /// before/after row, and is the only option on the naive kernel arm.
     public enum PrefillPath: String, CaseIterable, Sendable {
         case sequential
         case tiled
     }
 
+    /// The prefill path an UNSPECIFIED request resolves to on the packed
+    /// pipeline (P5-4, spec D5): tiled on the fused kernel path, sequential
+    /// on the naive arm (which supports sequential prefill only). Exposed
+    /// so the CLI/app can label what a default load will run.
+    public static func defaultPrefillPath(for kernelPath: KernelPath) -> PrefillPath {
+        kernelPath == .fused ? .tiled : .sequential
+    }
+
     /// Default prefill chunk size C for the tiled path — a REPORTED
     /// parameter, not a pin (spec D2: chosen by measurement, recorded per
-    /// row; the selection sweep is in the DECISIONS.md P5-3 entry).
+    /// row; the selection sweep is in the DECISIONS.md P5-3 entry). An
+    /// unspecified C resolves to min(this, maxContext) — a chunk can never
+    /// hold more positions than the context — and the resolved value is
+    /// what `prefillChunkSize` reports.
     public static let defaultPrefillChunkSize = 512
     /// Where a weight matrix's bytes live inside `weights.buffer`: a bf16
     /// tensor's byte offset (Phase 2 kernels) or the q4g64 triplet's three
@@ -105,8 +116,9 @@ public final class GPUModel {
     /// Which attention kernel structure this pipeline runs (P4-2, spec D4).
     /// Always `.naive` on the bf16 backend.
     public let kernelPath: KernelPath
-    /// Which prefill structure multi-token suffixes take (P5-3, phase-5.md
-    /// D5). Always `.sequential` on the bf16 backend.
+    /// Which prefill structure multi-token suffixes take (P5-3/P5-4,
+    /// phase-5.md D5). Tiled by default on the packed + fused pipeline;
+    /// always `.sequential` on the bf16 backend and the naive kernel arm.
     public let prefillPath: PrefillPath
     /// The tiled prefill chunk size C (spec D2: reported, not pinned).
     /// Meaningful only when `prefillPath == .tiled`; scratch is sized for
@@ -276,23 +288,30 @@ public final class GPUModel {
     ///   `.fused` (the default since P4-4) runs the Phase 4 6-dispatch
     ///   folded layer (P4-6); `.naive` selects the Phase 2/3 21-dispatch
     ///   structure for the in-session before/after rows.
-    /// - Parameter prefillPath: prompt-processing structure (P5-3, spec
-    ///   D5). `.tiled` requires the fused kernel path and preallocates the
-    ///   chunk scratch; `.sequential` (the P5-3 default — P5-4 flips it)
-    ///   is the Phase 2–4 per-token loop.
+    /// - Parameter prefillPath: prompt-processing structure (P5-3/P5-4,
+    ///   spec D5). `.tiled` requires the fused kernel path and preallocates
+    ///   the chunk scratch; `.sequential` is the Phase 2–4 per-token loop.
+    ///   nil (the default) resolves via `defaultPrefillPath(for:)`: tiled
+    ///   on fused, sequential on naive — so the naive A/B arm keeps
+    ///   loading without arguments while tiled + naive asked for
+    ///   explicitly still fails at load.
     /// - Parameter prefillChunkSize: tiled chunk size C (spec D2 —
-    ///   reported, not pinned). Ignored on the sequential path.
+    ///   reported, not pinned). nil resolves to min(`defaultPrefillChunkSize`,
+    ///   maxContext); an explicit value must lie in 1...maxContext. Ignored
+    ///   on the sequential path.
     public convenience init(
         packed: PackedCheckpoint, config: ModelConfig, context: MetalContext,
         residency: WeightsResidency = .mmap, maxContext: Int,
         kernelPath: KernelPath = .fused,
-        prefillPath: PrefillPath = .sequential,
-        prefillChunkSize: Int = GPUModel.defaultPrefillChunkSize
+        prefillPath: PrefillPath? = nil,
+        prefillChunkSize: Int? = nil
     ) throws {
         try self.init(
             file: packed.file, packed: packed, config: config, context: context,
             residency: residency, maxContext: maxContext, kernelPath: kernelPath,
-            prefillPath: prefillPath, prefillChunkSize: prefillChunkSize)
+            prefillPath: prefillPath ?? Self.defaultPrefillPath(for: kernelPath),
+            prefillChunkSize: prefillChunkSize
+                ?? min(Self.defaultPrefillChunkSize, max(maxContext, 1)))
     }
 
     private init(

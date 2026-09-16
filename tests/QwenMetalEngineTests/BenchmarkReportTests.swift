@@ -46,7 +46,7 @@ final class BenchmarkReportTests: XCTestCase {
             dateStamp: "2026-08-25", deviceLabel: "iPhone 15 Pro",
             osVersion: "19.0", batteryHealthNote: batteryNote,
             coldOrWarmNote: "warm", residency: .mmap,
-            kernelPath: .naive,
+            kernelPath: .naive, prefillPath: .sequential,
             promptName: "decode-essay", promptTokenCount: 84, mode: mode,
             burst: burst, sustained: sustained,
             physFootprintBytes: physFootprint)
@@ -127,31 +127,49 @@ final class BenchmarkReportTests: XCTestCase {
         XCTAssertTrue(text.contains("weights bf16"))
         XCTAssertTrue(text.contains("naive fp16 GPU"))
         XCTAssertTrue(text.contains("kernels naive"))
+        XCTAssertTrue(text.contains("prefill sequential"),
+                      "the bf16 backend is permanently sequential — labeled")
     }
 
-    /// P4-4: q4g64 rows are Phase 4 rows and must record the kernel path —
-    /// the P4-5 before/after rows differ ONLY in this field.
-    func testQ4G64ExportRecordsFormatPhaseAndKernelPath() throws {
-        func q4Text(_ kernelPath: GPUModel.KernelPath) -> String {
+    /// P4-4 / P5-4: q4g64 rows record the kernel path AND the prefill path
+    /// (+ chunk size C when tiled — spec D2: C is recorded on every row);
+    /// the P5-5 before/after rows differ ONLY in the prefill field, so it
+    /// exists on every export surface. q4g64 rows are Phase 5 rows now.
+    func testQ4G64ExportRecordsFormatPhaseKernelAndPrefillPath() throws {
+        func q4Text(
+            _ kernelPath: GPUModel.KernelPath,
+            prefill: GPUModel.PrefillPath, chunk: Int? = nil
+        ) -> String {
             BenchmarkReport(
                 dateStamp: "2026-09-02", deviceLabel: "iPhone 15 Pro",
                 osVersion: "19.0", batteryHealthNote: "88%",
                 coldOrWarmNote: "warm", residency: .mmap, weightsFormat: .q4g64,
-                kernelPath: kernelPath,
+                kernelPath: kernelPath, prefillPath: prefill,
+                prefillChunkSize: chunk,
                 promptName: "decode-essay", promptTokenCount: 84, mode: .burst,
                 burst: syntheticMetrics(tokens: 64)).exportText()
         }
-        let fused = q4Text(.fused)
-        XCTAssertTrue(fused.contains("Phase 4 row export"))
-        XCTAssertTrue(fused.contains("weights q4g64"))
-        XCTAssertTrue(fused.contains("q4g64 fused-dequant GPU"))
-        XCTAssertTrue(fused.contains("residency mmap"))
-        XCTAssertTrue(fused.contains("kernels fused"))
+        let tiled = q4Text(.fused, prefill: .tiled, chunk: 512)
+        XCTAssertTrue(tiled.contains("Phase 5 row export"))
+        XCTAssertTrue(tiled.contains("weights q4g64"))
+        XCTAssertTrue(tiled.contains("q4g64 fused-dequant GPU"))
+        XCTAssertTrue(tiled.contains("residency mmap"))
+        XCTAssertTrue(tiled.contains("kernels fused"))
+        XCTAssertTrue(tiled.contains("prefill tiled (C=512)"), tiled)
 
-        // The naive A/B arm is still a Phase 4 row, labeled by kernels.
-        let naive = q4Text(.naive)
-        XCTAssertTrue(naive.contains("Phase 4 row export"))
+        // The sequential A/B arm is still a Phase 5 row, labeled by prefill.
+        let sequential = q4Text(.fused, prefill: .sequential)
+        XCTAssertTrue(sequential.contains("Phase 5 row export"))
+        XCTAssertTrue(sequential.contains("kernels fused"))
+        XCTAssertTrue(sequential.contains("prefill sequential"), sequential)
+        XCTAssertFalse(sequential.contains("C="),
+                       "no chunk size on a sequential row")
+
+        // The naive kernel arm (sequential-only) stays labeled by kernels.
+        let naive = q4Text(.naive, prefill: .sequential)
+        XCTAssertTrue(naive.contains("Phase 5 row export"))
         XCTAssertTrue(naive.contains("kernels naive"))
+        XCTAssertTrue(naive.contains("prefill sequential"))
     }
 
     // MARK: - (P4-1) latency-variance line (spec D7 — every Phase 4 row)

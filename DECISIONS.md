@@ -4024,3 +4024,154 @@ The D1 metric of record (pinned in the Phase 5 gates entry, veto-approved
   (QWEN_FREE_RUN_REPORT=1 variant over the tiled path, C=128); the
   128×5 report itself is P5-4's re-verification deliverable where the
   tiled path becomes the default under test.
+
+## 2026-09-16 — P5-4: tiled prefill is the packed default — Tier-M/E re-verified tiled, free-run NONE, Mac "after" rows
+
+Deliverable (phase-5.md D5 + edge tests 9, 12–13 close-out; task P5-4). No
+gate was touched; every constant below is the pre-committed 2026-09-14
+value used verbatim.
+
+- **Default flip (D5):** `GPUModel(packed:)` now resolves an UNSPECIFIED
+  `prefillPath` to `.tiled` on the fused kernel path and `.sequential` on
+  the naive arm (`GPUModel.defaultPrefillPath(for:)`); the parameter became
+  Optional (nil = engine resolution) so the naive A/B arm — which supports
+  sequential prefill only — keeps loading without arguments while an
+  EXPLICIT tiled + naive request still fails at load (P5-3 pin kept).
+  `prefillChunkSize` is Optional too: nil resolves to min(512, maxContext)
+  — a chunk can never hold more positions than the context — and the
+  resolved value is what the model reports (rows record C, spec D2); an
+  explicit value must still lie in 1...maxContext (P5-3's 0/−1/17 rejects
+  kept). Red-first on the default pin: the P5-3 assertion
+  `defaulted.prefillPath == .sequential` was flipped to `.tiled` before
+  the engine change (by construction — not observed failing, the same
+  edit that flipped it landed the tests that depend on the new API). The
+  bf16 initializer still exposes no prefill option (permanently
+  sequential, D5). Reversible, convention-following API choice — surfaced
+  in the plan, not blocked on.
+- **Toggle surfaced (D5, the P4-4 pattern):** CLI `generate --prefill
+  sequential|tiled` (+ `--prefill-chunk C`, a diagnostic per spec D2's
+  "may expose it as a diagnostic option"); usage errors for cpu backend,
+  bf16 + tiled, naive + tiled, and chunk without a tiled path — all seven
+  combinations verified by hand against the release CLI (exit 2, the
+  named message). App: "Prefill" segmented picker on the Benchmark screen
+  (q4g64 + fused only; hidden on the naive arm where the engine runs
+  sequential regardless; reload-on-switch like the kernels toggle); load
+  summary and status line label the prefill path (+ C). App release build
+  (xcodebuild, generic/platform=iOS, unsigned): BUILD SUCCEEDED (the only
+  warning is the standing AppIntents-metadata notice).
+- **Rows now record the prefill path:** `BenchmarkReport` gained a required
+  `prefillPath` field (no default — every call site labels, the P4-4
+  precedent) plus `prefillChunkSize` (rendered only on tiled rows as
+  "prefill tiled (C=512)"); q4g64 exports relabel "Phase 5 row export"
+  (the P4-4 relabel precedent — the P5-5 sequential arm is a Phase 5 A/B
+  row distinguished by the prefill field). The CLI's backend line carries
+  the same label. bf16 rows print "prefill sequential" for uniformity.
+- **Tier-M/E re-verification on the tiled default (D6, constants
+  verbatim):** the shared real-artifact GPU model (SharedQuantGPUModel)
+  now builds the production default — tiled, C resolved to 256 = its
+  maxContext; every suite prompt is shorter than that, so the prompt is
+  ONE chunk exactly as it would be at the production C=512 — and a new
+  pin (testSharedModelRunsTheTiledPrefillDefault) fails loudly if the
+  suites' subject ever silently changes. GPUQuantTierETests (full-stack
+  slices at 2⁻⁵) and the 250-step teacher-forced GPUQuantLogitSuiteTests
+  (checkpoints, fingerprints, top-64, tie-aware top-1 at ε_tie = 2⁻⁴·M64,
+  all 5 prompts) ran release-mode against live CPU-quant with the tiled
+  prefill feeding the fused decode and ALL held first run. Tier-M module
+  slices are step-level (unaffected by the prompt path) and held.
+- **Edge test 9 (toggle):** tiny fixture — both paths load (tiled via the
+  DEFAULT, sequential explicitly), both pass the shared full-stack spot
+  check vs the same CPU-quant oracle at 2⁻⁵·M, DispatchCounter tells them
+  apart on the same 5-token prompt (sequential 4·8 + 10 = 42; tiled one
+  chunk 1 + 13 + 2·5 + 3 = 27 — P5-3's measured pins), and decode after
+  the prompt is the identical 10-dispatch fused step on both. Real
+  artifact — the default and the explicit sequential both load; on
+  short_english the sequential span measures (P−1)·197 + 200 (the P5-1
+  structural cross-check) and the tiled span 1 + 28·(13 + 2P) + 3 + 1,
+  the decode tail is the 200-dispatch fused selecting step on both.
+  Tests whose SUBJECT is the per-token fused step (the P4-7 199/200
+  real-dims pins, the fused synthetic oracle sanity, the fused
+  incremental-vs-replay bitwise pin) now ask for `.sequential`
+  explicitly, with the reason in-line: a decode step (matvec) and a GEMM
+  row reduce in different orders, so the mixed incremental-vs-replay case
+  is legitimately NOT bitwise on the tiled default (spec D6 / the
+  2026-09-12 reduction-order decision); the tiled path's own
+  prefix-invariance pin stands in PrefillPipelineTests.
+- **Edge test 12 (instrumentation parity):** through the production
+  `BenchGenerationRunner`, both paths report the D1 prefill span (wall ≥
+  GPU > 0, per-engine token accounting, stepCount = prompt, no WARM PREFIX
+  label) AND the legacy TTFT-style field, with the per-token decode
+  records following; only the dispatch count differs (tiled selecting
+  chunk 28 vs sequential 4·8 + 11).
+- **Edge test 13 (microbench harness):** already landed at P5-2
+  (QuantGemmMicrobenchTests: fraction/rate arithmetic on synthetic timings,
+  export report shape, FLOP pins, invalid-argument rejects, real-artifact
+  M=8 protocol pins) — verified present, nothing to add; recorded here so
+  the P5-4 close-out is complete.
+- **Free-run divergence report (tiled default vs CPU-quant, REPORTED not
+  gated):** 128 free-running greedy
+  steps × 5 prompts on the production default (tiled prefill → fused
+  decode, shared model C=256 = one chunk per prompt, identical to C=512
+  for these prompt lengths) — **first divergence: NONE on all 5 prompts**
+  (all 128 tokens identical to the CPU-quant reference on every prompt;
+  texts coherent, same species as the P3-5/P4-4 reports). Same NONE
+  result the naive (P2-4/P3-5) and fused (P4-4) paths recorded. Harness:
+  QWEN_FREE_RUN_REPORT=1 + QWEN_FREE_RUN_REPORT_FILE (DEV-2 mechanism),
+  release build, 1572 s.
+- **Mac "after" rows (PROVISIONAL, benchmarks/results.md Phase 5
+  section):** release CLI, tiled default C=512, prefill-summarize 852:
+  warm span median **3.628 s = 234.85 tok/s of record** (warm range
+  234.72–235.14, n=3; cold first run 208.91 with identical GPU time —
+  first-use cost lands in wall), span GPU 3.487–3.490 s (≈4.09 ms per
+  prompt position), wall−GPU 0.136–0.141 s warm (2 command buffers, was
+  0.36 s over 852), prefill dispatches **48,446 on every run — exactly
+  chunk 1: 1 + 28·(13 + 2·512) = 29,037 plus chunk 2: 1 + 28·(13 + 2·340)
+  + 3 + 1 = 19,409**. One same-session sequential run via `--prefill
+  sequential` (context only, not an A/B claim): 52.70 tok/s, 167,847
+  dispatches — reproduces the P5-1 "before" (52.44) on this build ⇒ ≈4.46×
+  on Mac. GEMM microbench sanity re-run on the same build (kernel
+  byte-identical since P5-2): M=8 27.84 GB/s median (P5-2: 27.30; +2% Mac
+  variance, the P5-2B device-gate risk stands), M=64 1476 GFLOPS, M=512
+  1567 GFLOPS; spot checks ≤ Tier-K at every M.
+- **Mac-only observation (no design decision taken):** the tiled span
+  sustains ≈0.71 TFLOPS effective (2.40 TFLOP of layer GEMMs at M=852 +
+  lm_head once + ≈0.08 TFLOP attention ÷ 3.487 s) ≈ 46% of the Mac M=512
+  GEMM plateau (1.567 TFLOPS) — roughly half the span is non-GEMM on Mac:
+  the per-position SDPA loop (2C dispatches/layer serialized through the
+  shared partial-state scratch — PF-1 lever 1), the batched naive norms
+  (PF-1 lever 2), and ≈48k dispatch encodes. Recorded on PF-1; the
+  engage/close decision still waits on P5-5's device rows (Mac fractions
+  are not predictive — standing precedent).
+- **Instrumentation wrinkle surfaced → DI-1 seeded (decision for James):**
+  the P2-5 per-token collector records generated-token 0 from
+  `lastStepTiming`/`lastStepDispatchCount`, i.e. the prompt call's LAST
+  command buffer. With sequential prefill that was the last prompt
+  position's 200-dispatch selecting step (≈ a decode step); on the tiled
+  default it is the last CHUNK (19,409 dispatches, ≈1.4 s at 852 tokens),
+  so the CLI/export `dispatches/token` reads "UNSTABLE 200–19409" and
+  short-run `overall tok/s` / all-tokens-scope variance carry that
+  outlier. Unaffected: the canonical 128–512 window rate (the P5-5
+  decode-regression metric), window-scope variance, long-run medians, and
+  the D1 prefill span (which already owns that command buffer). Excluding
+  the record would change the per-token n on every row since Phase 2 — a
+  P2-5 convention change, so it is presented as options (exclude vs. keep
+  + label) rather than made here (METHODOLOGY 5/8; AGENT_OPERATION "when
+  to pause"). Ranked 20.47, ahead of P5-5.
+- **Verification (SOP step 5):** suite minus the CPU logit gate: **482 tests,
+  0 failures** — 450 in debug (`swift test --skip <9 oracle suites>`:
+  "Executed 450 tests, with 6 tests skipped and 0 failures (0 unexpected)
+  in 98.160 s"; the 6 skips are the opt-in/env-gated harnesses) + 32
+  heavy oracle-suite tests re-run release-mode in <10-min pieces (DEV-1
+  precedent; 16 GiB RAM forbids two 7 GB oracle processes at once):
+  quant Tier-M 4 + Tier-E 3 + bf16 ActivationFixture 7 (20.3 s), bf16
+  GPU Tier-M/E fixture 5 + GPU bf16 logit suite 5 (95.7 s), GPU-quant
+  logit suite 5 × 159–165 s (all held), quality gate 2 (646 s, CPU-quant
+  only — unaffected by the flip), free-run report 1 (1572 s). +4 new
+  tests (PrefillPipelineTests 2, GPUQuantTierETests 1,
+  PrefillRealArtifactTests 1; BenchmarkReportTests 1 renamed/extended).
+  Backlog drift test: 5 passed. Release CLI: usage errors verified by
+  hand (7 combinations). App: BUILD SUCCEEDED (generic iOS, unsigned).
+- **Backlog:** P5-4 done; P5-5 (owner james — on-device Phase 5 rows,
+  interleaved sequential-vs-tiled before/after under D8 + bookends) flipped
+  blocked → ready; DI-1 seeded (rank 20.47); PF-1 annotated with the Mac
+  compute-share observation. P5-EXEC stays blocked on P5-5. The
+  post-P5-5 toggle-removal decision is already tracked (rank 30.1).

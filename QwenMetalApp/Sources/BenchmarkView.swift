@@ -4,7 +4,8 @@ import QwenMetalEngine
 
 /// D8 benchmark screen: runs the pinned protocol (burst decode-essay,
 /// sustained 5-min regenerate loop), weights bf16/q4g64 toggle (P3-5),
-/// residency mmap/wired toggle, and displays + exports the row fields. The prompt picker on burst also
+/// residency mmap/wired toggle, kernels toggle (P4-4), prefill toggle
+/// (P5-4), and displays + exports the row fields. The prompt picker on burst also
 /// serves the prefill row (prefill-summarize — prompts/README roles).
 struct BenchmarkView: View {
     /// Screen-local run modes: the two BenchmarkReport generation modes, the
@@ -62,6 +63,25 @@ struct BenchmarkView: View {
                         .disabled(model.isRunning || model.isLoading)
                         .onChange(of: model.kernelPath) {
                             model.kernelPathChanged()
+                            // The naive arm is sequential-only: a kernels
+                            // switch can change the effective prefill path.
+                            model.prefillPathChanged()
+                        }
+                    }
+                    // P5-4 (phase-5.md D5): tiled default; sequential exists
+                    // for the P5-5 interleaved before/after row. q4g64 +
+                    // fused only — bf16 keeps sequential permanently and
+                    // the naive kernel arm supports sequential only.
+                    if model.weightsFormat == .q4g64, model.kernelPath == .fused {
+                        Picker("Prefill", selection: $model.prefillPath) {
+                            ForEach(GPUModel.PrefillPath.allCases, id: \.self) {
+                                Text($0.rawValue)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(model.isRunning || model.isLoading)
+                        .onChange(of: model.prefillPath) {
+                            model.prefillPathChanged()
                         }
                     }
                     Button(model.loadSummary == nil

@@ -13,7 +13,7 @@ import QwenMetalEngine
 private let contextCap = 4096
 
 private let generateUsage = """
-usage: qwen-metal-cli generate --model-dir <dir> --prompt "<text>" [--max-tokens N] [--backend cpu|gpu] [--weights bf16|q4g64] [--kernels naive|fused]
+usage: qwen-metal-cli generate --model-dir <dir> --prompt "<text>" [--max-tokens N] [--backend cpu|gpu] [--weights bf16|q4g64] [--kernels naive|fused] [--prefill sequential|tiled] [--prefill-chunk C]
   --model-dir   directory with exactly one .safetensors checkpoint,
                 config.json, tokenizer.json, tokenizer_config.json
   --prompt      non-empty prompt text
@@ -25,6 +25,15 @@ usage: qwen-metal-cli generate --model-dir <dir> --prompt "<text>" [--max-tokens
                 structure) or naive (the Phase 2/3 21-dispatch structure,
                 kept for the P4-5 A/B row). gpu backend only; fused needs
                 q4g64 (the bf16 backend is permanently naive, spec D4)
+  --prefill     tiled (default on gpu+q4g64+fused — the Phase 5 chunked
+                batched prefill, phase-5.md D5) or sequential (the Phase
+                2-4 per-token prompt loop, kept for the P5-5 in-session
+                before/after row; the only option with --kernels naive).
+                gpu backend only; tiled needs q4g64 (the bf16 backend keeps
+                sequential prefill permanently)
+  --prefill-chunk  tiled only: chunk size C in positions (default
+                \(GPUModel.defaultPrefillChunkSize), chosen by measurement — a
+                reported parameter, not a pin, spec D2; diagnostic option)
 """
 
 private func printStderr(_ message: String) {
@@ -49,6 +58,8 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
     var backend = Backend.cpu
     var weightsFormat = WeightsFormat.bf16
     var kernels: GPUModel.KernelPath?
+    var prefill: GPUModel.PrefillPath?
+    var prefillChunk: Int?
 
     var index = 0
     while index < arguments.count {
@@ -80,6 +91,18 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
                 return usageError("--kernels must be 'naive' or 'fused', got '\(value)'")
             }
             kernels = parsed
+        case "--prefill":
+            guard let parsed = GPUModel.PrefillPath(rawValue: value) else {
+                return usageError(
+                    "--prefill must be 'sequential' or 'tiled', got '\(value)'")
+            }
+            prefill = parsed
+        case "--prefill-chunk":
+            guard let parsed = Int(value), parsed >= 1 else {
+                return usageError(
+                    "--prefill-chunk must be a positive integer, got '\(value)'")
+            }
+            prefillChunk = parsed
         default:
             return usageError("unknown flag '\(flag)'")
         }
@@ -96,6 +119,32 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
         return usageError(
             "--kernels fused needs --weights q4g64 (the bf16 backend runs "
             + "the naive structure permanently, phase-4.md D4)")
+    }
+    // P5-4 (phase-5.md D5): the prefill toggle exists on the GPU packed
+    // pipeline; tiled needs the fused kernel structure. Rejected here with
+    // usage errors (the engine would refuse the same combinations at load).
+    if prefill != nil || prefillChunk != nil, backend == .cpu {
+        return usageError(
+            "--prefill/--prefill-chunk select GPU prompt processing — gpu "
+            + "backend only")
+    }
+    if prefill == .tiled, weightsFormat == .bf16 {
+        return usageError(
+            "--prefill tiled needs --weights q4g64 (the bf16 backend keeps "
+            + "sequential prefill permanently, phase-5.md D5)")
+    }
+    if prefill == .tiled, kernels == .naive {
+        return usageError(
+            "--prefill tiled needs --kernels fused (the naive kernel arm "
+            + "supports sequential prefill only, phase-5.md D5)")
+    }
+    if prefillChunk != nil {
+        let resolvedPrefill = prefill
+            ?? GPUModel.defaultPrefillPath(for: kernels ?? .fused)
+        if weightsFormat == .bf16 || resolvedPrefill == .sequential {
+            return usageError(
+                "--prefill-chunk applies to the tiled prefill path only")
+        }
     }
 
     do {
@@ -144,9 +193,14 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
                 let metal = try MetalContext()
                 // Fused is the engine default (P4-4); --kernels naive keeps
                 // the Phase 2/3 structure selectable for the A/B row.
+                // Tiled prefill is the engine default on fused (P5-4);
+                // --prefill sequential keeps the per-token prompt loop
+                // selectable for the P5-5 before/after row (nil = engine
+                // resolution, spec D5).
                 let gpu = try GPUModel(
                     packed: packed, config: config, context: metal,
-                    maxContext: contextLimit, kernelPath: kernels ?? .fused)
+                    maxContext: contextLimit, kernelPath: kernels ?? .fused,
+                    prefillPath: prefill, prefillChunkSize: prefillChunk)
                 model = gpu
                 gpuModel = gpu
             }
@@ -204,8 +258,17 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
         case (.cpu, .q4g64): backendNote = "CPU-quant reference — no KV cache"
         case (.gpu, .bf16): backendNote = "GPU fp16 + KV cache, naive kernels"
         case (.gpu, .q4g64):
+            // P5-4: rows record the prefill path (+ C when tiled, spec D2).
+            let prefillNote: String
+            if let gpu = gpuModel {
+                prefillNote = gpu.prefillPath == .tiled
+                    ? "prefill tiled (C=\(gpu.prefillChunkSize))"
+                    : "prefill sequential"
+            } else {
+                prefillNote = "prefill ?"
+            }
             backendNote = "GPU q4g64 + KV cache, kernels "
-                + (gpuModel?.kernelPath.rawValue ?? "?")
+                + (gpuModel?.kernelPath.rawValue ?? "?") + ", " + prefillNote
         }
         printStderr(String(
             format: "%d prompt tokens, %d generated in %.1fs (%.2f tok/s, %@)",

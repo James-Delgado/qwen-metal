@@ -773,9 +773,13 @@ final class FusedPathRealArtifactSmokeTests: XCTestCase {
             expectedRevision: SharedCheckpoint.pinnedRevision)
         let config = try ModelConfig(
             jsonData: Data(SharedCheckpoint.pinnedConfigJSON.utf8))
+        // Sequential prefill on purpose (P5-4): the 199/200 pins below are
+        // PER-TOKEN fused-step counts; on the tiled default the prompt
+        // would run as one chunk and `lastStepDispatchCount` would report
+        // the chunk's count instead.
         let fused = try GPUModel(
             packed: packed, config: config, context: context, maxContext: 64,
-            kernelPath: .fused)
+            kernelPath: .fused, prefillPath: .sequential)
         XCTAssertEqual(fused.kernelPath, .fused)
         let naive = try GPUModel(
             packed: packed, config: config, context: context, maxContext: 64,
