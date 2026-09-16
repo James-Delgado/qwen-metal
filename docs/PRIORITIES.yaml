@@ -1831,7 +1831,8 @@ tasks:
   - id: P5-3
     rank: 20.3
     title: "Chunked batched prefill pipeline (batched norm/RoPE/append, causal attention per D4, last-position lm_head, preallocated scratch)"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-16T01:15:00Z
     depends_on: [P5-2]
     blocks: [P5-4]
     deliverable:
