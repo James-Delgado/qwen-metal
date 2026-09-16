@@ -290,10 +290,22 @@ public final class FusedSDPAKernel {
     /// reduce). `query` is `[numHeads, headDim]` fp16 (post QK-norm + RoPE);
     /// `output` is `[numHeads, headDim]` fp16 head-major (feeds the o_proj
     /// matvec directly).
+    ///
+    /// P5-3 (phase-5.md D4 option 1): `queryByteOffset`/`outputByteOffset`
+    /// let the chunked prefill path reuse this kernel per query position,
+    /// binding one row of its batched q/attention scratch ([batch,
+    /// numHeads·headDim] fp16, engine-owned). They are `setBuffer` offsets —
+    /// the recorded element-offset convention exists because SAFETENSORS
+    /// data offsets can violate binding alignment, which cannot happen here:
+    /// row strides of engine-allocated scratch are multiples of 4 (headDim
+    /// is even), matching Apple GPUs' 4-byte minimum buffer-offset
+    /// alignment, and the wrapper rejects anything else loudly. Defaults of
+    /// 0 keep the decode path binary-identical (kernel source untouched).
     public func encodeSDPA(
         into encoder: MTLComputeCommandEncoder,
         cache: KVCache, layer: Int, position: Int,
-        query: MTLBuffer, numHeads: Int, output: MTLBuffer
+        query: MTLBuffer, queryByteOffset: Int = 0,
+        numHeads: Int, output: MTLBuffer, outputByteOffset: Int = 0
     ) throws {
         try requirePositive(numHeads, "numHeads")
         guard numHeads % cache.kvHeads == 0 else {
@@ -309,10 +321,19 @@ public final class FusedSDPAKernel {
             layer: layer, component: .key, head: 0, position: position)
         let keyBase = try cache.baseElementOffset(layer: layer, component: .key)
         let valueBase = try cache.baseElementOffset(layer: layer, component: .value)
+        for (name, offset) in [("queryByteOffset", queryByteOffset),
+                               ("outputByteOffset", outputByteOffset)] {
+            guard offset >= 0, offset % 4 == 0 else {
+                throw QuantKernelError.misalignedOffset(
+                    buffer: name, byteOffset: offset, alignment: 4)
+            }
+        }
         try requireCapacity(
-            query, bytes: numHeads * cache.headDim * 2, name: "query")
+            query, bytes: queryByteOffset + numHeads * cache.headDim * 2,
+            name: "query")
         try requireCapacity(
-            output, bytes: numHeads * cache.headDim * 2, name: "output")
+            output, bytes: outputByteOffset + numHeads * cache.headDim * 2,
+            name: "output")
         let threads = Self.threadsPerThreadgroup
         // The kernels' fixed register/threadgroup budgets assume the Apple
         // GPU shape (SIMD width ≥ 32, ≥ 128 threads/threadgroup); a device
@@ -334,7 +355,7 @@ public final class FusedSDPAKernel {
 
         // Pass 1: numHeads × numSplits chunk partials.
         encoder.setComputePipelineState(splitPipeline)
-        encoder.setBuffer(query, offset: 0, index: 0)
+        encoder.setBuffer(query, offset: queryByteOffset, index: 0)
         encoder.setBuffer(cache.buffer, offset: 0, index: 1)
         setScalar(encoder, UInt64(keyBase), index: 2)
         setScalar(encoder, UInt64(valueBase), index: 3)
@@ -362,7 +383,7 @@ public final class FusedSDPAKernel {
         encoder.setBuffer(m, offset: 0, index: 6)
         encoder.setBuffer(l, offset: 0, index: 7)
         encoder.setBuffer(acc, offset: 0, index: 8)
-        encoder.setBuffer(output, offset: 0, index: 9)
+        encoder.setBuffer(output, offset: outputByteOffset, index: 9)
         dispatchCounter?.increment()
         encoder.dispatchThreadgroups(
             MTLSize(width: numHeads, height: 1, depth: 1),

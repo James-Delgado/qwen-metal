@@ -3948,3 +3948,79 @@ The D1 metric of record (pinned in the Phase 5 gates entry, veto-approved
   Suite wall time note: QuantQualityGateTests' 2 CPU tests took
   11,627 s of the 14,316 s total in debug — pre-existing, seeded as a
   dev-loop observation on DEV-1's theme, not touched here.
+
+## 2026-09-16 — P5-3: chunked batched prefill pipeline landed (sequential default kept; C=512 chosen by measurement)
+
+- **What landed (spec D2/D4/D6; commit `phase5(prefill)` P5-3):** the
+  packed-pipeline chunked batched prefill behind `GPUModel.PrefillPath`
+  (`.sequential` stays the default — P5-4 flips it and surfaces the
+  toggle). Per chunk of C positions, ONE command buffer (dual timing +
+  dispatch count ride along, hard rule 7): batched q4 embedding gather →
+  per layer [batched RMSNorm → q/k/v GEMMs (the P5-2 kernel) → batched
+  qk-norm/RoPE/append cluster → P4-7 split-K SDPA per position →
+  o_proj GEMM → batched residual → batched post-norm → gate/up GEMMs →
+  batched SwiGLU → down GEMM → batched residual] → last chunk only:
+  last-row copy into the decode hidden buffer (keeps the Tier-E
+  lastLayerOutput hook truthful) + final norm + lm_head (+ argmax on the
+  selecting path). Single-token suffixes keep routing to the untouched
+  Phase 4 fused decode step. New kernels (Metal/PrefillKernels.swift)
+  copy the per-token kernels' arithmetic VERBATIM (batch grid + row
+  addressing only), so the pre-committed gates carry: batched gather
+  EXACT (pinned bitwise vs the per-token gather), batched cluster
+  bitwise vs the single-position cluster looped (q rows, k slots, v
+  slots incl. adversarial bit patterns), KV contents at the norm-species
+  constant vs the CPU-quant fp32 reference for every prompt position,
+  full-stack logits at 2⁻⁵·M, causality by bitwise prefix-invariance +
+  NaN cache poison. ALL correctness gates held unmodified first run.
+- **Chunk size C = 512 (default; reported, not pinned).** Release-mode
+  sweep on the real artifact, warm prefill-summarize (852 HF tokens via
+  the engine tokenizer), median of 3 after a discarded cold run (Mac
+  M2 Pro, PROVISIONAL, diagnostic only — picks the default, never a
+  row): C=128 233.58 tok/s, C=256 237.76, C=512 242.82 (best),
+  C=768 241.60. Scratch at C=512: 34.0 MiB of the ≤64 MiB budget
+  (35,653,632 B, test-pinned via `prefillScratchBytes`). Context: the
+  P5-1 Mac sequential "before" was 52.44 tok/s → tiled is ~4.6× on the
+  same Mac; the on-device floor (≥135 tok/s) is walked at P5-5.
+  Harness kept as the opt-in QWEN_PREFILL_CHUNK_SWEEP=1 test.
+- **Hard-rule/scope notes:** dequant stays in registers / threadgroup
+  tiles inside consuming kernels (the P5-2 GEMM path; hard rule 1 +
+  recorded clarification); the KV cache is the same preallocated buffer
+  (hard rule 4); all prefill scratch is allocated at model load and
+  never grown (buffer-identity + zero-allocation-growth tests).
+  DECODE IS UNTOUCHED: the split-K SDPA kernel source is byte-identical
+  — the per-position reuse binds rows via two new HOST-side `setBuffer`
+  offset parameters (default 0 ⇒ decode binding identical). This
+  deliberately deviates from the "offsets in elements, never setBuffer"
+  convention, whose recorded rationale is safetensors-controlled
+  alignment; here the offsets address ENGINE-owned scratch whose row
+  stride is provably 4-byte aligned, and the wrapper validates + a
+  bitwise offset-vs-offset-0 test pins it. Judged the smaller touch
+  than editing the veto-approved Phase 4 kernel source.
+- **Error-surface parity (edge test 10):** the tiled path validates the
+  whole suffix up front and throws the SAME payloads sequential
+  eventually throws (`contextFull(position: maxContext, …)`,
+  `tokenIdOutOfRange`, empty-prompt `badInput`) — pinned by equality
+  tests; tiled+naive-kernel-path and bad chunk sizes are rejected at
+  load; the bf16 backend has no tiled option (D5).
+- **Implementation facts worth follow-up (seeded PF-1, rank 20.46):**
+  (1) all per-position SDPA dispatches in a chunk serialize through the
+  shared partial-state scratch triple (buffer-granularity hazard
+  tracking); (2) the reused naive rmsnorm recomputes row sums per
+  thread (O(dim²)/row). Both are measure-first levers if P5-4/P5-5
+  show the share matters or the floor is at risk; else PF-1 closes
+  with a note (P5-2B precedent).
+- **Verification:** suite minus the CPU logit gate: **476 tests, 0
+  failures** — 446 in debug (28.4 s; 6 opt-in/env-gated skips) + the 30
+  heavy oracle-suite tests re-run release-mode (DEV-1 precedent; split
+  into <10-min pieces because this session's environment killed every
+  backgrounded `swift test`): bf16+quant Tier-M/E 18, GPU bf16 logit
+  suite 5 (84 s), GPU-quant logit suite 5 × ~160 s, quality-gate 2
+  (306 s). +29 new tests (PrefillKernelTests 5, PrefillPipelineTests
+  22, PrefillRealArtifactTests 2 incl. the real-artifact tiled smoke).
+  Dispatch pins recorded from measurement (P2-5 rule): tiny 1-layer
+  C=4 prompt-5 → 22 + 19 dispatches (13 fixed/layer + 2·B SDPA + 1
+  gather; logits tail 3, +1 selecting).
+- **Free-run report from tiled prefill:** harness landed
+  (QWEN_FREE_RUN_REPORT=1 variant over the tiled path, C=128); the
+  128×5 report itself is P5-4's re-verification deliverable where the
+  tiled path becomes the default under test.

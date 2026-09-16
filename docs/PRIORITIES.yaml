@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-09-14
+last_updated: 2026-09-16
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -1831,8 +1831,9 @@ tasks:
   - id: P5-3
     rank: 20.3
     title: "Chunked batched prefill pipeline (batched norm/RoPE/append, causal attention per D4, last-position lm_head, preallocated scratch)"
-    status: in_progress
+    status: done
     started_at: 2026-09-16T02:26:26Z
+    completed_at: 2026-09-16T04:20:00Z
     depends_on: [P5-2]
     blocks: [P5-4]
     deliverable:
@@ -1847,11 +1848,25 @@ tasks:
       causal kernel only if the measured share says it pays. Gates:
       extended span-mapping rule, no new constants (DECISIONS.md
       2026-09-14 Phase 5 gates entry).
+      2026-09-16 (done): landed as Metal/PrefillKernels.swift (batched
+      q4 embedding gather + batched qk-norm/RoPE/append cluster +
+      copy-row, arithmetic verbatim from the per-token kernels) +
+      GPUModel PrefillPath (.sequential stays default — P5-4 flips) +
+      one-command-buffer-per-chunk pipeline (GEMM projections/MLP via
+      P5-2 kernel, per-position split-K SDPA via new host-side
+      setBuffer offsets, last-position-only lm_head) + preallocated
+      scratch (34.0 MiB at C=512 pinned dims, budget test-pinned).
+      All correctness gates (bitwise/species/oracle) held unmodified
+      first run; +29 tests, suite minus CPU logit gate 476 tests,
+      0 failures (446 debug + 30 release oracle). C=512 chosen by
+      Mac sweep (242.8 tok/s warm median on prefill-summarize, ~4.6x
+      the P5-1 sequential 52.44). Seeded PF-1 (SDPA scratch
+      serialization lever). See DECISIONS.md 2026-09-16 P5-3 entry.
 
   - id: P5-4
     rank: 20.4
     title: "Tiled prefill as packed-pipeline default + sequential toggle + Tier-M/E re-verification + free-run report + Mac 'after' rows"
-    status: blocked
+    status: ready
     depends_on: [P5-1, P5-3]
     blocks: [P5-5]
     deliverable:
@@ -1863,6 +1878,35 @@ tasks:
       selectable (CLI flag + app toggle) for the P5-5 in-session
       before/after; bf16 backend keeps sequential permanently. Mac
       PROVISIONAL "after" rows: tiled prefill + microbench sanity.
+
+  - id: PF-1
+    rank: 20.46
+    title: "Prefill attention throughput levers if measurements say they pay (SDPA scratch serialization / batched causal kernel / batched-norm cost)"
+    status: ready
+    depends_on: [P5-3]
+    blocks: []
+    deliverable:
+      file: "engine package (Metal attention/prefill) OR a DECISIONS.md close-out note"
+      tests: "full P5-3 prefill suites re-pass after any iteration (hard rule 3); no gate touched"
+    est_complexity: medium
+    notes: |
+      Seeded 2026-09-16 by P5-3 (implementation facts, measure before
+      acting — the PLAN "do not guess at bottlenecks" rule):
+      (1) The per-position split-K SDPA reuse (D4 option 1) shares ONE
+      partial-state scratch triple across all 2C dispatches per layer,
+      so Metal's buffer-granularity hazard tracking serializes every
+      SDPA dispatch in a chunk against the others. Levers: per-position
+      scratch slices (setBuffer offsets, the P5-3 precedent), or the
+      D4-option-2 batched causal kernel (C query positions/dispatch,
+      also cuts the 2C encode cost).
+      (2) The reused naive rmsnorm_f16 recomputes each row's sum of
+      squares per THREAD — O(dim^2) work per row; at C=512 x 2 norms x
+      28 layers this may be a measurable slice of the chunk.
+      Engage ONLY if P5-4 Mac attribution or the P5-5 device rows show
+      the attention/elementwise share material or the 135 tok/s floor
+      at risk; otherwise close with a DECISIONS.md note (P5-2B
+      precedent). Mac data point: C=512 tiled prefill already measured
+      242.8 tok/s warm (P5-3 sweep, PROVISIONAL).
 
   - id: P5-2B
     rank: 20.45

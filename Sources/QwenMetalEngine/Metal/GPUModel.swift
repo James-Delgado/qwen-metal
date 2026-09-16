@@ -48,6 +48,27 @@ public final class GPUModel {
         case naive
         case fused
     }
+
+    /// P5-3 (phase-5.md D2/D5): how a multi-token prompt suffix is
+    /// processed. `.sequential` is the Phase 2–4 per-token loop;
+    /// `.tiled` is the chunked batched prefill (GEMM projections over C
+    /// positions per chunk, batched norm/RoPE/append, per-position split-K
+    /// SDPA, last-position-only lm_head). Tiled exists exactly on the
+    /// packed + fused pipeline (the bf16 backend keeps sequential prefill
+    /// permanently). Decode — every single-token step after the prompt —
+    /// is the unchanged Phase 4 path on BOTH settings. Sequential remains
+    /// the default at P5-3; P5-4 flips the packed-pipeline default and
+    /// surfaces the toggle (CLI flag + app switch) for the P5-5
+    /// before/after row.
+    public enum PrefillPath: String, CaseIterable, Sendable {
+        case sequential
+        case tiled
+    }
+
+    /// Default prefill chunk size C for the tiled path — a REPORTED
+    /// parameter, not a pin (spec D2: chosen by measurement, recorded per
+    /// row; the selection sweep is in the DECISIONS.md P5-3 entry).
+    public static let defaultPrefillChunkSize = 512
     /// Where a weight matrix's bytes live inside `weights.buffer`: a bf16
     /// tensor's byte offset (Phase 2 kernels) or the q4g64 triplet's three
     /// byte offsets (P3-4 kernels — the whole-checkpoint buffer bound three
@@ -84,6 +105,13 @@ public final class GPUModel {
     /// Which attention kernel structure this pipeline runs (P4-2, spec D4).
     /// Always `.naive` on the bf16 backend.
     public let kernelPath: KernelPath
+    /// Which prefill structure multi-token suffixes take (P5-3, phase-5.md
+    /// D5). Always `.sequential` on the bf16 backend.
+    public let prefillPath: PrefillPath
+    /// The tiled prefill chunk size C (spec D2: reported, not pinned).
+    /// Meaningful only when `prefillPath == .tiled`; scratch is sized for
+    /// it at load and never grown.
+    public let prefillChunkSize: Int
 
     /// Dual timing of the most recent `step` (hard rule 7). Aggregation into
     /// medians/rates is `DecodeTimingCollector`'s job (P2-5).
@@ -128,6 +156,11 @@ public final class GPUModel {
     /// P4-8: on-GPU token selection for the free-running decode path (both
     /// kernel paths, both formats — it reads only the fp32 logits buffer).
     private let argmaxKernel: ArgmaxKernel
+    /// Present exactly on the tiled prefill path (P5-3): the batched
+    /// gather/cluster/copy-row kernels plus the P5-2 dequant-GEMM the
+    /// chunk projections run through.
+    private let prefillKernels: PrefillKernels?
+    private let quantGemm: QuantGemmKernel?
     private let dispatchCounter = DispatchCounter()
 
     private let embeddingRef: MatrixRef
@@ -166,6 +199,51 @@ public final class GPUModel {
     private let cosTable: MTLBuffer     // fp32 [maxContext·headDim/2]
     private let sinTable: MTLBuffer     // fp32 [maxContext·headDim/2]
 
+    /// P5-3 (spec D2): the tiled-prefill chunk scratch — ALL of it
+    /// allocated once at model load, sized for `prefillChunkSize`, never
+    /// grown (edge test 11 pins buffer identity across a multi-chunk
+    /// prefill; the ≤ 64 MiB budget at the pinned dims is pinned by test
+    /// via `prefillScratchBytes`). fp16 activations throughout, matching
+    /// the per-token pipeline's boundaries; `tokenIds` is the u32 chunk
+    /// the batched gather reads. Internal (not private) so the edge-11
+    /// identity test can observe the buffers via @testable.
+    struct PrefillScratch {
+        let tokenIds: MTLBuffer   // u32 [C]
+        let hiddenA: MTLBuffer    // fp16 [C, hidden] — residual stream
+        let hiddenB: MTLBuffer    // fp16 [C, hidden] — residual ping-pong
+        let normBatch: MTLBuffer  // fp16 [C, hidden] — block-norm outputs
+        let qBatch: MTLBuffer     // fp16 [C, numHeads·headDim] — q_proj out
+        let kBatch: MTLBuffer     // fp16 [C, kvHeads·headDim] — k_proj out
+        let vBatch: MTLBuffer     // fp16 [C, kvHeads·headDim] — v_proj out
+        let qRoped: MTLBuffer     // fp16 [C, numHeads·headDim] — cluster out
+        let attnBatch: MTLBuffer  // fp16 [C, numHeads·headDim] — SDPA out
+        let gateBatch: MTLBuffer  // fp16 [C, intermediate]
+        let upBatch: MTLBuffer    // fp16 [C, intermediate]
+        let actBatch: MTLBuffer   // fp16 [C, intermediate] — SwiGLU out
+        let projBatch: MTLBuffer  // fp16 [C, hidden] — o/down projection out
+
+        var allBuffers: [MTLBuffer] {
+            [tokenIds, hiddenA, hiddenB, normBatch, qBatch, kBatch, vBatch,
+             qRoped, attnBatch, gateBatch, upBatch, actBatch, projBatch]
+        }
+    }
+    let prefillScratch: PrefillScratch?
+
+    /// Total bytes `PrefillScratch` allocates for the given config and
+    /// chunk size — the spec D2 ≤ 64 MiB budget is asserted against this
+    /// at the pinned dims (test-pinned, not hard-coded policy).
+    public static func prefillScratchBytes(
+        config: ModelConfig, chunkSize: Int
+    ) -> Int {
+        let qDim = config.numAttentionHeads * config.headDim
+        let kvDim = config.numKeyValueHeads * config.headDim
+        return chunkSize * 4
+            + 4 * chunkSize * config.hiddenSize * 2
+            + 3 * chunkSize * qDim * 2
+            + 2 * chunkSize * kvDim * 2
+            + 3 * chunkSize * config.intermediateSize * 2
+    }
+
     /// The Phase 2 bf16 path. Rejects a q4g64 packed file with a clear error
     /// (phase-3.md edge case 9): the packed loader is `init(packed:)`.
     ///
@@ -184,7 +262,9 @@ public final class GPUModel {
         }
         try self.init(
             file: checkpoint, packed: nil, config: config, context: context,
-            residency: residency, maxContext: maxContext, kernelPath: .naive)
+            residency: residency, maxContext: maxContext, kernelPath: .naive,
+            prefillPath: .sequential,
+            prefillChunkSize: Self.defaultPrefillChunkSize)
     }
 
     /// The P3-5 packed path: identical pipeline, q4g64 matrices consumed by
@@ -196,20 +276,29 @@ public final class GPUModel {
     ///   `.fused` (the default since P4-4) runs the Phase 4 6-dispatch
     ///   folded layer (P4-6); `.naive` selects the Phase 2/3 21-dispatch
     ///   structure for the in-session before/after rows.
+    /// - Parameter prefillPath: prompt-processing structure (P5-3, spec
+    ///   D5). `.tiled` requires the fused kernel path and preallocates the
+    ///   chunk scratch; `.sequential` (the P5-3 default — P5-4 flips it)
+    ///   is the Phase 2–4 per-token loop.
+    /// - Parameter prefillChunkSize: tiled chunk size C (spec D2 —
+    ///   reported, not pinned). Ignored on the sequential path.
     public convenience init(
         packed: PackedCheckpoint, config: ModelConfig, context: MetalContext,
         residency: WeightsResidency = .mmap, maxContext: Int,
-        kernelPath: KernelPath = .fused
+        kernelPath: KernelPath = .fused,
+        prefillPath: PrefillPath = .sequential,
+        prefillChunkSize: Int = GPUModel.defaultPrefillChunkSize
     ) throws {
         try self.init(
             file: packed.file, packed: packed, config: config, context: context,
-            residency: residency, maxContext: maxContext, kernelPath: kernelPath)
+            residency: residency, maxContext: maxContext, kernelPath: kernelPath,
+            prefillPath: prefillPath, prefillChunkSize: prefillChunkSize)
     }
 
     private init(
         file: SafetensorsFile, packed: PackedCheckpoint?, config: ModelConfig,
         context: MetalContext, residency: WeightsResidency, maxContext: Int,
-        kernelPath: KernelPath
+        kernelPath: KernelPath, prefillPath: PrefillPath, prefillChunkSize: Int
     ) throws {
         guard config.usesQKNorm, !config.attentionBias else {
             throw ModelError.unsupportedFamily(
@@ -227,6 +316,32 @@ public final class GPUModel {
         self.context = context
         self.weightsFormat = packed == nil ? .bf16 : .q4g64
         self.kernelPath = kernelPath
+        self.prefillPath = prefillPath
+        self.prefillChunkSize = prefillChunkSize
+        if prefillPath == .tiled {
+            // Tiled prefill exists exactly on the packed + fused pipeline
+            // (spec D5); fail at load with a clear error, never mid-prompt.
+            guard packed != nil else {
+                throw ModelError.badInput(detail:
+                    "tiled prefill is packed-pipeline only (phase-5.md D5: "
+                    + "the bf16 backend keeps sequential prefill "
+                    + "permanently) — load a q4g64 checkpoint or use "
+                    + "prefillPath: .sequential")
+            }
+            guard kernelPath == .fused else {
+                throw ModelError.badInput(detail:
+                    "tiled prefill requires the fused kernel path "
+                    + "(phase-5.md D5: it is the packed-pipeline default "
+                    + "structure); kernelPath .naive supports sequential "
+                    + "prefill only")
+            }
+            guard prefillChunkSize >= 1, prefillChunkSize <= maxContext else {
+                throw ModelError.badInput(detail:
+                    "prefillChunkSize \(prefillChunkSize) must be in "
+                    + "1...maxContext (\(maxContext)) — scratch is sized "
+                    + "for it at load (phase-5.md D2)")
+            }
+        }
         if kernelPath == .fused {
             // Fail at load, not mid-decode: the fused kernel's per-lane
             // register budget caps headDim (the pinned model's 128 fits).
@@ -321,12 +436,18 @@ public final class GPUModel {
         fusedSDPA = kernelPath == .fused ? try FusedSDPAKernel(context: context) : nil
         foldedKernels = kernelPath == .fused ? try FoldedKernels(context: context) : nil
         argmaxKernel = try ArgmaxKernel(context: context)
+        prefillKernels = prefillPath == .tiled
+            ? try PrefillKernels(context: context) : nil
+        quantGemm = prefillPath == .tiled
+            ? try QuantGemmKernel(context: context) : nil
         decodeKernels.dispatchCounter = dispatchCounter
         attentionKernels.dispatchCounter = dispatchCounter
         quantKernels?.dispatchCounter = dispatchCounter
         fusedSDPA?.dispatchCounter = dispatchCounter
         foldedKernels?.dispatchCounter = dispatchCounter
         argmaxKernel.dispatchCounter = dispatchCounter
+        prefillKernels?.dispatchCounter = dispatchCounter
+        quantGemm?.dispatchCounter = dispatchCounter
         kvCache = try KVCache(
             device: context.device, layers: config.numHiddenLayers,
             kvHeads: kvHeads, maxContext: maxContext, headDim: headDim)
@@ -369,6 +490,31 @@ public final class GPUModel {
         }
         logitsBuf = try makeBuffer(bytes: config.vocabSize * 4)
         argmaxBuf = try makeBuffer(bytes: 4)
+
+        // P5-3 (spec D2): the whole chunk scratch, allocated here and never
+        // grown — a multi-chunk prefill reuses these exact buffers (edge
+        // test 11 pins identity).
+        if prefillPath == .tiled {
+            let c = prefillChunkSize
+            let qDim = numHeads * headDim
+            let kvDim = kvHeads * headDim
+            prefillScratch = PrefillScratch(
+                tokenIds: try makeBuffer(bytes: c * 4),
+                hiddenA: try makeBuffer(bytes: c * hidden * 2),
+                hiddenB: try makeBuffer(bytes: c * hidden * 2),
+                normBatch: try makeBuffer(bytes: c * hidden * 2),
+                qBatch: try makeBuffer(bytes: c * qDim * 2),
+                kBatch: try makeBuffer(bytes: c * kvDim * 2),
+                vBatch: try makeBuffer(bytes: c * kvDim * 2),
+                qRoped: try makeBuffer(bytes: c * qDim * 2),
+                attnBatch: try makeBuffer(bytes: c * qDim * 2),
+                gateBatch: try makeBuffer(bytes: c * intermediate * 2),
+                upBatch: try makeBuffer(bytes: c * intermediate * 2),
+                actBatch: try makeBuffer(bytes: c * intermediate * 2),
+                projBatch: try makeBuffer(bytes: c * hidden * 2))
+        } else {
+            prefillScratch = nil
+        }
 
         // The GPU RoPE kernel consumes the CPU reference's fp32 tables —
         // bit-identical angles by construction (P2-2).
@@ -873,6 +1019,237 @@ public final class GPUModel {
             scales: weights.buffer, scalesByteOffset: scales,
             biases: weights.buffer, biasesByteOffset: biases)
     }
+
+    // MARK: - P5-3 chunked batched prefill (phase-5.md D2/D4)
+
+    /// Runs the whole uncached suffix through the tiled prefill: chunks of
+    /// `prefillChunkSize` positions, ONE command buffer per chunk (dual
+    /// timing + dispatch count per chunk, hard rule 7), the last chunk
+    /// carrying the final-norm + lm_head tail — logits are computed exactly
+    /// once per prefill, at the last position (spec D2) — plus the argmax
+    /// reduction when selecting. Validation is up front (token ids, total
+    /// context capacity) so a bad prompt throws before any dispatch or
+    /// cache write, with the same error payloads the sequential path
+    /// eventually throws (edge test 10 pins identity).
+    private func runTiledPrefill(
+        ids: [Int], selectToken: Bool
+    ) throws -> (logits: [Float]?, token: Int?) {
+        let scratch = prefillScratch!  // exists iff prefillPath == .tiled
+        // P5-1 (spec D1): cleared FIRST — a call that throws anywhere
+        // (validation included) leaves nil, never a stale span. The
+        // sequential path's mid-loop throws have the same effect.
+        lastCallSpan = nil
+        let suffix = Array(ids[cachedTokens.count...])
+        for token in suffix {
+            guard token >= 0, token < config.vocabSize else {
+                throw ModelError.tokenIdOutOfRange(
+                    id: token, vocabSize: config.vocabSize)
+            }
+        }
+        guard cachedTokens.count + suffix.count <= maxContext else {
+            // The sequential loop appends until the cache fills, then
+            // throws from validateStep with position == maxContext —
+            // identical payload here, thrown before any work.
+            throw KVCacheError.contextFull(
+                position: maxContext, maxContext: maxContext)
+        }
+
+        let spanWallStart = CACurrentMediaTime()
+        var spanGPUSeconds = 0.0
+        var spanDispatches = 0
+        var logits: [Float]?
+        var token: Int?
+        var index = 0
+        while index < suffix.count {
+            let chunk = Array(
+                suffix[index..<min(index + prefillChunkSize, suffix.count)])
+            let isLast = index + chunk.count == suffix.count
+            // Host-side id upload: the previous chunk's command buffer has
+            // completed (timedDispatch is synchronous), so the buffer is
+            // idle; ids were range-validated above.
+            let idsPtr = scratch.tokenIds.contents()
+                .assumingMemoryBound(to: UInt32.self)
+            for (i, t) in chunk.enumerated() { idsPtr[i] = UInt32(t) }
+
+            dispatchCounter.reset()
+            lastStepTiming = try context.timedDispatch { encoder in
+                try encodePrefillChunk(
+                    batch: chunk.count, basePosition: cachedTokens.count,
+                    computeLogits: isLast,
+                    selectToken: isLast && selectToken, into: encoder)
+            }
+            lastStepDispatchCount = dispatchCounter.count
+            spanGPUSeconds += lastStepTiming?.gpuDuration ?? 0
+            spanDispatches += lastStepDispatchCount ?? 0
+            cachedTokens.append(contentsOf: chunk)
+            if isLast {
+                if selectToken {
+                    token = Int(argmaxBuf.contents().load(as: UInt32.self))
+                } else {
+                    logits = readLogits()
+                }
+            }
+            index += chunk.count
+        }
+        lastCallSpan = ForwardCallSpan(
+            stepCount: suffix.count,
+            wallSeconds: CACurrentMediaTime() - spanWallStart,
+            gpuSeconds: spanGPUSeconds, dispatchCount: spanDispatches)
+        return (logits, token)
+    }
+
+    /// Encodes one prefill chunk of `batch` positions into one command
+    /// buffer (spec D2): batched embedding gather → per layer [batched
+    /// input norm → q/k/v GEMMs → batched qk-norm/RoPE/append → split-K
+    /// SDPA per position (D4 option 1) → o_proj GEMM → batched residual →
+    /// batched post-norm → gate/up GEMMs → batched SwiGLU → down GEMM →
+    /// batched residual] → (last chunk only) last-row copy + final norm +
+    /// lm_head (+ argmax when selecting). The residual ping-pong
+    /// (hiddenA → hiddenB → hiddenA per layer) mirrors the per-token
+    /// pipeline row-for-row.
+    private func encodePrefillChunk(
+        batch: Int, basePosition: Int, computeLogits: Bool,
+        selectToken: Bool, into encoder: MTLComputeCommandEncoder
+    ) throws {
+        let scratch = prefillScratch!
+        let prefill = prefillKernels!
+        let hidden = config.hiddenSize
+        let headDim = config.headDim
+        let numHeads = config.numAttentionHeads
+        let kvHeads = config.numKeyValueHeads
+        let intermediate = config.intermediateSize
+        let eps = Float(config.rmsNormEps)
+        let qDim = numHeads * headDim
+        let kvDim = kvHeads * headDim
+
+        guard case .q4(let embQ, let embScales, let embBiases) = embeddingRef
+        else {
+            throw ModelError.badInput(detail:
+                "internal inconsistency: tiled prefill reached a bf16 "
+                + "embedding ref — tiled prefill is packed-only (spec D5)")
+        }
+        try prefill.encodeEmbeddingGatherBatch(
+            into: encoder, q: weights.buffer, qByteOffset: embQ,
+            scales: weights.buffer, scalesByteOffset: embScales,
+            biases: weights.buffer, biasesByteOffset: embBiases,
+            tokenIds: scratch.tokenIds, batch: batch,
+            vocabSize: config.vocabSize, hiddenSize: hidden,
+            output: scratch.hiddenA)
+
+        for (layer, refs) in layerRefs.enumerated() {
+            // Attention half: hiddenB = h + attn(norm(h)).
+            try decodeKernels.encodeRMSNorm(
+                into: encoder, input: scratch.hiddenA, weight: weights.buffer,
+                weightByteOffset: refs.inputNorm, rows: batch, dim: hidden,
+                eps: eps, output: scratch.normBatch)
+            try encodeGemm(
+                refs.qProj, into: encoder, input: scratch.normBatch,
+                batch: batch, outDim: qDim, inDim: hidden,
+                output: scratch.qBatch)
+            try encodeGemm(
+                refs.kProj, into: encoder, input: scratch.normBatch,
+                batch: batch, outDim: kvDim, inDim: hidden,
+                output: scratch.kBatch)
+            try encodeGemm(
+                refs.vProj, into: encoder, input: scratch.normBatch,
+                batch: batch, outDim: kvDim, inDim: hidden,
+                output: scratch.vBatch)
+            try prefill.encodeQKNormRoPEAppendBatch(
+                into: encoder, qIn: scratch.qBatch, kIn: scratch.kBatch,
+                vIn: scratch.vBatch,
+                qNormWeight: weights.buffer, qNormByteOffset: refs.qNorm,
+                kNormWeight: weights.buffer, kNormByteOffset: refs.kNorm,
+                cosTable: cosTable, sinTable: sinTable,
+                basePosition: basePosition, batch: batch,
+                positions: maxContext, numHeads: numHeads, eps: eps,
+                cache: kvCache, layer: layer, qOut: scratch.qRoped)
+            // Causal attention (spec D4 option 1): the chunk's K/V are all
+            // appended, and position i's SDPA reads depth 0...basePosition+i
+            // only — masking within the chunk is the depth limit itself.
+            for p in 0..<batch {
+                try fusedSDPA!.encodeSDPA(
+                    into: encoder, cache: kvCache, layer: layer,
+                    position: basePosition + p,
+                    query: scratch.qRoped, queryByteOffset: p * qDim * 2,
+                    numHeads: numHeads,
+                    output: scratch.attnBatch, outputByteOffset: p * qDim * 2)
+            }
+            try encodeGemm(
+                refs.oProj, into: encoder, input: scratch.attnBatch,
+                batch: batch, outDim: hidden, inDim: qDim,
+                output: scratch.projBatch)
+            try decodeKernels.encodeResidualAdd(
+                into: encoder, a: scratch.hiddenA, b: scratch.projBatch,
+                count: batch * hidden, output: scratch.hiddenB)
+
+            // MLP half: hiddenA = hiddenB + mlp(norm(hiddenB)).
+            try decodeKernels.encodeRMSNorm(
+                into: encoder, input: scratch.hiddenB, weight: weights.buffer,
+                weightByteOffset: refs.postAttentionNorm, rows: batch,
+                dim: hidden, eps: eps, output: scratch.normBatch)
+            try encodeGemm(
+                refs.gateProj, into: encoder, input: scratch.normBatch,
+                batch: batch, outDim: intermediate, inDim: hidden,
+                output: scratch.gateBatch)
+            try encodeGemm(
+                refs.upProj, into: encoder, input: scratch.normBatch,
+                batch: batch, outDim: intermediate, inDim: hidden,
+                output: scratch.upBatch)
+            try decodeKernels.encodeSwiGLU(
+                into: encoder, gate: scratch.gateBatch, up: scratch.upBatch,
+                count: batch * intermediate, output: scratch.actBatch)
+            try encodeGemm(
+                refs.downProj, into: encoder, input: scratch.actBatch,
+                batch: batch, outDim: hidden, inDim: intermediate,
+                output: scratch.projBatch)
+            try decodeKernels.encodeResidualAdd(
+                into: encoder, a: scratch.hiddenB, b: scratch.projBatch,
+                count: batch * hidden, output: scratch.hiddenA)
+        }
+
+        guard computeLogits else { return }
+        // Last-position-only lm_head (spec D2): the last chunk position's
+        // residual moves into the decode hidden buffer — so the Tier-E
+        // lastLayerOutput hook reads the same buffer on both prefill paths
+        // — then the per-token final-norm + lm_head tail runs unchanged.
+        try prefill.encodeCopyRow(
+            into: encoder, source: scratch.hiddenA, row: batch - 1,
+            count: hidden, output: hiddenA)
+        try decodeKernels.encodeRMSNorm(
+            into: encoder, input: hiddenA, weight: weights.buffer,
+            weightByteOffset: finalNormOffset, rows: 1, dim: hidden,
+            eps: eps, output: normed)
+        try encodeMatvec(
+            lmHeadRef, into: encoder, input: normed,
+            outDim: config.vocabSize, inDim: hidden, output: logitsBuf,
+            fp32Output: true)
+        if selectToken {
+            try argmaxKernel.encodeArgmax(
+                into: encoder, values: logitsBuf, count: config.vocabSize,
+                output: argmaxBuf)
+        }
+    }
+
+    /// One GEMM against a packed matrix ref through the P5-2 kernel.
+    /// Tiled prefill is packed-only (spec D5), so every ref is `.q4` by
+    /// construction; `.bf16` here is an internal inconsistency.
+    private func encodeGemm(
+        _ ref: MatrixRef, into encoder: MTLComputeCommandEncoder,
+        input: MTLBuffer, batch: Int, outDim: Int, inDim: Int,
+        output: MTLBuffer
+    ) throws {
+        guard case .q4(let q, let scales, let biases) = ref else {
+            throw ModelError.badInput(detail:
+                "internal inconsistency: tiled prefill reached a bf16 "
+                + "weight ref — tiled prefill is packed-only (spec D5)")
+        }
+        try quantGemm!.encodeGemm(
+            into: encoder, q: weights.buffer, qByteOffset: q,
+            scales: weights.buffer, scalesByteOffset: scales,
+            biases: weights.buffer, biasesByteOffset: biases,
+            input: input, batchM: batch, outDim: outDim, inDim: inDim,
+            output: output)
+    }
 }
 
 // MARK: - Decode-loop conformance (the shared DecodeLoop drives both backends)
@@ -891,6 +1268,12 @@ extension GPUModel: NextTokenLogitsSource {
         }
         if !(ids.count > cachedTokens.count && ids.starts(with: cachedTokens)) {
             reset()
+        }
+        // P5-3 (spec D2/D5): multi-token suffixes take the tiled chunked
+        // prefill when selected; single-token suffixes — decode steps —
+        // stay on the unchanged per-token path below.
+        if prefillPath == .tiled, ids.count - cachedTokens.count > 1 {
+            return try runTiledPrefill(ids: ids, selectToken: false).logits!
         }
         // P5-1 (spec D1): the whole call is one dual-timed span — on the
         // first call of a generation it is the prefill span. Cleared up
@@ -927,6 +1310,12 @@ extension GPUModel: NextTokenLogitsSource {
         }
         if !(ids.count > cachedTokens.count && ids.starts(with: cachedTokens)) {
             reset()
+        }
+        // P5-3 (spec D2/D5): multi-token suffixes take the tiled chunked
+        // prefill when selected; the argmax reduction rides the last
+        // chunk's command buffer, so only the chosen token id crosses back.
+        if prefillPath == .tiled, ids.count - cachedTokens.count > 1 {
+            return try runTiledPrefill(ids: ids, selectToken: true).token!
         }
         // P5-1 (spec D1): span the call — through the selecting step's
         // 4-byte argmax readback, so the span ends when the chosen token
