@@ -1866,7 +1866,8 @@ tasks:
   - id: P5-4
     rank: 20.4
     title: "Tiled prefill as packed-pipeline default + sequential toggle + Tier-M/E re-verification + free-run report + Mac 'after' rows"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-16T14:23:15Z
     depends_on: [P5-1, P5-3]
     blocks: [P5-5]
     deliverable:
