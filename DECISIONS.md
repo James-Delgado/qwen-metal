@@ -3869,3 +3869,82 @@ The D1 metric of record (pinned in the Phase 5 gates entry, veto-approved
 - Prompt feeding for the Mac row used the recorded `$(cat)` + `$'\n\n'`
   workaround (852 verified per run); CLI-1 (--prompt-file) remains the
   clean fix.
+
+## 2026-09-15 — P5-2: tiled q4g64 dequant-GEMM + M-sweep microbench landed; all gates held; M=8 device-gate risk flagged
+
+- **Kernel landed (Metal/QuantGemmKernel.swift), one API, two kernels
+  selected by batchM** (spec D3 "the task chooses by measurement"):
+  - `gemm_q4_f16` (batchM > 8 — the P5-3 prefill-chunk path): 32×32×32
+    threadgroup tiles, 4 simdgroups, `simdgroup_float8x8` accumulation
+    (the PLAN pin), dequantized W tiles staged TRANSPOSED ([k][n]) in
+    threadgroup memory per the recorded hard-rule-1 clarification —
+    nothing dequantized ever reaches DRAM. fp32 dequant values (pinned
+    Q4G64.dequant arithmetic verbatim), fp32 accumulation throughout.
+  - `gemm_q4_f16_m8` (batchM ≤ 8 — the D7 gate point): register-blocked
+    multi-matvec — one thread streams one W row (the P3-4 matvec memory
+    pattern, 35.29 GB/s measured on-device) holding 8 fp32 accumulators;
+    activations staged transposed ([k][m]) in threadgroup so the inner
+    step is two half4 reads + two float4 FMAs. Register dequant.
+- **Correctness (hard rule 3, gates entry 2026-09-14 — no new
+  constants): all held unmodified, and re-passed after EVERY
+  optimization iteration.** Edge tests 1–2: Tier K max(2⁻⁹·M, 2⁻¹¹) vs
+  BLAS.sgemm over the identical dequantized fp32 weights (hard rule 8)
+  on odd shapes, ragged M (1, 8, 9, 11, 33, 37), every distinct real
+  weight shape incl. the tied [151936, 2048] table (real artifact,
+  M=8 and ragged M=13); EXACT (bitwise fp16) one-hot probes through the
+  GEMM path for nibble order, group boundaries crossing K-tiles, and
+  the P3-1 adversarial group species; nonzero triplet offsets with NaN
+  padding; poison-guard proof that rows past M are never written; loud
+  pre-dispatch wrapper rejects. Edge test 13: FLOP/rate/fraction
+  arithmetic pinned on synthetic timings (M=8 real-dims FLOPs exactly
+  27,527,217,152 = 2·8·1,720,451,072), sweep report shape pinned.
+- **Optimization-iteration ledger (each step measured on the release
+  Mac microbench, each re-passed the 19-test GEMM suite):** tiled-only
+  first landing 11.61 GB/s eff. @ M=8 (compute-bound: 32-row tile pads
+  M=8 4×) → 8×128 simdgroup slab 12.75 → + transposed W staging (both
+  kernels) 13.83 → register-blocked m8, naive device reads 2.40 (8
+  strided x loads/weight — reverted direction) → + transposed
+  threadgroup x staging, half4/float4 24.91 → + CHUNK 1024 +
+  vectorized staging reads 26.75–27.30 (final). Two-rows-per-thread
+  variant measured WORSE (17.79; fewer threads hurt latency hiding) and
+  was reverted. Transposed staging also lifted the tiled compute
+  plateau 1.48 → ~1.55 TFLOPS.
+- **Mac PROVISIONAL sanity row (results.md Phase 5 GEMM section):**
+  M=8 median 27.30 GB/s eff. (best 27.75) / 776 GFLOPS; M=64 1476
+  GFLOPS; M=512 1541 GFLOPS (the first measured compute-denominator
+  curve; device curve lands at P5-5). Spot checks passed at every M.
+  Metric honesty: at M > 32 actual W DRAM traffic is ⌈M/32⌉× the packed
+  bytes; "effective GB/s" is the D7 normalization, meaningful as a
+  bandwidth reading only at M ≤ 8.
+- **RISK FLAGGED (surfaced, not worked around): the on-device M=8 gate
+  (≥ 30.69 GB/s, P5-5) is at risk.** Mac M=8 sits at 46% of the Mac
+  matvec aggregate (27.30 vs 58.81). If the Phase 3 Mac→device ratio
+  transferred naively (35.29/58.81 ≈ 60%), the device figure would land
+  ≈ 16 GB/s — a gate failure. The ratio may NOT transfer (the m8 path
+  is latency/structure-limited on Mac, not roofline-limited, and the
+  device roofline is 4× lower than the Mac's), but per hard rule 6 a
+  failure is a bug signal, so optimization continues BEFORE the gate
+  walk: **P5-2B seeded at rank 20.45** (between P5-4 and P5-5) for
+  further M=8 bandwidth work with named candidate levers (per-shape
+  attribution in the gemm harness, simdgroup-scoped staging without
+  threadgroup-wide barriers, load vectorization via guaranteed-aligned
+  q layouts, occupancy tuning). Gate value untouched.
+- **Memory note for P5-5:** the M=512 sweep point allocates ~0.74 GB of
+  transient output buffers (155 MB for the lm_head site alone) on top
+  of the ~0.97 GB mmap weights — within the Increased Memory Limit
+  envelope but worth knowing when sequencing device runs; buffers are
+  per-M and released between points.
+- **Harness/CLI:** Bench/QuantGemmMicrobench.swift (shared 197-site
+  roster via the new internal QuantMatvecMicrobench.resolveSites — one
+  copy, no drift; per-M Tier-K spot check withholds figures on
+  failure, P0B-4 precedent) + `microbench --kernel gemm [--m-list]`.
+  lm_head rides the GEMM sweep for byte-protocol parity with P3-6; the
+  real prefill pipeline's lm_head remains last-position-only (P5-3).
+- **Verification:** full suite minus the CPU logit gate 447 tests, 0
+  failures (4 skipped, fixture-absent species) — run AFTER the
+  refactor + harness landed; kernel-internal iterations after that run
+  re-verified via the complete 19-test GEMM suite each time (the only
+  consumers of QuantGemmKernel are the GEMM suite + microbench).
+  Suite wall time note: QuantQualityGateTests' 2 CPU tests took
+  11,627 s of the 14,316 s total in debug — pre-existing, seeded as a
+  dev-loop observation on DEV-1's theme, not touched here.

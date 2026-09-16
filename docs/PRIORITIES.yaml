@@ -1794,8 +1794,9 @@ tasks:
   - id: P5-2
     rank: 20.2
     title: "Tiled q4g64 dequant-GEMM kernel (threadgroup + simdgroup_matrix) + correctness suite + M-sweep microbench harness + Mac sanity row"
-    status: in_progress
+    status: done
     started_at: 2026-09-15T19:42:36Z
+    completed_at: 2026-09-16T00:17:02Z
     depends_on: [SPEC-P5]
     blocks: [P5-3]
     deliverable:
@@ -1811,11 +1812,26 @@ tasks:
       Microbench: M-sweep (>= {8, 64, 512}) reporting GB/s + GFLOPS;
       the M=8 fraction gate (>= 30.69 GB/s) binds ON-DEVICE at P5-5 —
       Mac row is sanity only.
+      2026-09-15 (done): landed as Metal/QuantGemmKernel.swift (two
+      kernels behind one encodeGemm API: tiled 32x32x32 threadgroup +
+      simdgroup_float8x8 for M>8 with transposed-staged W tiles;
+      register-blocked multi-matvec m8 path for M<=8, chosen by
+      measurement per D3) + Bench/QuantGemmMicrobench.swift (shared
+      197-site roster, per-M Tier-K spot check, GB/s + GFLOPS) + CLI
+      `microbench --kernel gemm [--m-list]` + 19 tests (edge tests 1-2
+      incl. EXACT one-hot adversarial probes + real-artifact shapes;
+      edge test 13 harness pins). ALL pre-committed gates held; suite
+      minus CPU logit gate 447 tests, 0 failures. Mac PROVISIONAL row:
+      M=8 27.30 GB/s eff / 776 GFLOPS (best 27.75); M=512 plateau
+      ~1.54 TFLOPS. Six measured optimization iterations recorded
+      (11.61 -> 27.30 at M=8). RISK: Mac M=8 = 46% of the Mac matvec
+      aggregate — P5-5 gate at risk if the ratio transfers; P5-2B
+      seeded at 20.45 ahead of P5-5. See DECISIONS.md 2026-09-15 P5-2.
 
   - id: P5-3
     rank: 20.3
     title: "Chunked batched prefill pipeline (batched norm/RoPE/append, causal attention per D4, last-position lm_head, preallocated scratch)"
-    status: blocked
+    status: ready
     depends_on: [P5-2]
     blocks: [P5-4]
     deliverable:
@@ -1846,6 +1862,33 @@ tasks:
       selectable (CLI flag + app toggle) for the P5-5 in-session
       before/after; bf16 backend keeps sequential permanently. Mac
       PROVISIONAL "after" rows: tiled prefill + microbench sanity.
+
+  - id: P5-2B
+    rank: 20.45
+    title: "M<=8 GEMM weight-stream optimization ahead of the P5-5 gate walk (Mac M=8 at 46% of the matvec aggregate)"
+    status: ready
+    depends_on: [P5-2]
+    blocks: []
+    deliverable:
+      file: "engine package (Metal GEMM kernel + gemm microbench)"
+      tests: "full P5-2 GEMM suite re-passes after every iteration (hard rule 3); microbench spot checks stay green; no gate touched"
+    est_complexity: medium
+    notes: |
+      Seeded 2026-09-15 by P5-2: the Mac sanity row measured the M=8 gate
+      point at 27.30 GB/s effective vs the matvec bench's 58.81 on the
+      same Mac (46%). If the Phase 3 Mac->device ratio transferred
+      naively, the on-device gate (>= 30.69 GB/s, P5-5) would fail at
+      ~16 GB/s. Six iterations already recorded in DECISIONS.md
+      2026-09-15 P5-2 (incl. two measured-worse-and-reverted). Candidate
+      levers, measure-first: per-shape attribution in the gemm harness
+      (find which of the 197 shapes drag the aggregate), simdgroup-scoped
+      staging that avoids threadgroup-wide barrier joins, guaranteed-
+      aligned vectorized q loads (uint2/uint4 need offset alignment the
+      wrapper could verify per-tensor), occupancy/launch-shape tuning.
+      Rank 20.45 slots it after P5-4 and BEFORE P5-5 so the kernel James
+      gates is the optimized one; P5-3/P5-4 need not wait on it. If the
+      device ratio turns out fine (P5-4 Mac rows or an early device
+      probe), close with a DECISIONS note instead of code.
 
   - id: P5-5
     rank: 20.5
@@ -2177,6 +2220,13 @@ tasks:
       teacher-forced band suite (250 CPU-quant fp32 re-forwards at
       -Onone). Phase 5 tasks will re-run this suite repeatedly; the
       release-mode/--filter lever is getting more valuable each phase.
+      2026-09-15 (from P5-2): same run took 14,316 s (~4h) wall —
+      QuantQualityGateTests' 2 tests alone were 11,627 s (the ppl slice
+      + the KL band, both -Onone CPU forwards). The suite nearly
+      doubled since 2026-09-14 at unchanged test content in that class;
+      likely machine-load-sensitive, but the lever is now the
+      difference between a same-session verification and an
+      overnight one.
 
   - id: DEV-2
     rank: 25.5

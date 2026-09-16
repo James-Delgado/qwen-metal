@@ -272,18 +272,13 @@ public final class QuantMatvecMicrobench {
     /// pipeline, so hazard tracking cannot serialize independent matvecs.
     private let outputBuffers: [MTLBuffer]
 
-    /// Resolves the sites (config shapes validated against the packed dims,
-    /// the GPUModel species) and allocates the scratch buffers.
-    public init(
-        packed: PackedCheckpoint, config: ModelConfig, context: MetalContext,
-        residency: WeightsResidency = .mmap
-    ) throws {
-        let kernels = try QuantKernels(context: context)
-        let weights = try GPUWeights(
-            file: packed.file, context: context, residency: residency)
-
-        // Locals only inside this helper (no `self` capture — stored
-        // properties are assigned together at the end of init).
+    /// Resolves the full pipeline-order site roster against the packed dims
+    /// and the weights buffer's offsets (the GPUModel species). Shared with
+    /// the P5-2 GEMM microbench so both sweeps grade the identical 197
+    /// matrices — one copy of the roster, no drift.
+    static func resolveSites(
+        packed: PackedCheckpoint, config: ModelConfig, weights: GPUWeights
+    ) throws -> [Site] {
         func site(
             role: String, name: String, outDim: Int, inDim: Int,
             fp32Output: Bool = false
@@ -341,6 +336,20 @@ public final class QuantMatvecMicrobench {
             name: config.tieWordEmbeddings
                 ? "model.embed_tokens.weight" : "lm_head.weight",
             outDim: config.vocabSize, inDim: hidden, fp32Output: true))
+        return resolvedSites
+    }
+
+    /// Resolves the sites (config shapes validated against the packed dims,
+    /// the GPUModel species) and allocates the scratch buffers.
+    public init(
+        packed: PackedCheckpoint, config: ModelConfig, context: MetalContext,
+        residency: WeightsResidency = .mmap
+    ) throws {
+        let kernels = try QuantKernels(context: context)
+        let weights = try GPUWeights(
+            file: packed.file, context: context, residency: residency)
+        let resolvedSites = try Self.resolveSites(
+            packed: packed, config: config, weights: weights)
 
         var inputs: [Int: MTLBuffer] = [:]
         for inDim in Set(resolvedSites.map(\.inDim)) {

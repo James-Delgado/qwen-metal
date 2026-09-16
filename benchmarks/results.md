@@ -694,6 +694,41 @@ Readings:
   dispatches/token, wall−GPU 0.287–0.325 ms (8-token tail after each
   prefill; not a decode row).
 
+## Phase 5 — tiled dequant-GEMM M-sweep microbench (D7, P5-2)
+
+Harness: per M, one command buffer running the SAME 197-matrix weight sweep
+as the P3-6 matvec bench (shared site roster) through the P5-2 GEMM kernel
+pair: `gemm_q4_f16` (threadgroup tiles + simdgroup_matrix, the PLAN-pinned
+structure — the prefill-chunk path, M > 8) and `gemm_q4_f16_m8`
+(register-blocked small-batch path, M ≤ 8 — chosen by measurement; the
+iteration ledger is in DECISIONS.md 2026-09-15 P5-2). Effective
+weight-stream rate = 967,753,728 packed bytes ÷ command-buffer GPU time
+(the D7-pinned normalization); GFLOPS = 2·M·1,720,451,072 ÷ GPU time — the
+project's first measured compute denominator (reported, never gated). A
+Tier-K spot check vs the CPU-quant oracle runs per M and withholds figures
+on failure. The pre-committed gate (M=8 effective ≥ 0.70 × 43.84 = 30.69
+GB/s, best across the D8 repeats protocol) applies to the pinned iPhone
+ONLY (P5-5, James). Reproduce with:
+`swift run -c release qwen-metal-cli microbench --model-dir models --kernel gemm`.
+
+Metric honesty note: at M > 32 the tiled kernel's M-tile rows each re-read
+the full W stripe, so actual W DRAM traffic is ⌈M/32⌉× the packed bytes —
+the "effective GB/s" figure at M ∈ {64, 512} is the pinned normalization,
+not a hardware bandwidth reading; GFLOPS is the meaningful metric there.
+At M ≤ 8 (one M-tile) effective GB/s IS the weight-stream rate.
+
+### 2026-09-15 — Mac dev-loop sanity row, M2 Pro (P5-2)
+
+mmap, 2 warmup + 10 measured per M; spot checks passed at every M (max |Δ|
+0.000851–0.000915 ≤ Tier-K 0.00737, deterministic inputs). Release build,
+Xcode 26.6 (17F113), macOS 26.5.1 (25F80).
+
+| Date | Device | M | Median eff. GB/s | Best | Min–max | Median GFLOPS | Best | Notes |
+|---|---|---|---|---|---|---|---|---|
+| 2026-09-15 | Apple M2 Pro (Mac, dev machine) | 8 | 27.30 | 27.75 | 26.38–27.75 | 776 | 789 | PROVISIONAL, dev-loop sanity only — never gated (gate is on-device, P5-5). 46% of the Mac matvec aggregate (58.81) and ~15% of the Mac triad roofline (178.19): the m8 path is latency/structure-limited, not roofline-limited, on Mac. Mac fractions do not predict device fractions (standing precedent), but the gap vs the matvec bench is flagged as a P5-5 gate risk in DECISIONS.md — follow-up P5-2B seeded ahead of P5-5. |
+| 2026-09-15 | Apple M2 Pro (Mac, dev machine) | 64 | 6.49 | 6.50 | 6.41–6.50 | 1476 | 1479 | PROVISIONAL. Effective GB/s is the pinned normalization (see note above; actual W traffic 2×). |
+| 2026-09-15 | Apple M2 Pro (Mac, dev machine) | 512 | 0.85 | 0.86 | 0.83–0.86 | 1541 | 1567 | PROVISIONAL. Compute plateau ≈ 1.5 TFLOPS fp32 — the Mac end of the measured GFLOPS curve the Phase 6 roofline consumes (device curve lands at P5-5). Actual W traffic 16×. |
+
 ## Phase 0a — energy dry-run + corrections (PROVISIONAL)
 
 ### 2026-08-22 — sustained battery-delta cycles, iPhone 15 Pro (method VALIDATED)
