@@ -2007,6 +2007,12 @@ tasks:
       sequential-vs-tiled before/after interleaved with bookends,
       M-sweep GB/s + GFLOPS report (the measured compute denominator),
       phys_footprint, thermal/variance notes. Agents prepare only.
+      2026-09-16 (harness ready): the app's microbench mode gained a
+      matvec/gemm kernel picker (gemm = the P5-2 M-sweep, default) so
+      the M=8 gate + M-sweep report can be walked on-device; app export
+      shape = CLI `microbench --kernel gemm`. Session walkthrough given
+      in-conversation (order: T0 cold, T1 bookend, S/T interleaved x3,
+      T-last x2, decode-essay x3, gemm x3, attached footprint read).
 
   - id: P5-EXEC
     rank: 21

@@ -23,6 +23,9 @@ struct BenchmarkView: View {
     @EnvironmentObject private var model: AppModel
     @State private var mode: RunMode = .burst
     @State private var burstPrompt: BundledPrompt = .decodeEssay
+    /// P5-5 session default: the GEMM M-sweep (the Phase 5 gate); matvec
+    /// stays selectable for the Phase 3 protocol.
+    @State private var microbenchKernel: AppModel.MicrobenchKernel = .gemm
     @State private var batteryNote = ""
     @State private var coldWarmNote = ""
 
@@ -117,11 +120,29 @@ struct BenchmarkView: View {
                             + "(prompt role separation)")
                             .font(.caption)
                     case .microbench:
-                        Text("D7 dequant-matvec sweep (197 packed matvecs, "
-                            + "weights-only; q4g64 artifact required). Gate "
-                            + "30.7 GB/s = best of ≥3 same-session runs, "
-                            + "detached (D8).")
-                            .font(.caption)
+                        Picker("Kernel", selection: $microbenchKernel) {
+                            ForEach(AppModel.MicrobenchKernel.allCases) {
+                                Text($0.rawValue).tag($0)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(model.isRunning)
+                        switch microbenchKernel {
+                        case .matvec:
+                            Text("P3-6 D7 dequant-matvec sweep (197 packed "
+                                + "matvecs, weights-only; q4g64 artifact "
+                                + "required). Gate 30.7 GB/s = best of ≥3 "
+                                + "same-session runs, detached (D8).")
+                                .font(.caption)
+                        case .gemm:
+                            Text("P5-2 D7 tiled dequant-GEMM M-sweep (M = 8, "
+                                + "64, 512 over the same 197 matrices; "
+                                + "weights-only). Gate: M=8 effective ≥ 30.69 "
+                                + "GB/s = best of ≥3 same-session runs, "
+                                + "detached (D8); GB/s + GFLOPS at every M "
+                                + "are reported, never gated.")
+                                .font(.caption)
+                        }
                     case .attribution:
                         Text("P4 D1 per-kernel-class GPU attribution "
                             + "(DIAGNOSTIC — never a benchmark row). "
@@ -145,6 +166,7 @@ struct BenchmarkView: View {
                     HStack {
                         Button("Run") {
                             let prompt = burstPrompt
+                            let kernel = microbenchKernel
                             let battery = batteryNote
                             let coldWarm = coldWarmNote
                             let mode = mode
@@ -161,6 +183,7 @@ struct BenchmarkView: View {
                                         coldWarmNote: coldWarm)
                                 case .microbench:
                                     await model.runMicrobench(
+                                        kernel: kernel,
                                         batteryNote: battery,
                                         coldWarmNote: coldWarm)
                                 case .attribution:

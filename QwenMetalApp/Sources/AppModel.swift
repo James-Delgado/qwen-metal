@@ -307,12 +307,29 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// P3-6 (spec D7): the standalone dequant-matvec microbench. Weights-only
-    /// by construction — it loads the packed artifact directly (no GPUModel,
-    /// no KV cache) and honors the residency toggle. The 30.7 GB/s gate is
-    /// evaluated by James over the D8 repeats protocol (≥3 same-session runs
-    /// of this button, detached); the app just reports each run's numbers.
-    func runMicrobench(batteryNote: String, coldWarmNote: String) async {
+    /// Which standalone weight-sweep microbench the Benchmark screen runs:
+    /// the P3-6 dequant-matvec bench (Phase 3 D7 gate) or the P5-2 tiled
+    /// dequant-GEMM M-sweep (Phase 5 D7: M=8 fraction gate + the GB/s and
+    /// GFLOPS curve at M ∈ {8, 64, 512}, reported). Both are weights-only
+    /// and share the 197-matrix site roster; the export shapes are the
+    /// CLI's (`microbench --kernel matvec|gemm`).
+    enum MicrobenchKernel: String, CaseIterable, Identifiable {
+        case matvec
+        case gemm
+        var id: String { rawValue }
+    }
+
+    /// P3-6 (spec D7) / P5-2 (phase-5.md D7): the standalone dequant
+    /// microbenches. Weights-only by construction — they load the packed
+    /// artifact directly (no GPUModel, no KV cache) and honor the residency
+    /// toggle. The gates (matvec 30.7 GB/s; GEMM M=8 ≥ 30.69 GB/s) are
+    /// evaluated by James over the D8 repeats protocol (≥3 same-session
+    /// runs of this button, detached, best-of); the app just reports each
+    /// run's numbers. GEMM runs the engine's default M list and iteration
+    /// counts (the P5-2 protocol shape, identical to the CLI default).
+    func runMicrobench(
+        kernel: MicrobenchKernel, batteryNote: String, coldWarmNote: String
+    ) async {
         guard !isRunning, !isLoading else { return }
         isRunning = true
         errorMessage = nil
@@ -320,8 +337,12 @@ final class AppModel: ObservableObject {
         defer { isRunning = false }
         do {
             let residency = self.residency
-            statusLine = "microbench (197 packed matvecs, residency "
-                + "\(residency.rawValue))…"
+            statusLine = kernel == .matvec
+                ? "microbench (197 packed matvecs, residency "
+                    + "\(residency.rawValue))…"
+                : "microbench (tiled GEMM M-sweep "
+                    + "\(QuantGemmMicrobench.defaultMValues), residency "
+                    + "\(residency.rawValue))…"
             let report: String =
                 try await Task.detached(priority: .userInitiated) {
                     let directory = try Self.locateModelDirectory()
@@ -329,17 +350,38 @@ final class AppModel: ObservableObject {
                         path: directory.configURL.path)
                     let packed = try PackedCheckpoint(
                         path: directory.requirePackedCheckpoint().path)
-                    let bench = try QuantMatvecMicrobench(
-                        packed: packed, config: config,
-                        context: try MetalContext(), residency: residency)
-                    let result = try bench.run()
-                    return result.exportText(
-                        dateStamp: Self.dateStamp(),
-                        deviceLabel: Self.deviceModelIdentifier(),
-                        osVersion: "iOS \(Self.osVersionString())",
-                        batteryHealthNote: batteryNote,
-                        coldOrWarmNote: coldWarmNote,
-                        residency: residency)
+                    let context = try MetalContext()
+                    switch kernel {
+                    case .matvec:
+                        let bench = try QuantMatvecMicrobench(
+                            packed: packed, config: config,
+                            context: context, residency: residency)
+                        let result = try bench.run()
+                        return result.exportText(
+                            dateStamp: Self.dateStamp(),
+                            deviceLabel: Self.deviceModelIdentifier(),
+                            osVersion: "iOS \(Self.osVersionString())",
+                            batteryHealthNote: batteryNote,
+                            coldOrWarmNote: coldWarmNote,
+                            residency: residency)
+                    case .gemm:
+                        let bench = try QuantGemmMicrobench(
+                            packed: packed, config: config,
+                            context: context, residency: residency)
+                        let result = try bench.run(
+                            mValues: QuantGemmMicrobench.defaultMValues,
+                            warmupIterations:
+                                QuantGemmMicrobench.defaultWarmupIterations,
+                            measuredIterations:
+                                QuantGemmMicrobench.defaultMeasuredIterations)
+                        return result.exportText(
+                            dateStamp: Self.dateStamp(),
+                            deviceLabel: Self.deviceModelIdentifier(),
+                            osVersion: "iOS \(Self.osVersionString())",
+                            batteryHealthNote: batteryNote,
+                            coldOrWarmNote: coldWarmNote,
+                            residency: residency)
+                    }
                 }.value
             lastReport = report
             statusLine = "microbench complete"

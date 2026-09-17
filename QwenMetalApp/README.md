@@ -52,6 +52,11 @@ QwenMetalApp.entitlements   Increased Memory Limit (Phase 2 needs ~4.0 GB)
   - Kernels toggle naive / fused (q4g64 only; P4-4, phase-4.md D4) — fused is
     the default; naive exists for the P4-5 interleaved before/after row.
     Same reload-on-switch contract; every row export records the path.
+  - *microbench*: kernel picker matvec (P3-6, the Phase 3 D7 sweep) /
+    gemm (P5-2, the Phase 5 D7 tiled dequant-GEMM M-sweep at M = 8, 64,
+    512 — default for the P5-5 session; the M=8 gate is best-of ≥3 runs,
+    the curve is reported). Same export shape as the CLI
+    `microbench --kernel matvec|gemm`.
   - Prefill toggle sequential / tiled (q4g64 + fused only; P5-4, phase-5.md
     D5) — tiled (chunked batched prefill, C=512) is the default; sequential
     exists for the P5-5 interleaved sequential-vs-tiled before/after row

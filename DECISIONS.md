@@ -4175,3 +4175,17 @@ value used verbatim.
   blocked → ready; DI-1 seeded (rank 20.47); PF-1 annotated with the Mac
   compute-share observation. P5-EXEC stays blocked on P5-5. The
   post-P5-5 toggle-removal decision is already tracked (rank 30.1).
+
+## 2026-09-16 — P5-5 harness gap closed: app microbench gains the GEMM M-sweep (no new conventions)
+
+Preparing James's P5-5 session surfaced that the app's microbench mode
+still ran only the P3-6 matvec sweep — the P5-2 GEMM M-sweep (the M=8
+fraction gate + the reported GB/s/GFLOPS curve) existed in the engine and
+CLI only, so the Phase 5 microbench gate could not be walked on-device.
+Wired a matvec/gemm kernel picker into the Benchmark screen's microbench
+mode (gemm default, engine default M list {8, 64, 512} and 2 + 10
+iterations — the P5-2 protocol shape); the export is the same
+`QuantGemmMicrobenchResult.exportText` the CLI prints, so device rows
+and Mac rows share one vocabulary. No engine change, no gate touched,
+no new pins. App release build (generic iOS, unsigned): BUILD SUCCEEDED.
+Recorded on P5-5's backlog notes with the session order handed to James.
