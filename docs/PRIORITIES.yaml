@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-09-16
+last_updated: 2026-09-18
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -1988,7 +1988,8 @@ tasks:
   - id: P5-2B
     rank: 20.45
     title: "M<=8 GEMM weight-stream optimization ahead of the P5-5 gate walk (Mac M=8 at 46% of the matvec aggregate)"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-18 16:24:57+00:00
     depends_on: [P5-2]
     blocks: [P5-5B]
     deliverable:
