@@ -295,6 +295,96 @@ final class QuantGemmMicrobenchTests: XCTestCase {
 
     // MARK: - Validation edges
 
+    // MARK: - P5-2B per-role attribution (diagnostic companion to the sweep)
+
+    /// Every roster role timed alone: roster order pinned, role byte sums
+    /// equal the sweep's aggregate bytes exactly, dispatch counts are the
+    /// measured per-role site counts, FLOPs are 2·M·N·K·count, timings are
+    /// sane (GPU > 0, wall ≥ GPU, warmup discarded), and the export carries
+    /// every role line + the implied-aggregate cross-check.
+    func testRoleAttributionAccountingAndReportShape() throws {
+        let bench = try makeTinyMicrobench()
+        let config = try tinyConfig()
+        let attribution = try bench.runRoleAttribution(
+            m: 8, warmupIterations: 1, measuredIterations: 3)
+
+        let specs = QuantMatvecMicrobench.siteSpecs(config: config)
+        XCTAssertEqual(attribution.m, 8)
+        XCTAssertEqual(attribution.roles.map(\.role), specs.map(\.role))
+        XCTAssertEqual(
+            attribution.totalPackedBytes,
+            QuantMatvecMicrobench.totalPackedBytes(config: config))
+        XCTAssertEqual(
+            attribution.roles.reduce(0) { $0 + $1.packedBytes },
+            attribution.totalPackedBytes)
+        for (role, spec) in zip(attribution.roles, specs) {
+            XCTAssertEqual(role.outDim, spec.outDim)
+            XCTAssertEqual(role.inDim, spec.inDim)
+            XCTAssertEqual(role.siteCount, spec.count)
+            XCTAssertEqual(role.dispatchesPerIteration, spec.count, role.role)
+            XCTAssertEqual(
+                role.packedBytes,
+                QuantMatvecMicrobench.packedBytes(
+                    outDim: spec.outDim, inDim: spec.inDim) * spec.count)
+            XCTAssertEqual(
+                role.flops,
+                2.0 * 8 * Double(spec.outDim * spec.inDim * spec.count))
+            XCTAssertEqual(role.measuredTimings.count, 3, role.role)
+            for timing in role.measuredTimings {
+                XCTAssertGreaterThan(timing.gpuDuration, 0)
+                XCTAssertGreaterThanOrEqual(
+                    timing.wallDuration, timing.gpuDuration)
+            }
+            XCTAssertGreaterThan(role.medianGBps, 0)
+            XCTAssertEqual(role.effectiveGBps.count, 3)
+        }
+        XCTAssertEqual(
+            attribution.impliedAggregateGpuSeconds,
+            attribution.roles.reduce(0) { $0 + $1.medianGpuSeconds },
+            accuracy: 1e-12)
+        XCTAssertEqual(
+            attribution.impliedAggregateGBps,
+            Double(attribution.totalPackedBytes)
+                / attribution.impliedAggregateGpuSeconds / 1e9,
+            accuracy: 1e-9)
+
+        let text = attribution.exportText()
+        XCTAssertTrue(text.contains("per-role attribution @ M = 8"))
+        for spec in specs {
+            XCTAssertTrue(text.contains(spec.role), "export lacks \(spec.role)")
+        }
+        XCTAssertTrue(text.contains("implied aggregate"))
+        XCTAssertTrue(text.contains("DIAGNOSTIC"))
+    }
+
+    /// Byte shares are computed from the pinned accounting — on the tiny
+    /// roster gate/up carry 128·64·layers each of the 38,912·layers... the
+    /// role shares must sum to 100% and reproduce the spec arithmetic.
+    func testRoleAttributionByteSharesSumToOne() throws {
+        let bench = try makeTinyMicrobench()
+        let attribution = try bench.runRoleAttribution(
+            m: 3, warmupIterations: 0, measuredIterations: 1)
+        let shares = attribution.roles.map {
+            Double($0.packedBytes) / Double(attribution.totalPackedBytes)
+        }
+        XCTAssertEqual(shares.reduce(0, +), 1.0, accuracy: 1e-12)
+        // gate_proj and up_proj are the same shape ⇒ identical shares.
+        let byRole = Dictionary(
+            uniqueKeysWithValues: zip(attribution.roles.map(\.role), shares))
+        XCTAssertEqual(byRole["gate_proj"], byRole["up_proj"])
+        XCTAssertEqual(byRole["k_proj"], byRole["v_proj"])
+    }
+
+    func testRoleAttributionRejectsBadArguments() throws {
+        let bench = try makeTinyMicrobench()
+        XCTAssertThrowsError(try bench.runRoleAttribution(
+            m: 0, warmupIterations: 1, measuredIterations: 1))
+        XCTAssertThrowsError(try bench.runRoleAttribution(
+            m: 8, warmupIterations: 1, measuredIterations: 0))
+        XCTAssertThrowsError(try bench.runRoleAttribution(
+            m: 8, warmupIterations: -1, measuredIterations: 1))
+    }
+
     func testInvalidIterationsAndMValuesThrow() throws {
         let bench = try makeTinyMicrobench()
         XCTAssertThrowsError(

@@ -10,13 +10,17 @@ import QwenMetalEngine
 
 private let microbenchUsage = """
 usage: qwen-metal-cli microbench --model-dir <dir> [--kernel matvec|gemm] \
-[--m-list 8,64,512] [--residency mmap|wired] [--warmup N] [--iterations N]
+[--m-list 8,64,512] [--per-role yes|no] [--residency mmap|wired] [--warmup N] \
+[--iterations N]
   --model-dir   directory with the *-q4g64.safetensors packed artifact and
                 config.json (the generate-command layout)
   --kernel      matvec (default, the P3-6 bench) or gemm (the P5-2 tiled
                 dequant-GEMM M-sweep)
   --m-list      gemm only: comma-separated batch sizes (default \
 \(QuantGemmMicrobench.defaultMValues.map(String.init).joined(separator: ",")))
+  --per-role    gemm only: after the sweep, time every roster role ALONE at
+                each M (P5-2B per-shape attribution; DIAGNOSTIC — the gate
+                reads the aggregate only). Default no.
   --residency   mmap (default) or wired (heap copy)
   --warmup      warmup iterations, discarded (default \(QuantMatvecMicrobench.defaultWarmupIterations))
   --iterations  measured iterations (default \(QuantMatvecMicrobench.defaultMeasuredIterations))
@@ -42,6 +46,7 @@ func runMicrobenchCommand(_ arguments: [String]) -> Int32 {
     var kernel = MicrobenchKernel.matvec
     var mValues = QuantGemmMicrobench.defaultMValues
     var mListGiven = false
+    var perRole = false
     var residency = WeightsResidency.mmap
     var warmup = QuantMatvecMicrobench.defaultWarmupIterations
     var iterations = QuantMatvecMicrobench.defaultMeasuredIterations
@@ -70,6 +75,13 @@ func runMicrobenchCommand(_ arguments: [String]) -> Int32 {
             }
             mValues = parts.compactMap { $0 }
             mListGiven = true
+        case "--per-role":
+            switch value {
+            case "yes": perRole = true
+            case "no": perRole = false
+            default:
+                return usageError("--per-role must be 'yes' or 'no', got '\(value)'")
+            }
         case "--residency":
             switch value {
             case "mmap": residency = .mmap
@@ -95,6 +107,9 @@ func runMicrobenchCommand(_ arguments: [String]) -> Int32 {
     guard let modelDir else { return usageError("--model-dir is required") }
     if mListGiven && kernel != .gemm {
         return usageError("--m-list applies only with --kernel gemm")
+    }
+    if perRole && kernel != .gemm {
+        return usageError("--per-role applies only with --kernel gemm")
     }
 
     do {
@@ -138,6 +153,15 @@ func runMicrobenchCommand(_ arguments: [String]) -> Int32 {
                 deviceLabel: context.device.name,
                 osVersion: os,
                 residency: residency))
+            if perRole {
+                for m in mValues {
+                    printStderr("attributing roles @ M = \(m)…")
+                    let attribution = try bench.runRoleAttribution(
+                        m: m, warmupIterations: warmup,
+                        measuredIterations: iterations)
+                    print(attribution.exportText())
+                }
+            }
         }
         return 0
     } catch {

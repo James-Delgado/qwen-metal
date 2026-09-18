@@ -106,6 +106,82 @@ public struct QuantGemmMicrobenchResult: Sendable {
     }
 }
 
+/// P5-2B: one role's slice of the GEMM sweep (all `siteCount` matrices of
+/// that role — e.g. the 28 k_proj triplets — dispatched alone in one command
+/// buffer at batch M), so the aggregate can be attributed to the shapes
+/// that drag it. DIAGNOSTIC: the D7 gate reads the 197-site aggregate,
+/// never a per-role figure.
+public struct QuantGemmRoleAttribution: Sendable {
+    public let role: String
+    public let outDim: Int
+    public let inDim: Int
+    public let siteCount: Int
+    /// Packed bytes the role's `siteCount` dispatches read per iteration.
+    public let packedBytes: Int
+    /// 2·M·outDim·inDim·siteCount.
+    public let flops: Double
+    /// Measured at the dispatch call sites (== siteCount when wired right).
+    public let dispatchesPerIteration: Int
+    public let measuredTimings: [DispatchTiming]
+
+    public var effectiveGBps: [Double] {
+        measuredTimings.map { Double(packedBytes) / $0.gpuDuration / 1e9 }
+    }
+    public var measuredGFlops: [Double] {
+        measuredTimings.map { flops / $0.gpuDuration / 1e9 }
+    }
+    public var medianGBps: Double { BenchMath.median(effectiveGBps) }
+    public var bestGBps: Double { effectiveGBps.max() ?? .nan }
+    public var medianGFlops: Double { BenchMath.median(measuredGFlops) }
+    public var medianGpuSeconds: Double {
+        BenchMath.median(measuredTimings.map(\.gpuDuration))
+    }
+}
+
+/// The per-role attribution of one M-point: every role of the shared roster
+/// timed alone, in roster order.
+public struct QuantGemmRoleAttributionResult: Sendable {
+    public let m: Int
+    /// The sweep aggregate's byte total (Σ role packedBytes — pinned equal).
+    public let totalPackedBytes: Int
+    public let roles: [QuantGemmRoleAttribution]
+
+    /// Σ over roles of the median per-role GPU time: the aggregate the
+    /// per-role medians imply (differs from the one-buffer sweep by the
+    /// per-buffer gaps + run-to-run variance — a sanity cross-check, not a
+    /// figure of record).
+    public var impliedAggregateGpuSeconds: Double {
+        roles.reduce(0) { $0 + $1.medianGpuSeconds }
+    }
+    public var impliedAggregateGBps: Double {
+        Double(totalPackedBytes) / impliedAggregateGpuSeconds / 1e9
+    }
+
+    public func exportText() -> String {
+        var lines: [String] = []
+        lines.append(String(
+            format: "per-role attribution @ M = %d (DIAGNOSTIC — each role "
+                + "alone in its own command buffer; the gate reads the "
+                + "197-site aggregate only):", m))
+        lines.append(
+            "  role        shape [out, in]  x n   bytes%   median GB/s  "
+                + "(best)   median GFLOPS   median ms   dispatches")
+        for role in roles {
+            lines.append(String(
+                format: "  %-10@  [%6d, %5d] x %2d  %5.1f%%   %7.2f  (%7.2f)   %9.2f   %8.3f   %d",
+                role.role, role.outDim, role.inDim, role.siteCount,
+                100.0 * Double(role.packedBytes) / Double(totalPackedBytes),
+                role.medianGBps, role.bestGBps, role.medianGFlops,
+                role.medianGpuSeconds * 1000, role.dispatchesPerIteration))
+        }
+        lines.append(String(
+            format: "  Σ role median GPU %.3f ms ⇒ implied aggregate %.2f GB/s "
+                + "(cross-check vs the one-buffer sweep above)",
+            impliedAggregateGpuSeconds * 1000, impliedAggregateGBps))
+        return lines.joined(separator: "\n")
+    }
+}
+
 /// P5-2 (docs/phases/phase-5.md D7): the tiled dequant-GEMM M-sweep
 /// microbench — the phase's kernel-quality judgment plus the project's
 /// first measured compute-throughput denominator. Per M-point, one command
@@ -197,12 +273,19 @@ public final class QuantGemmMicrobench {
 
     // MARK: - Internals
 
-    private func runPoint(
-        m: Int, warmupIterations: Int, measuredIterations: Int
-    ) throws -> QuantGemmSweepPoint {
-        // One input buffer per distinct inDim (read-only — no hazards);
-        // deterministic fp16-exact values, a pure function of the flat
-        // index so the CPU oracle recomputes them without a copy.
+    /// Per-point scratch: one input buffer per distinct inDim (read-only —
+    /// no hazards; deterministic fp16-exact values, a pure function of the
+    /// flat index so the CPU oracle recomputes them without a copy) and one
+    /// output buffer per site (distinct destinations, like the real
+    /// pipeline, so hazard tracking cannot serialize independent GEMMs).
+    private struct Scratch {
+        let inputs: [Int: MTLBuffer]
+        let outputs: [MTLBuffer]
+    }
+
+    private func makeScratch(
+        m: Int, sites: [QuantMatvecMicrobench.Site]
+    ) throws -> Scratch {
         var inputs: [Int: MTLBuffer] = [:]
         for inDim in Set(sites.map(\.inDim)) {
             let count = m * inDim
@@ -217,8 +300,6 @@ public final class QuantGemmMicrobench {
             }
             inputs[inDim] = buffer
         }
-        // One output buffer per site: distinct destinations, like the real
-        // pipeline, so hazard tracking cannot serialize independent GEMMs.
         let outputs = try sites.map { site -> MTLBuffer in
             let length = m * site.outDim * 2
             guard let buffer = context.device.makeBuffer(
@@ -227,24 +308,99 @@ public final class QuantGemmMicrobench {
             }
             return buffer
         }
+        return Scratch(inputs: inputs, outputs: outputs)
+    }
 
+    private func encode(
+        _ site: QuantMatvecMicrobench.Site, m: Int, scratch: Scratch,
+        output: MTLBuffer, into encoder: MTLComputeCommandEncoder
+    ) throws {
+        guard let input = scratch.inputs[site.inDim] else {
+            // Structurally impossible: inputs were built from the sites.
+            throw QuantKernelError.bufferTooSmall(
+                buffer: "input(\(site.inDim))",
+                requiredBytes: m * site.inDim * 2, actualBytes: 0)
+        }
+        try kernel.encodeGemm(
+            into: encoder,
+            q: weights.buffer, qByteOffset: site.qByteOffset,
+            scales: weights.buffer, scalesByteOffset: site.scalesByteOffset,
+            biases: weights.buffer, biasesByteOffset: site.biasesByteOffset,
+            input: input, batchM: m,
+            outDim: site.outDim, inDim: site.inDim, output: output)
+    }
+
+    /// P5-2B: the per-role attribution of one M-point — every role of the
+    /// roster dispatched ALONE (its `count` sites in one command buffer),
+    /// `warmupIterations + measuredIterations` passes each, roster order.
+    /// Diagnostic companion to `run`: same kernel, same sites, same byte
+    /// accounting (Σ role bytes == the sweep's totalPackedBytes), so a
+    /// role's GB/s says how that shape streams when nothing else is in
+    /// flight. Scratch is per-role and released between roles.
+    public func runRoleAttribution(
+        m: Int,
+        warmupIterations: Int = QuantGemmMicrobench.defaultWarmupIterations,
+        measuredIterations: Int = QuantGemmMicrobench.defaultMeasuredIterations
+    ) throws -> QuantGemmRoleAttributionResult {
+        guard warmupIterations >= 0, measuredIterations >= 1 else {
+            throw KernelInputError.invalidIterations(
+                warmup: warmupIterations, measured: measuredIterations)
+        }
+        guard m >= 1 else {
+            throw QuantKernelError.nonPositiveDimension(name: "m", value: m)
+        }
+        var roles: [QuantGemmRoleAttribution] = []
+        for spec in QuantMatvecMicrobench.siteSpecs(config: config) {
+            let roleSites = sites.filter { $0.role == spec.role }
+            try autoreleasepool {
+                let scratch = try makeScratch(m: m, sites: roleSites)
+                var measured: [DispatchTiming] = []
+                var dispatches = 0
+                for iteration in 0..<(warmupIterations + measuredIterations) {
+                    counter.reset()
+                    let timing = try context.timedDispatch { encoder in
+                        for (index, site) in roleSites.enumerated() {
+                            try encode(
+                                site, m: m, scratch: scratch,
+                                output: scratch.outputs[index], into: encoder)
+                        }
+                    }
+                    dispatches = counter.count
+                    if iteration >= warmupIterations { measured.append(timing) }
+                }
+                roles.append(QuantGemmRoleAttribution(
+                    role: spec.role, outDim: spec.outDim, inDim: spec.inDim,
+                    siteCount: roleSites.count,
+                    packedBytes: roleSites.reduce(0) {
+                        $0 + QuantMatvecMicrobench.packedBytes(
+                            outDim: $1.outDim, inDim: $1.inDim)
+                    },
+                    flops: 2.0 * Double(m) * Double(spec.outDim)
+                        * Double(spec.inDim) * Double(roleSites.count),
+                    dispatchesPerIteration: dispatches,
+                    measuredTimings: measured))
+            }
+        }
+        return QuantGemmRoleAttributionResult(
+            m: m,
+            totalPackedBytes: sites.reduce(0) {
+                $0 + QuantMatvecMicrobench.packedBytes(
+                    outDim: $1.outDim, inDim: $1.inDim)
+            },
+            roles: roles)
+    }
+
+    private func runPoint(
+        m: Int, warmupIterations: Int, measuredIterations: Int
+    ) throws -> QuantGemmSweepPoint {
+        let scratch = try makeScratch(m: m, sites: sites)
+        let outputs = scratch.outputs
         func encode(
             _ site: QuantMatvecMicrobench.Site, output: MTLBuffer,
             into encoder: MTLComputeCommandEncoder
         ) throws {
-            guard let input = inputs[site.inDim] else {
-                // Structurally impossible: inputs were built from the sites.
-                throw QuantKernelError.bufferTooSmall(
-                    buffer: "input(\(site.inDim))",
-                    requiredBytes: m * site.inDim * 2, actualBytes: 0)
-            }
-            try kernel.encodeGemm(
-                into: encoder,
-                q: weights.buffer, qByteOffset: site.qByteOffset,
-                scales: weights.buffer, scalesByteOffset: site.scalesByteOffset,
-                biases: weights.buffer, biasesByteOffset: site.biasesByteOffset,
-                input: input, batchM: m,
-                outDim: site.outDim, inDim: site.inDim, output: output)
+            try self.encode(
+                site, m: m, scratch: scratch, output: output, into: encoder)
         }
 
         // Spot check (site 0) BEFORE any timing this point reports.

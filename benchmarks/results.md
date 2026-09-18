@@ -762,8 +762,10 @@ Harness: per M, one command buffer running the SAME 197-matrix weight sweep
 as the P3-6 matvec bench (shared site roster) through the P5-2 GEMM kernel
 pair: `gemm_q4_f16` (threadgroup tiles + simdgroup_matrix, the PLAN-pinned
 structure — the prefill-chunk path, M > 8) and `gemm_q4_f16_m8`
-(register-blocked small-batch path, M ≤ 8 — chosen by measurement; the
-iteration ledger is in DECISIONS.md 2026-09-15 P5-2). Effective
+(small-batch path, M ≤ 8 — chosen by measurement; the P5-2 register-blocked
+thread-per-row form's iteration ledger is in DECISIONS.md 2026-09-15 P5-2;
+REDESIGNED at P5-2B as a lane-split multi-matvec, ledger in DECISIONS.md
+2026-09-18 P5-2B, rows in the iterate-round section below). Effective
 weight-stream rate = 967,753,728 packed bytes ÷ command-buffer GPU time
 (the D7-pinned normalization); GFLOPS = 2·M·1,720,451,072 ÷ GPU time — the
 project's first measured compute denominator (reported, never gated). A
@@ -880,6 +882,59 @@ same-session cross-check ratio vs sequential (52.70 at P5-4) ≈ 7.2×.
 Decode tail unchanged (median GPU 21.84–21.91 ms @ 200; the decode path
 is untouched — the batched SDPA and cooperative norm exist on the prefill
 path only). The DI-1 label now reads "UNSTABLE 200–397".
+
+### 2026-09-18 — Mac GEMM M-sweep after the P5-2B m8 redesign + per-role attribution, M2 Pro
+
+The M≤8 kernel (`gemm_q4_f16_m8`) is redesigned (DECISIONS.md 2026-09-18
+P5-2B: K split across 8-lane row-groups, 2 rows per lane, 256-thread
+threadgroups, fp32 activation chunk staged once per threadgroup — reached
+by a measured grid over the geometry). The tiled M>8 kernel is
+byte-identical to P5-2 (its M=64/512 points re-pin that). Same command,
+protocol, and site roster as the 2026-09-15/16 rows; the per-role table
+is the new `--per-role yes` diagnostic (each role alone in its own command
+buffer; the D7 gate reads the 197-site aggregate only). mmap, 2 warmup +
+10 measured per M; spot checks passed at every M (max |Δ| 0.000851 (M=8) /
+0.000915 (M=64, 512) ≤ Tier-K 0.00737). Release build, Xcode 26.6
+(17F113), macOS 26.5.1 (25F80). Same-day BEFORE row on the unchanged P5-2
+kernel, same machine, same command: M=8 median **27.69** GB/s (best 27.77,
+26.38–27.77, n=10; a second run 27.70 / best 27.93).
+
+| Date | Device | M | Median eff. GB/s | Best | Min–max | Median GFLOPS | Best | Notes |
+|---|---|---|---|---|---|---|---|---|
+| 2026-09-18 | Apple M2 Pro (Mac, dev machine) | 8 | **42.94** | 43.43 | 42.86–43.43 | 1221.54 | 1235.29 | PROVISIONAL, dev-loop sanity only — never gated (gate is on-device, P5-5B). ×1.55 vs the same-day P5-2 "before" (27.69); 73% of the Mac matvec aggregate (58.81; was 46%). Mac fractions do not predict device fractions (standing precedent) — the device gate (≥ 30.69) is walked at P5-5B. |
+| 2026-09-18 | Apple M2 Pro (Mac, dev machine) | 64 | 6.48 | 6.50 | 6.48–6.50 | 1475.38 | 1478.31 | PROVISIONAL. Tiled kernel unchanged — matches 2026-09-16 (6.49 / 1476). Effective GB/s is the pinned normalization (W traffic 2×). |
+| 2026-09-18 | Apple M2 Pro (Mac, dev machine) | 512 | 0.86 | 0.86 | 0.86–0.86 | 1568.17 | 1569.65 | PROVISIONAL. Tiled kernel unchanged — plateau 1.57 TFLOPS as on 2026-09-16. W traffic 16×. |
+
+**Per-role attribution @ M=8 (DIAGNOSTIC, same run; each role's 28 (or 1)
+matrices alone in one command buffer, 2 warmup + 10 measured; Σ role
+median GPU = 22.47 ms ⇒ implied aggregate 43.06 GB/s vs the one-buffer
+sweep's 42.94 — the cross-check holds).** BEFORE = the same table on the
+unchanged P5-2 kernel this morning (Σ 34.67 ms ⇒ 27.92 implied vs 27.70
+measured).
+
+| Role | Shape [out, in] × n | Bytes | BEFORE median GB/s (P5-2 kernel) | AFTER median GB/s | AFTER best | AFTER median GFLOPS |
+|---|---|---|---|---|---|---|
+| q_proj | [2048, 2048] × 28 | 6.8% | 21.24 | 42.49 | 43.18 | 1208.5 |
+| k_proj | [1024, 2048] × 28 | 3.4% | 10.99 | 28.01 | 29.43 | 796.7 |
+| v_proj | [1024, 2048] × 28 | 3.4% | 10.92 | 27.94 | 28.86 | 794.7 |
+| o_proj | [2048, 2048] × 28 | 6.8% | 21.59 | 41.48 | 42.47 | 1179.8 |
+| gate_proj | [6144, 2048] × 28 | 20.5% | 42.58 | 44.86 | 45.20 | 1276.0 |
+| up_proj | [6144, 2048] × 28 | 20.5% | 42.38 | 44.69 | 44.96 | 1271.3 |
+| down_proj | [2048, 6144] × 28 | 20.5% | 20.60 | 44.88 | 45.51 | 1276.7 |
+| lm_head | [151936, 2048] × 1 | 18.1% | 49.78 | 47.34 | 47.45 | 1346.7 |
+
+Reading: the P5-2 kernel's per-role rate tracked its threadgroup count
+(8 threadgroups for k/v_proj → 11 GB/s; 16 for q/o/down → 21; 48 for
+gate/up → 42; 1187 for lm_head → 50) — parallelism starvation on the
+1024/2048-row shapes, which carry ~45% of the bytes. The redesign puts
+4 lanes on every row (2× the threadgroups at 256 threads each — 4× the
+threads in flight on those shapes) and lifts them 2–2.2×; the
+already-saturated shapes are flat (gate/up +5%, lm_head −5%). The
+remaining k/v_proj gap (28 vs 45) is the per-shape residual — 16
+threadgroups of 64 rows on a 16-core GPU. The M=64/512
+per-role tables (tiled kernel, unchanged) were also recorded and are
+flat across roles (M=64: 6.0–7.0 GB/s eff., 1361–1589 GFLOPS; M=512:
+0.83–0.88, 1507–1599 GFLOPS) — the GE-1 input.
 
 ## Phase 5 — on-device rows, iPhone 15 Pro (P5-5, James)
 

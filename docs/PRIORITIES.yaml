@@ -1988,8 +1988,9 @@ tasks:
   - id: P5-2B
     rank: 20.45
     title: "M<=8 GEMM weight-stream optimization ahead of the P5-5 gate walk (Mac M=8 at 46% of the matvec aggregate)"
-    status: in_progress
+    status: done
     started_at: 2026-09-18 16:24:57+00:00
+    completed_at: 2026-09-18 17:00:43+00:00
     depends_on: [P5-2]
     blocks: [P5-5B]
     deliverable:
@@ -2019,6 +2020,20 @@ tasks:
       (plateau ~0.78 TFLOPS). Per-shape attribution first (P5-2 lever
       list), then the m8 weight-stream levers; re-walk under the same
       gate (never loosened).
+      2026-09-18 (done): per-role attribution landed in the GEMM harness
+      (QuantGemmMicrobench.runRoleAttribution, CLI `--per-role yes`):
+      the P5-2 m8 kernel's per-role rate tracked its threadgroup count
+      (k/v_proj 11 GB/s at 8 threadgroups; gate/up 42 at 48; lm_head
+      50) — parallelism starvation on ~45% of the bytes. m8 kernel
+      REDESIGNED as a lane-split multi-matvec (K over 8-lane
+      row-groups, 2 rows per lane, 256-thread threadgroups, fp32
+      activation chunk staged once, named-register body, xor-butterfly
+      merge); geometry chosen by a measured grid (ledger in
+      DECISIONS.md 2026-09-18 P5-2B, incl. three measured-worse
+      variants and one private-memory trap). Mac M=8: 27.69 -> 42.94
+      GB/s median (x1.55; k_proj 11 -> 28, q/o 21 -> 42, down 21 ->
+      45). Tiled M>8 kernel untouched. Gate 30.69 untouched; device
+      verdict is P5-5B's. Suite re-passed after every iteration.
 
   - id: PF-2
     rank: 20.48
@@ -2067,7 +2082,7 @@ tasks:
   - id: P5-5B
     rank: 20.5
     title: "Phase 5 device RE-WALK (James, detached): prefill floor + M=8 microbench + decode regression gates, interleaved sequential-vs-tiled before/after, device PREFILL attribution export"
-    status: blocked
+    status: ready
     owner: james
     depends_on: [PF-1, P5-2B]
     blocks: [P5-EXEC, PF-2]

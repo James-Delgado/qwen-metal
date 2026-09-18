@@ -4428,3 +4428,120 @@ gate touched; every constant below is a pre-committed value used verbatim.
   (20.49, ready, large), P5-5B (20.5, owner james, blocked on P5-2B)
   seeded; P5-EXEC re-blocked on P5-5B; P5-2B now blocks P5-5B. Next
   agent task by rank: P5-2B (20.45).
+
+## 2026-09-18 — P5-2B: M≤8 GEMM path redesigned on a per-role attribution — Mac M=8 27.69 → 42.94 GB/s (×1.55); tiled kernel untouched; gate 30.69 untouched
+
+Deliverable (P5-2B; the P5-EXEC iterate round's second task, after PF-1).
+Measure-first per the PLAN rule; no gate touched; hard rule 3 held —
+the 19-test GEMM suite (kernel + real-artifact + harness) re-passed after
+every kernel iteration below, and the harness's per-M Tier-K spot check
+guarded every microbench figure.
+
+- **Per-role attribution in the GEMM harness (the measurement came
+  first):** `QuantGemmMicrobench.runRoleAttribution(m:)` times every
+  roster role ALONE (its 28 — or 1 — matrices in one command buffer,
+  warmup + measured passes, roster order) and reports GB/s, GFLOPS, byte
+  share, dispatches, and Σ role median GPU time as an implied aggregate
+  cross-check against the one-buffer sweep; CLI `microbench --kernel gemm
+  --per-role yes`. DIAGNOSTIC only — the D7 gate reads the 197-site
+  aggregate. Three harness tests (accounting: role bytes Σ to the sweep
+  total, dispatches = site counts, FLOPs = 2·M·N·K·count, timing sanity,
+  report shape; byte shares Σ 1 with equal-shape roles equal; rejects).
+- **What the attribution said (Mac, P5-2 kernel, same-day BEFORE; rows in
+  results.md):** aggregate 27.70 GB/s; k/v_proj **11.0** GB/s, q/o_proj
+  **21.2–21.6**, down_proj **20.6**, gate/up **42.4–42.6**, lm_head
+  **49.8**; Σ role medians 27.92 implied (cross-check holds). The rate
+  tracks the kernel's threadgroup count exactly (thread-per-row, 128
+  rows per threadgroup ⇒ 8 threadgroups for k/v, 16 for q/o/down, 48
+  for gate/up, 1187 for lm_head): parallelism starvation on the
+  1024/2048-row shapes — ~45% of the bytes — not a bandwidth limit.
+  Shrinking the kernel's 16 KB threadgroup stage to 4 KB changed nothing
+  (27.01), ruling out per-core threadgroup-memory residency for THAT
+  kernel. A second cost, from instruction counting: every weight also
+  paid 8 fp16→fp32 converts of the staged activation slab per thread
+  (≈20 ALU instructions per weight for 16 useful FLOPs) — on the
+  6-core device that puts the P5-2 kernel at roughly three quarters of a
+  plausible ALU issue rate at its measured 20.45 GB/s, i.e. ALU-bound,
+  not DRAM-bound, on-device (an estimate; the device attribution is
+  P5-5B's export).
+- **Kernel redesign (`gemm_q4_f16_m8`, Metal/QuantGemmKernel.swift):** a
+  simdgroup is 32/S row-groups of S lanes; within a row-group K is split
+  across the S lanes (lane slot t owns one u32 word at k = step·8S + 8t
+  — a contiguous 4S-byte run per row per step), each lane accumulates R
+  rows concurrently, the activation chunk (fp32, 16 KB) is staged ONCE
+  per threadgroup in a plane layout whose float4 reads are
+  bank-conflict-free across slots and simdgroup-BROADCAST across the
+  32/S row-groups (the P3-4 matvec's memory pattern, recovered), and the
+  per-lane partials merge through a fixed-order xor butterfly over the
+  row-group. Dequant in registers, the pinned Q4G64.dequant arithmetic
+  verbatim, fp32 accumulation (hard rule 1; reduction order differs —
+  Tier K absorbs it per the 2026-09-12 decision). Body written with NAMED
+  registers via macros (no arrays, no loops in the hot path). Chosen
+  geometry: **S = 8, R = 2, 8 simdgroups (256 threads), 16 KB chunk** —
+  Swift-side constants (`smallBatchLanesPerRow`, `smallBatchRowsPerLane`,
+  `smallBatchSimdgroupsPerThreadgroup`), so a device re-tune is a
+  constant change; a `static_assert` pins S ≥ 8 (the store maps a
+  row-group's slot to a batch row).
+- **Optimization-iteration ledger (release Mac microbench, M=8 aggregate
+  median; each kept step re-passed the 19-test GEMM suite; BEFORE
+  27.69):** (1) pure 32-lane K split, 4 rows/lane, fp32 staging, array
+  body → **19.02** — worse, shape-independent ceiling; 2 rows/lane 17.50;
+  bank-conflict-free plane layout 19.09; 8 KB chunk 18.84 — none moved
+  it. Offline IR was pre-optimization for both old and new kernels
+  (inconclusive), so the body was rewritten with named registers: (2)
+  **29.36** — the arrays had been placed in private memory. (3)
+  next-step word prefetch (two steps in flight) → **25.93**, measured
+  worse, REVERTED. (4) DIAGNOSTIC build with the activation loads
+  removed (wrong numbers, timing only): implied aggregate **56.4**
+  (lm_head 68.7, k_proj 36.3) — threadgroup-memory traffic for the
+  activation reads was the ceiling; the old kernel had paid it as a
+  broadcast. (5) hybrid geometry grid, S lanes per row × R rows per
+  lane, 128 threads: (32,4) 28.43, (16,2) 32.38, (16,4) 34.93, (8,1)
+  23.95, (8,4) 39.71, **(8,2) 40.00**; (4,·) fails the spot check by
+  construction (store needs 8 slots) and is now statically excluded. (6)
+  around (8,2): 32 KB chunk **28.34** (measured worse — per-core
+  threadgroup-memory residency DOES bind at 32 KB; reverted), 256
+  threads **43.12**, 512 threads 42.04 (k_proj back to 21.7 — too few
+  threadgroups). Final: (8,2) × 256 threads × 16 KB.
+- **Mac PROVISIONAL rows (results.md "after the P5-2B m8 redesign"):**
+  M=8 median **42.94 GB/s** (best 43.43, 42.86–43.43, n=10), 1221.5
+  GFLOPS — ×1.55 vs the same-day BEFORE, 73% of the Mac matvec aggregate
+  (58.81; was 46%). Per-role AFTER: k/v_proj 28.0/27.9 (from 11),
+  q/o_proj 42.5/41.5 (from 21), down_proj 44.9 (from 20.6), gate/up
+  44.9/44.7 (from 42.5), lm_head 47.3 (from 49.8); Σ role medians 43.06
+  implied. M=64 (6.48 / 1475 GFLOPS) and M=512 (0.86 / 1568) re-pin the
+  untouched tiled kernel against the 2026-09-16 row. Mac fractions do
+  not predict device fractions (standing precedent); the ≥ 30.69 gate is
+  walked on-device at P5-5B — hard rule 6, value unchanged. Device
+  expectation, stated as an estimate and NOT a row: the redesign removes
+  the per-weight converts (≈20 → ≈12 ALU instructions per weight) and
+  the threadgroup starvation the device shares (6 cores; k/v_proj had 8
+  threadgroups); if the device is ALU-bound as the counting suggests,
+  the same-utilization projection lands near the low 30s GB/s —
+  marginal against 30.69, so the re-walk decides.
+- **Scope:** the tiled M>8 kernel is byte-identical (GE-1 owns it); the
+  production prefill pipeline reaches the m8 path only for chunks of ≤ 8
+  positions (tiny prompts, ragged tails), so the full-suite + Tier-M/E
+  runs below cover it end-to-end; the app is unchanged (the harness API
+  is additive).
+- **Verification (SOP step 5, quoted):** debug suite minus the 9 oracle
+  suites: **"Executed 471 tests, with 6 tests skipped and 0 failures (0
+  unexpected) in 330.088 s"** (468 + the 3 new harness tests; the 6 skips
+  are the opt-in harnesses). Release GPU-quant Tier-M + Tier-E on the
+  final file: "Executed 7 tests, with 0 failures" (Tier-E 3 incl. the
+  tiled-prefill default; Tier-M 4). GEMM suites on the final file:
+  "Executed 20 tests, with 0 failures" (kernel 10 + real-artifact 1 +
+  harness 9). The 471-test run preceded a comment-only edit to the
+  kernel file (no code change); the GEMM + Tier-M/E runs above are on
+  the committed file. App release build (xcodebuild,
+  generic/platform=iOS, unsigned): BUILD SUCCEEDED (only the standing
+  AppIntents-metadata notice). Backlog drift test: 5 passed. The 250-step
+  logit suite and quality gate were not re-run: the tiled M>8 kernel and
+  every decode kernel are byte-identical, and the m8 path's end-to-end
+  exposure (≤ 8-position chunks) is covered by the Tier-M/E + prefill
+  pipeline tests above.
+- **Backlog:** P5-2B done; P5-5B (device re-walk, James, detached) flips
+  blocked → ready — both its dependencies (PF-1, P5-2B) are done. No new
+  follow-ups: the device attribution export P5-5B already carries is the
+  next measurement; a device re-tune of the m8 geometry, if the re-walk
+  shows one is needed, is a constant change under this entry's ledger.
