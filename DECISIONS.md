@@ -4275,3 +4275,45 @@ entry + the veto-close amendment (135), used verbatim — hard rule 6.
   rule exists for). Backlog: P5-5 done (rows + verdicts recorded);
   P5-EXEC flipped ready for James's decision; PF-1 and P5-2B annotated
   with their device triggers.
+
+## 2026-09-18 — P5-EXEC decision (James): ITERATE in Phase 5; PF-1 first, then P5-2B, then a detached re-walk
+
+Decided in conversation after the P5-5 rows (two gates FAILED with
+anatomy — the Phase 4 precedent applies): Phase 5 does not exit on these
+rows. Iterate round, in this order: (1) PF-1 — prefill attribution FIRST
+(measure, then act), then the SDPA-loop and batched-norm levers the
+measurement justifies; (2) P5-2B — the M≤8 weight-stream path (58% of
+matvec on device); (3) James re-walks P5-5 DETACHED under the unchanged
+gates (135 / 30.69 / 24.0 — hard rule 6). James asked for PF-1 ahead of
+the lower-ranked P5-2B — a user instruction, recorded as the pick-order
+override. P5-EXEC stays ready-but-parked until the re-walk.
+
+## 2026-09-18 — PF-1 prefill-attribution harness sanity bounds pre-committed (before any harness test exists)
+
+The 2026-09-08 P4-1 bounds apply VERBATIM to the prefill attribution
+mode, with "token" read as "chunk": per-class command-buffer splits inside
+one prefill chunk (one buffer per contiguous same-class dispatch run),
+committed back-to-back, one wait per chunk, per-segment GPU timestamps
+summed by class. Classes: GEMM (the P5-2 kernel — labeled distinctly from
+decode's matvec class), attention (the per-position SDPA loop or its
+batched successor), norm+elementwise (batched norms, qk-norm/RoPE/append
+cluster, residual adds, SwiGLU), head/tail (embedding gather, last-row
+copy, final norm, lm_head, argmax).
+
+- Bookkeeping exact: class GPU sums = Σ their segments; class dispatch
+  counts Σ to the chunk's DispatchCounter total.
+- Bracketing (hard rule 7): wall ≥ span ≥ each class sum; every segment
+  gpuEnd ≥ gpuStart.
+- Coverage: class-sum ≥ 0.5 × span and ≤ 1.01 × span + 1 µs.
+- Production cross-check: median attributed class-sum within [0.5×, 2.0×]
+  of the median production one-command-buffer chunk GPU time for the same
+  prompt on the same model (attributed and production prefills
+  interleaved, same cache state — reset before each).
+- Production-path invariance exact: attributed prefill logits bitwise ==
+  production tiled-prefill logits for the same prompt (same kernels, same
+  order); the production path's one-buffer-per-chunk structure and
+  dispatch pins stay pinned by the existing P5-3/P5-4 tests unmodified.
+
+Per hard rule 6 these never loosen once tests exist; a failure is a
+harness bug to investigate, not a bound to tune. DIAGNOSTIC mode only —
+never a benchmark row (the P4-1 principle).

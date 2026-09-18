@@ -1897,7 +1897,8 @@ tasks:
   - id: PF-1
     rank: 20.46
     title: "Prefill attention throughput levers if measurements say they pay (SDPA scratch serialization / batched causal kernel / batched-norm cost)"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-18T03:21:34Z
     depends_on: [P5-3]
     blocks: []
     deliverable:
