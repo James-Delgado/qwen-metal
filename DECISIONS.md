@@ -4189,3 +4189,89 @@ iterations — the P5-2 protocol shape); the export is the same
 and Mac rows share one vocabulary. No engine change, no gate touched,
 no new pins. App release build (generic iOS, unsigned): BUILD SUCCEEDED.
 Recorded on P5-5's backlog notes with the session order handed to James.
+
+## 2026-09-18 — P5-5 (James, on-device): prefill floor FAILED (95.37 vs ≥135), GEMM M=8 FAILED (20.45 vs ≥30.69), decode regression PASS (30.55), tiled-vs-sequential CLAIM-GRADE ≈2.96× — Phase 5 needs an iterate round
+
+Rows: benchmarks/results.md "Phase 5 — on-device rows (P5-5, James)".
+One session, one build @ ca9cd6c, iPhone16,1, iOS 26.6.1, SoC 100 → 96%,
+battery health Normal / 100% max capacity. Constants: the 2026-09-14 gates
+entry + the veto-close amendment (135), used verbatim — hard rule 6.
+
+- **Prefill floor ≥ 135 tok/s: FAILED at 95.37 tok/s** (warm tiled span
+  median, n=5, range 88.20–100.88; cold 86.47). Span GPU 8.30–8.43 s on
+  every run ⇒ ≤ 102.7 tok/s even with zero wall overhead — the verdict
+  does not depend on the launch-mode caveat below. Delivered 2.1× the
+  sequential structural ceiling (45.3); the floor asked for 3×. Per the
+  2026-08-26 principle this is a non-delivery signal, not noise, and it
+  has an anatomy (next bullet).
+- **Anatomy (first-order, session-internal numbers):** the layer GEMMs at
+  M=852 are ≈2.40 TFLOP; at the device's measured GEMM plateau (≈0.776
+  TFLOPS, M=512 microbench) they need ≥ 3.09 s of the 8.30 s span ⇒ GEMM
+  ≤ ≈37%, non-GEMM ≥ ≈63% (≈5.2 s). The Mac showed the same shape at 46%
+  GEMM-bound; the device is worse because its plateau is 2× lower while
+  the per-dispatch and per-position costs are not. This is exactly the
+  PF-1 trigger condition ("engage ONLY if the P5-5 device rows show the
+  attention/elementwise share material or the 135 floor at risk") — both
+  halves are true. PF-1 must start with a prefill attribution (per-class
+  GPU time inside a chunk, the P4-1 harness pattern) before touching a
+  kernel — the PLAN "do not guess at bottlenecks" rule; the ≈63% is a
+  bound from the microbench, not a measurement of where it goes.
+- **GEMM microbench M=8 ≥ 30.69 GB/s: FAILED at 20.45 GB/s** (best of
+  n=4; medians 18.74–20.26) = 0.467 × 43.84; 58% of the matvec bench's
+  35.29 on the same device. GPU-timestamp metric, launch-mode-independent.
+  The P5-2 risk flag (2026-09-15) materialized, less severely than the
+  naive Mac-ratio extrapolation (≈16 GB/s): P5-2B is now REQUIRED, not
+  optional — the m8 path streams weights at 58% of what the matvec path
+  achieves, and the gate is the matvec fraction applied to the GEMM.
+- **Decode regression ≥ 24.0 tok/s: PASS** — window median 30.55 (n=3:
+  30.55 / 30.56 / 26.11 thermal). vs P4-11 31.67: −3.5%, of which ≈2.6
+  points is +0.8 ms/token wall−GPU (2.22 vs 1.40 ms) and ≈1 point median
+  GPU (30.61 vs 30.27 ms). Decode is untouched by Phase 5 as designed;
+  the 35 MB footprint delta (573.2 vs 538.2 MB gauge) is the C=512 scratch
+  (34.0 MiB), inside the D2 ≤ 64 MiB budget.
+- **Before/after (D8 + bookend): CLAIM-GRADE — tiled ≈2.96× sequential
+  on-device.** Tiled 95.37 (88.20–100.88, n=5) vs sequential 32.24
+  (28.41–35.72, n=3), interleaved; ranges disjoint; effect 63.1 tok/s ≫
+  bookend drift (−12.7 / −0.9). GPU-only 2.6–3.3× — survives the caveat.
+  The first on-device sequential packed prefill rows also land here
+  (35.72 / 32.24 / 28.41 — the ≈30 tok/s SPEC-P5 estimate confirmed, and
+  degrading with heat: ~45 s of continuous GPU throttles the device;
+  decode tails 34 → 46 ms). Structural cross-checks exact on every row
+  (48,446 / 167,847 / 5,073 dispatches).
+- **Device GEMM curve (reported, D7 denominator):** M=8 ≈20 GB/s /
+  ≈576 GFLOPS, M=64 ≈765 GFLOPS, M=512 ≈776 GFLOPS (plateau ≈0.78 TFLOPS,
+  thermal steps to ≈630 mid-run in G2/G3). The device saturates by M=64;
+  the Mac plateau was 1.57. Even a free non-GEMM path would cap the
+  current kernel at ≈276 tok/s on this plateau, while MLX's ≈370 (Phase 0
+  PROVISIONAL) implies ≈1.04 TFLOPS effective end-to-end — the GEMM
+  kernel's compute efficiency is a second headroom component for the
+  P5-EXEC decomposition (the Phase 6 roofline consumes this curve).
+- **Launch-mode caveat (James, recorded honestly):** the app may not have
+  been relaunched from the home screen after the Xcode install, so the
+  session may have run debugger-attached. Metal API validation was OFF
+  regardless — the shared scheme pins `enableGPUValidationMode = 1` (the
+  P2-7 lesson) — and the P2-7 attached penalty was validation-driven.
+  Evidence for attachment: wall−GPU 2.18–2.34 ms/token vs 1.38–1.45
+  detached at P4-11. Every gate verdict above is shown with a GPU-only
+  bound that attachment cannot move; the rows stay PROVISIONAL-labeled
+  as all device rows are. A detached re-run is cheap (~10 min: T×3, S×2
+  interleaved, D×3) and is RECOMMENDED before P5-EXEC records the
+  before/after claim as the phase's number of record — James's call.
+- **DI-1 evidence:** every tiled row's per-token line reads "UNSTABLE
+  200–19409" (852-token prompt) or "200–5073" (84-token prompt) exactly as
+  predicted; the 387-token prefill rows' all-tokens latency statistics
+  (n=386 completion spans) are unaffected because spans are between
+  completions. DI-1 stays a decision for James; ranked ahead of any
+  re-walk so the next device rows carry the decided labeling.
+- **What this means for the phase (decision for James at P5-EXEC, the
+  Phase 4 precedent: two gates FAILED with anatomy → ITERATE):** the
+  recommended iterate round is (1) PF-1 — prefill attribution first, then
+  the SDPA-serialization lever (per-position scratch slices or the D4
+  option-2 batched causal kernel) and the batched-norm lever; (2) P5-2B —
+  the M≤8 weight-stream path (58% of matvec); (3) a GEMM compute-
+  efficiency look at the plateau (0.78 TFLOPS on A17 Pro) as a new
+  measure-first item; then a P5-5 re-walk under the same gates (never
+  loosened — hard rule 6; pressure to loosen 135 is the bug signal the
+  rule exists for). Backlog: P5-5 done (rows + verdicts recorded);
+  P5-EXEC flipped ready for James's decision; PF-1 and P5-2B annotated
+  with their device triggers.

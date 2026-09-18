@@ -1927,6 +1927,14 @@ tasks:
       plateau (1.567 TFLOPS) — on Mac the non-GEMM share (SDPA loop,
       norms, ~48k encodes) is roughly half the span. Mac fractions are
       not predictive; the engage/close decision still waits on P5-5.
+      2026-09-18 (P5-5 device rows): TRIGGER MET — prefill floor FAILED
+      at 95.37 (GPU 8.30 s/852) and the device GEMM plateau (0.776
+      TFLOPS) bounds the GEMM share at <= ~37% of the span, non-GEMM
+      >= ~63% (~5.2 s). ENGAGE, measure-first: step 1 is a prefill
+      attribution harness (per-class GPU time inside a chunk — SDPA
+      loop / norms / GEMMs / encodes, the P4-1 pattern) BEFORE any
+      kernel change; then lever 1 (SDPA serialization) and lever 2
+      (batched-norm O(dim^2)). Re-walk the floor at the same 135 gate.
 
   - id: DI-1
     rank: 20.47
@@ -1986,11 +1994,19 @@ tasks:
       gates is the optimized one; P5-3/P5-4 need not wait on it. If the
       device ratio turns out fine (P5-4 Mac rows or an early device
       probe), close with a DECISIONS note instead of code.
+      2026-09-18 (P5-5 device rows): gate FAILED at 20.45 GB/s best of 4
+      (needed 30.69; 58% of the device matvec 35.29 — Mac ratio 46%).
+      Now REQUIRED for the Phase 5 re-walk, not optional. Device GEMM
+      curve for context: M=8 ~576 GFLOPS, M=64 ~765, M=512 ~776
+      (plateau ~0.78 TFLOPS). Per-shape attribution first (P5-2 lever
+      list), then the m8 weight-stream levers; re-walk under the same
+      gate (never loosened).
 
   - id: P5-5
     rank: 20.5
     title: "On-device Phase 5 rows: prefill floor + M=8 microbench + decode regression gates, interleaved sequential-vs-tiled before/after, M-sweep report"
-    status: ready
+    status: done
+    completed_at: 2026-09-18T03:15:14Z
     owner: james
     depends_on: [P5-4]
     blocks: [P5-EXEC]
@@ -2013,11 +2029,23 @@ tasks:
       shape = CLI `microbench --kernel gemm`. Session walkthrough given
       in-conversation (order: T0 cold, T1 bookend, S/T interleaved x3,
       T-last x2, decode-essay x3, gemm x3, attached footprint read).
+      2026-09-18 (done, James on-device @ ca9cd6c): prefill floor
+      FAILED 95.37 tok/s (n=5 warm tiled, GPU-only bound <= 102.7);
+      GEMM M=8 FAILED 20.45 GB/s best of 4 (0.467 of roofline; 58% of
+      matvec); decode regression PASS 30.55 window median; before/after
+      CLAIM-GRADE tiled ~2.96x sequential (ranges disjoint, effect 63 >>
+      bookend drift 12.7). Device GEMM plateau ~0.78 TFLOPS (M=64 already
+      saturates). Anatomy: GEMMs <= ~37% of the span, non-GEMM >= ~63%
+      -> PF-1 trigger met; P5-2B now required. Launch-mode caveat
+      recorded (possibly attached; validation OFF by scheme; all verdicts
+      GPU-bound-robust); detached re-run recommended before P5-EXEC
+      records the claim. Footprint 573.2 MB gauge (+35 MB = scratch).
+      Rows + verdicts: results.md / DECISIONS.md 2026-09-18 P5-5.
 
   - id: P5-EXEC
     rank: 21
     title: "Phase 5 exit milestone (all P5 tasks done, exit criteria walked, prefill-vs-MLX judgment)"
-    status: blocked
+    status: ready
     depends_on: [P5-1, P5-2, P5-3, P5-4, P5-5]
     blocks: [SPEC-P6]
     deliverable:

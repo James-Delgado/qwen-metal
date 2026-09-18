@@ -807,6 +807,134 @@ macOS 26.5.1 (25F80).
 | 2026-09-16 | Apple M2 Pro (Mac, dev machine) | 64 | 6.49 | 6.49 | 6.47–6.49 | 1476.24 | 1477.81 | PROVISIONAL. Effective GB/s is the pinned normalization (actual W traffic 2×). |
 | 2026-09-16 | Apple M2 Pro (Mac, dev machine) | 512 | 0.86 | 0.86 | 0.86–0.86 | 1566.56 | 1567.14 | PROVISIONAL. Compute plateau ≈ 1.57 TFLOPS fp32 — the denominator the P5-4 prefill "after" rows above are read against. Actual W traffic 16×. |
 
+## Phase 5 — on-device rows, iPhone 15 Pro (P5-5, James)
+
+### 2026-09-18 — iPhone 15 Pro Phase 5 rows: prefill floor FAILED (95.37 tok/s vs ≥135), GEMM M=8 FAILED (20.45 GB/s vs ≥30.69), decode regression PASS (30.55), tiled-vs-sequential CLAIM-GRADE ≈2.96×
+
+Session conditions (one session, one build @ ca9cd6c, run in the listed
+order): device iPhone16,1 (the pinned iPhone 15 Pro), iOS 26.6.1; weights
+q4g64 (artifact d03b3fe3…), residency mmap, kernels fused; prefill path via
+the P5-4 toggle (tiled C=512 / sequential); prompts prefill-summarize (852
+tokens) for prefill rows, decode-essay (84) for decode rows; burst cap 640,
+greedy. Battery health "Normal", maximum capacity 100%; state of charge
+100% at start → 96% at close (the export "battery health" strings are SoC
+per the 2026-09-05 correction). **Launch-mode caveat (recorded, James):
+the app may not have been relaunched from the home screen after the Xcode
+install, so a debugger-attached launch is possible.** Metal API validation
+was OFF either way — the shared scheme pins it off for attached Runs
+(`enableGPUValidationMode = 1`, the P2-7 lesson) — and every verdict below
+is shown with a GPU-time-only bound that an attached launch cannot move.
+The evidence for attachment is wall−GPU 2.18–2.34 ms/token on every decode
+record vs 1.38–1.45 ms in the detached P4-11 session; the P2-7 attached
+penalty (1.4–1.9× GPU time) came from validation, which was off here.
+phys_footprint gauge-of-record (attached, footprint-only launch after the
+timed session): **573.2 MB loaded** — P4-11 538.2 + 35.0 MB, matching the
+34.0 MiB C=512 prefill scratch (spec D2 budget ≤ 64 MiB); in-app
+cross-checks 543.6–591.7 MB (tiled rows ≈ 578–592, sequential ≈ 544–551).
+
+**Prefill rows (D1 span metric of record; prompt prefill-summarize, 852):**
+
+| Run | Prefill path | Cold/warm | Prefill span wall s | Prefill tok/s (of record) | Span GPU s | Span wall−GPU s | Prefill dispatches | Decode tail median GPU ms @ dispatches | phys_footprint (in-app) |
+|---|---|---|---|---|---|---|---|---|---|
+| T0 | tiled (C=512) | cold | 9.853 | 86.47 | 8.298 | 1.555 | 48446 | 34.08 @ 200 | 583.7 MB |
+| T1 (bookend) | tiled (C=512) | warm | 8.445 | 100.88 | 8.313 | 0.132 | 48446 | 33.69 @ 200 | 591.7 MB |
+| S1 | sequential | warm | 23.854 | 35.72 | 21.628 | 2.226 | 167847 | 34.42 @ 200 | 550.5 MB |
+| T2 | tiled (C=512) | warm | 8.934 | 95.37 | 8.402 | 0.532 | 48446 | 34.00 @ 200 | 578.2 MB |
+| S2 | sequential | warm | 26.424 | 32.24 | 24.185 | 2.239 | 167847 | 46.24 @ 200 (thermal) | 543.8 MB |
+| T3 | tiled (C=512) | warm | 9.037 | 94.28 | 8.354 | 0.683 | 48446 | 33.95 @ 200 | 577.6 MB |
+| S3 | sequential | warm | 29.993 | 28.41 | 27.792 | 2.201 | 167847 | 43.46 @ 200 (thermal) | 543.6 MB |
+| T-last a (bookend) | tiled (C=512) | warm | 9.660 | 88.20 | 8.318 | 1.342 | 48446 | 34.07 @ 200 | 585.8 MB |
+| T-last b (bookend) | tiled (C=512) | warm | 8.520 | 100.00 | 8.425 | 0.095 | 48446 | 34.11 @ 200 | 585.9 MB |
+
+Each prefill row's 387-token decode tail stopped at eos (same text species
+on both paths); window n/a (< 512 tokens) — the decode gate is walked on
+decode-essay below. Dispatch counts are exact structural cross-checks on
+every row: tiled 48,446 (chunks 512 + 340), sequential 167,847 (851×197 +
+200). The per-token line on every tiled row reads "UNSTABLE 200–19409
+dispatches/token" — the DI-1 step-0 record (the last chunk), as predicted
+at P5-4; it does not enter the span, the window, or the completion-span
+latency statistics.
+
+**Decode regression rows (prompt decode-essay, 640 tokens, tiled default):**
+
+| Run | Cold/warm | Window tok/s (128–512) | Median GPU ms/tok | Median wall ms/tok | Wall−GPU ms | Dispatches/tok | Latency p50/p95/p99/max ms (window) | Stalls | Prefill span (84 tok) | phys_footprint (in-app) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| D1 | warm | 30.55 (overall 30.56) | 30.61 | 32.68 | 2.219 | 200 | 32.68 / 34.02 / 35.31 / 36.42 | 0 (n=384) | 0.802 s = 104.75 tok/s, GPU 0.766 s, 5073 dispatches | 586.2 MB |
+| D2 | warm | 30.56 (30.31) | 30.58 | 32.71 | 2.265 | 200 | 32.73 / 33.91 / 34.66 / 34.99 | 0 | 0.812 s = 103.45, GPU 0.768, 5073 | 586.9 MB |
+| D3 | warm | 26.11 (26.66) | 34.67 | 36.79 | 2.240 | 200 | 36.80 / 46.35 / 48.24 / 48.52 | 0 | 0.872 s = 96.33, GPU 0.773, 5073 | 587.1 MB |
+
+D3's median GPU 34.67 ms (vs 30.6) with p95 46 ms is a thermal step after
+~10 min of continuous prefill/decode work, not a stall pattern (0 stalls).
+The 84-token prompt is one tiled chunk: 1 + 28·(13 + 2·84) + 3 + 1 = 5,073
+dispatches, measured identically on all three.
+
+**GEMM M-sweep microbench (P5-2 harness via the app; 197 packed matrices,
+mmap, 2 warmup + 10 measured; spot checks passed at every M on every run,
+max |Δ| 0.000851 (M=8) / 0.000915 (M=64, 512) ≤ Tier-K 0.00737):**
+
+| Run | M | Median eff. GB/s | Best | Min–max | Median GFLOPS | Best | Notes |
+|---|---|---|---|---|---|---|---|
+| G1 | 8 | 20.26 | 20.45 | 20.13–20.45 | 576.26 | 581.66 | **Session best at M=8: 20.45 GB/s = 0.467 × 43.84** |
+| G1 | 64 | 3.36 | 3.39 | 3.35–3.39 | 765.32 | 771.89 | effective GB/s is the pinned normalization (W traffic 2×) |
+| G1 | 512 | 0.43 | 0.43 | 0.42–0.43 | 775.97 | 783.69 | **compute plateau ≈ 0.78 TFLOPS** (W traffic 16×) |
+| G2 | 8 | 18.74 | 19.16 | 17.95–19.16 | 533.06 | 544.87 | |
+| G2 | 64 | 3.32 | 3.33 | 3.31–3.33 | 754.42 | 757.74 | |
+| G2 | 512 | 0.42 | 0.43 | 0.34–0.43 | 763.44 | 775.72 | iterations 7–10 step down to ≈611–646 GFLOPS (thermal) |
+| G3 | 8 | 19.81 | 19.97 | 19.66–19.97 | 563.63 | 567.94 | |
+| G3 | 64 | 2.54 | 2.72 | 2.23–2.72 | 578.02 | 618.62 | rising 537 → 619 GFLOPS across iterations (thermal recovery) |
+| G3 | 512 | 0.35 | 0.42 | 0.35–0.42 | 637.01 | 772.66 | iterations 5–10 at ≈632–637 GFLOPS (thermal) |
+| G4 | 8 | 20.02 | 20.05 | 19.90–20.05 | 569.45 | 570.45 | |
+| G4 | 64 | 3.35 | 3.38 | 3.34–3.38 | 763.29 | 769.52 | |
+| G4 | 512 | 0.43 | 0.43 | 0.42–0.43 | 775.29 | 783.59 | |
+
+**Gate verdicts (constants pre-committed 2026-09-14 + veto-close amendment;
+hard rule 6 — no constant touched):**
+
+- **Prefill floor ≥ 135 tok/s: FAILED at 95.37 tok/s** — warm tiled span
+  median of n=5 (88.20 / 94.28 / 95.37 / 100.00 / 100.88; cold 86.47).
+  Robust to the launch-mode caveat: span GPU time alone is 8.30–8.43 s on
+  every tiled run ⇒ ≤ 102.7 tok/s even at zero wall overhead. 2.1× the
+  45.3 tok/s sequential structural ceiling; the floor asked for 3×.
+- **GEMM microbench M=8 ≥ 30.69 GB/s: FAILED at 20.45 GB/s** (best of n=4;
+  medians 18.74–20.26) = 0.467 of the 43.84 roofline vs the required 0.70;
+  58% of the matvec bench's 35.29 GB/s on the same device (Mac ratio was
+  46–47%). GPU-timestamp metric — unaffected by launch mode. The P5-2B
+  risk flag materialized (Mac-ratio extrapolation predicted ≈16).
+- **Decode regression ≥ 24.0 tok/s: PASS** — window median **30.55** (n=3:
+  30.55 / 30.56 / 26.11; D3 thermal). Cross-session vs P4-11's 31.67:
+  −3.5%, of which +0.8 ms/token wall−GPU (2.22 vs 1.40 ms) accounts for
+  ≈2.6 points — consistent with an attached launch — and median GPU
+  30.61 vs 30.27 ms the rest (+1%). GPU-only bound: 1000/30.61 = 32.7
+  tok/s ⇒ PASS under any launch mode.
+- **Before/after (D8 + bookend): CLAIM-GRADE — tiled ≈2.96× sequential.**
+  Tiled 95.37 (88.20–100.88, n=5) vs sequential 32.24 (28.41–35.72,
+  n=3) interleaved in-session: ranges disjoint AND effect 63.1 tok/s ≫
+  bookend drift (T1 100.88 → T-last a/b 88.20 / 100.00: −12.7 / −0.9).
+  GPU-only ratio 21.63–27.79 s vs 8.30–8.43 s = 2.6–3.3× — the claim
+  survives the caveat. Sequential degraded S1 → S3 (GPU 21.6 → 24.2 →
+  27.8 s; decode tails 34 → 46 ms) — ~45 s of continuous GPU per
+  sequential run throttles the device (the Phase 0 "prefill throttles
+  harder" note, now measured); tiled rows between them recovered to
+  94–95.
+- **Reported, never gated:** device GEMM curve — M=8 ≈570–582 GFLOPS /
+  ≈20 GB/s, M=64 ≈765–772 GFLOPS, M=512 ≈776–784 GFLOPS (plateau ≈0.78
+  TFLOPS, thermal steps to ≈630). The device reaches its compute plateau
+  by M=64 already; Mac plateau was 1.57 TFLOPS.
+
+**Prefill-span anatomy (first-order, from this session's own numbers — the
+input to PF-1 / P5-EXEC):** the 196 layer GEMMs at M=852 are ≈2.40 TFLOP;
+at the measured 0.776 TFLOPS plateau they need ≥ 3.09 s of the 8.30 s
+warm span ⇒ the GEMMs are at most ≈37% of the span and ≥ 5.2 s (≈63%) is
+non-GEMM: the per-position split-K SDPA loop (2·852·28 = 47,712
+dispatches serialized through the shared partial-state scratch — PF-1
+lever 1), the batched naive norms (PF-1 lever 2), and ≈48k encodes (at
+the P4-11 1.22 µs/dispatch ≈ 59 ms — small). Even a zero-cost non-GEMM
+path would cap this kernel at ≈276 tok/s on the measured plateau; MLX's
+≈370 tok/s (Phase 0 PROVISIONAL) implies ≈1.04 TFLOPS effective
+end-to-end, above our GEMM plateau — a second lever for P5-EXEC's
+headroom decomposition (the microbench GFLOPS curve is the measured
+denominator, D7).
+
 ## Phase 0a — energy dry-run + corrections (PROVISIONAL)
 
 ### 2026-08-22 — sustained battery-delta cycles, iPhone 15 Pro (method VALIDATED)
