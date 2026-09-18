@@ -140,6 +140,11 @@ public struct QuantMatvecMicrobenchResult: Sendable {
 
 /// Small shared statistics helpers for bench result types.
 enum BenchMath {
+    /// nil on empty input (the attribution harnesses' convention).
+    static func medianOrNil(_ values: [Double]) -> Double? {
+        values.isEmpty ? nil : median(values)
+    }
+
     static func median(_ values: [Double]) -> Double {
         let sorted = values.sorted()
         guard !sorted.isEmpty else { return .nan }

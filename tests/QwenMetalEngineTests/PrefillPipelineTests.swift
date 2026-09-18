@@ -426,10 +426,10 @@ final class PrefillPipelineTests: XCTestCase {
     func testDispatchCountsPinnedPerChunkAndLogitsComputedOnce() throws {
         let model = try makeTiledModel(chunkSize: 4)
         _ = try model.lastPositionLogits(ids: [1, 2, 3, 4, 5])
-        XCTAssertEqual(model.lastStepDispatchCount, 19,
+        XCTAssertEqual(model.lastStepDispatchCount, 18,
                        "last chunk: 1 gather + 15 layer + 3 logits tail")
         let span = try XCTUnwrap(model.lastCallSpan)
-        XCTAssertEqual(span.dispatchCount, 41, "22 (chunk 1) + 19 (chunk 2)")
+        XCTAssertEqual(span.dispatchCount, 33, "15 (chunk 1) + 18 (chunk 2)")
         XCTAssertEqual(span.stepCount, 5, "span accounts prompt tokens")
     }
 
@@ -444,9 +444,9 @@ final class PrefillPipelineTests: XCTestCase {
         let selecting = try makeTiledModel(chunkSize: 4)
         let token = try selecting.nextGreedyToken(ids: [1, 2, 3, 4, 5])
         XCTAssertEqual(token, Argmax.firstIndex(logits))
-        XCTAssertEqual(selecting.lastStepDispatchCount, 20,
+        XCTAssertEqual(selecting.lastStepDispatchCount, 19,
                        "last chunk gains exactly the argmax dispatch")
-        XCTAssertEqual(selecting.lastCallSpan?.dispatchCount, 42)
+        XCTAssertEqual(selecting.lastCallSpan?.dispatchCount, 34)
     }
 
     // MARK: - Edge 8: decode handoff
@@ -677,7 +677,7 @@ final class PrefillPipelineTests: XCTestCase {
         XCTAssertEqual(span.stepCount, 5)
         XCTAssertGreaterThan(span.gpuSeconds, 0)
         XCTAssertGreaterThanOrEqual(span.wallSeconds, span.gpuSeconds)
-        XCTAssertEqual(span.dispatchCount, 41)
+        XCTAssertEqual(span.dispatchCount, 33)
     }
 
     /// A tiled call that throws in validation leaves NO stale span behind
@@ -701,8 +701,9 @@ final class PrefillPipelineTests: XCTestCase {
     /// sequential bitwise equality is NOT required). DispatchCounter tells
     /// the paths apart on the same prompt: sequential runs the per-token
     /// fused structure (4 × 8 no-logits steps + one 10-dispatch logits
-    /// step = 42), tiled runs ONE chunk (gather 1 + 13 fixed + 2·5 SDPA +
-    /// logits tail 3 = 27; the P5-3 measured pins, P2-5 rule).
+    /// step = 42), tiled runs ONE chunk (gather 1 + 14 per layer + logits
+    /// tail 3 = 18; measured pins, P2-5 rule — 27 at P5-3, before PF-1's
+    /// one-dispatch batched SDPA).
     func testBothPrefillPathsLoadPassSpotCheckAndCounterDistinguishes() throws {
         let tiled = try makeDefaultModel()
         let sequential = try makeSequentialModel()
@@ -723,7 +724,7 @@ final class PrefillPipelineTests: XCTestCase {
         XCTAssertEqual(tiledSpan.stepCount, 5)
         XCTAssertEqual(sequentialSpan.stepCount, 5)
         XCTAssertEqual(sequentialSpan.dispatchCount, 4 * 8 + 10)
-        XCTAssertEqual(tiledSpan.dispatchCount, 27)
+        XCTAssertEqual(tiledSpan.dispatchCount, 18)
         XCTAssertNotEqual(tiledSpan.dispatchCount, sequentialSpan.dispatchCount,
                           "DispatchCounter distinguishes the paths")
 
@@ -763,7 +764,7 @@ final class PrefillPipelineTests: XCTestCase {
             XCTAssertEqual(metrics.timing?.tokenCount, 3)
             spans[model.prefillPath] = prefill
         }
-        XCTAssertEqual(spans[.tiled]?.span.dispatchCount, 28,
+        XCTAssertEqual(spans[.tiled]?.span.dispatchCount, 19,
                        "selecting form: the single chunk gains the argmax dispatch")
         XCTAssertEqual(spans[.sequential]?.span.dispatchCount, 4 * 8 + 11)
     }

@@ -4317,3 +4317,114 @@ copy, final norm, lm_head, argmax).
 Per hard rule 6 these never loosen once tests exist; a failure is a
 harness bug to investigate, not a bound to tune. DIAGNOSTIC mode only —
 never a benchmark row (the P4-1 principle).
+
+## 2026-09-18 — PF-1: prefill attribution harness + two levers landed — Mac prefill GPU 3.67 → 2.10 s (norm 1209 → 37 ms, attention 788 → 480 ms, 48,446 → 790 dispatches); GEMM is now the ceiling
+
+Deliverable (PF-1; the P5-EXEC iterate round's first task, picked by
+James's instruction ahead of P5-2B). Measure-first per the PLAN rule; no
+gate touched; every constant below is a pre-committed value used verbatim.
+
+- **Harness (the measurement came first):** `GPUModel.attributedPrefill`
+  runs the tiled prefill with the P4-1 class-split machinery (extracted
+  into a shared `runClassSplit`; `encodePrefillChunk` now takes an
+  `encoderFor(class)` like `encodeForward`, so production and diagnostic
+  cannot drift) — one command buffer per contiguous same-class run per
+  chunk. New `KernelClass.gemm` labels the P5-2 GEMMs distinctly from
+  decode's matvec (always zero in decode attributions; the decode export
+  gained the zero line). `PrefillAttributionRunner` interleaves
+  attributed and production prefills from an empty cache; CLI `attribute
+  --mode prefill [--runs N] [--prefill-chunk C]`; app attribution
+  picker decode/prefill (prefill-summarize; needs Prefill = tiled). The
+  2026-09-18 pre-committed bounds ALL held: exact bookkeeping, bracketing,
+  coverage, production cross-check (ratio 0.98 before / 1.00 after on the
+  real artifact), bitwise production invariance. One fixture note (bound
+  untouched): on a hidden-512 synthetic model the levers made a 16-position
+  chunk so cheap (≈2.5 ms) that the ≈21 per-chunk command-buffer gaps
+  matched the kernel time and class-sum sat at 49.5% of the span — the
+  fixture moved into the bound's regime (hidden 1024, two full
+  128-position chunks; ragged chunking stays pinned on the tiny fixture).
+  This is the diagnostic mode's own overhead, not production's (one
+  buffer per chunk).
+- **Mac attribution BEFORE (real artifact, prefill-summarize 852, C=512,
+  DIAGNOSTIC; results.md):** gemm 1605.6 ms (44.5%, 392 dispatches),
+  norm+elementwise 1209.0 ms (33.5%, 336), attention 788.0 ms (21.9%,
+  47,712), head/tail 1.9 ms; production 3671.4 ms @ 48,445. Reading: the
+  naive `rmsnorm_f16` sums the whole row per THREAD (O(dim²)/row) — a
+  third of the span in 336 dispatches; the per-position SDPA loop is a
+  fifth across 47.7k dispatches. Both P5-3 implementation facts confirmed
+  as material on Mac (device split: P5-5B's attribution export).
+- **Lever 2 — cooperative batched RMSNorm** (`prefill_rmsnorm_rows_f16`,
+  `PrefillKernels.encodeRMSNormRows`): one threadgroup per row, strided
+  partial sums + fixed tree (the P4-6 pattern); per-element formula
+  verbatim, sum order differs (norm-species gate, 2026-09-12 decision);
+  bitwise deterministic. Kernel tests first: vs the CPU RMSNorm module at
+  max(2⁻⁸·M, 2⁻¹¹) across dim 67 / 300 / 6144 / 2048×64 rows, determinism,
+  rejects. Replaces the naive norm on the prefill path only (decode
+  untouched).
+- **Lever 1 — batched causal SDPA** (`PrefillSDPAKernel`, D4 option 2):
+  one dispatch per layer per chunk, one threadgroup per (position, head)
+  — 8,192 at C=512 — running the P4-7 pass-1 body verbatim over depth
+  0...basePosition+p with a fixed-order simdgroup merge and a direct fp16
+  store; no split-K, no partial-state scratch (memory budget unchanged);
+  depth-1 exact V-row copy. Not bitwise vs the per-position split-K loop
+  (different reduction partition — spec D6 "either D4 form", attention
+  constant). Kernel tests first, all held first run: vs the sgemm oracle
+  at max(2⁻⁷·M, 2⁻¹¹) (small dims from depth 0; headDim 128 at a chunk
+  boundary basePosition 9 on layer 1), bitwise V-row copy at depth 1 with
+  adversarial patterns, causality by NaN-poisoned-slot bitwise invariance,
+  determinism, one dispatch, derived 2× bound vs the per-position loop,
+  rejects. The chunk structure is 14 dispatches per layer, chunk-size
+  independent (was 13 + 2·B): measured pins moved red-first — tiny 1-layer
+  C=4 prompt 5: 15 + 18 (was 22 + 19), selecting 34; real dims one chunk
+  1 + 28·14 + 3 + 1 = 397; 852 tokens 790 (was 48,446).
+- **Mac attribution AFTER:** gemm 1583.3 ms (75.3%), attention 480.0 ms
+  (22.8%, 56 dispatches), norm+elementwise 37.4 ms (1.8%), head/tail
+  1.9; production **2101.1 ms @ 789** (−43%), 405 tok/s on GPU time.
+  Mac "after PF-1" rows (results.md): warm span median **381.84 tok/s**
+  (334.49–382.72, n=3; cold 310.66), GPU 2.103–2.105 s, 790 dispatches on
+  every run — ×1.63 vs the P5-4 Mac rows (234.85), ≈7.2× the sequential
+  cross-check (52.70). Chunk-size spots (n=1, diagnostic): C=256 373.35,
+  C=852 386.54 (+1.2% GPU over C=512) — the default C stays 512 (reported
+  parameter; a re-sweep is a P5-EXEC-time question). Decode tail
+  unchanged (21.84–21.91 ms @ 200 — the decode path is untouched by
+  construction).
+- **What the measurement says next (recorded, decisions seeded not
+  made):** (1) on Mac the prefill is now GEMM-plateau-bound — 2.40 TFLOP ÷
+  1.583 s = 1.52 TFLOPS vs the 1.57 microbench plateau; on device the
+  plateau is 0.776 TFLOPS ⇒ GEMMs alone ≥ 3.09 s per 852 tokens ⇒ ≤ 276
+  tok/s even with free attention/norms — GE-1 seeded (large-M GEMM
+  compute efficiency, measure-first; P5-2B keeps M≤8). (2) Attention's
+  remaining 480 ms is K/V re-streaming (each (position, head) threadgroup
+  reads its head's whole prefix: ≈50 GB of cache reads per prefill, ≈0.17
+  TFLOPS of math) — PF-2 seeded (query-tiled SDPA), blocked on the
+  DEVICE attribution James exports at P5-5B (Mac shares are not
+  predictive). (3) Device expectation, stated as an estimate and NOT a
+  row: if the device follows the Mac's non-GEMM collapse, 8.3 s → roughly
+  4 s per 852 tokens (≈210 tok/s) — above the 135 floor with margin; the
+  re-walk decides. Hard rule 6: 135 / 30.69 / 24.0 unchanged.
+- **Free-run divergence report on the PF-1 kernels (REPORTED, not
+  gated):** 128 free-running greedy steps × 5 prompts on the
+  production default with the batched causal SDPA + cooperative norm
+  feeding the unchanged fused decode — **first divergence: NONE on all 5
+  prompts** (all 128 tokens identical to the CPU-quant reference; texts
+  coherent). Same NONE as P2-4/P3-5/P4-4/P5-4. Harness QWEN_FREE_RUN_REPORT=1
+  + QWEN_FREE_RUN_REPORT_FILE, release build, 2453 s (this session's
+  16 GiB machine was swap-bound — the harness's memory guard killed two
+  attempts before a nohup'd run completed; recorded for DEV-1).
+- **Verification (SOP step 5):** suite minus the CPU logit gate: **500
+  tests, 0 failures** — 468 in debug (`swift test --skip <9 oracle
+  suites>`: "Executed 468 tests, with 6 tests skipped and 0 failures (0
+  unexpected) in 149.287 s"; the 6 skips are the opt-in harnesses) + 32
+  heavy oracle-suite tests release-mode in <10-min pieces: quant Tier-M 4
+  + Tier-E 3 + bf16 fixture/logit suites 17 (114.0 s), GPU-quant 250-step
+  logit suite 5 × 165–175 s (ALL held on the batched-SDPA + cooperative-
+  norm prefill), free-run report 1; the quality gate (2, CPU-quant only)
+  is untouched by GPU prefill kernels and was not re-run this task. +18
+  new tests (PrefillAttributionTests 9, PrefillLeverKernelTests 9); 5
+  measured dispatch pins moved red-first. Backlog drift test: 5 passed.
+  Release CLI `attribute --mode prefill` runs shown above; app release
+  build (generic iOS, unsigned): BUILD SUCCEEDED.
+- **Backlog:** PF-1 done; PF-2 (rank 20.48, blocked on P5-5B), GE-1
+  (20.49, ready, large), P5-5B (20.5, owner james, blocked on P5-2B)
+  seeded; P5-EXEC re-blocked on P5-5B; P5-2B now blocks P5-5B. Next
+  agent task by rank: P5-2B (20.45).

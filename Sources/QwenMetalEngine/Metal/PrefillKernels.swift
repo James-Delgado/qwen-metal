@@ -147,6 +147,53 @@ public final class PrefillKernels {
     // buffer, so the final-norm + lm_head tail and the Tier-E
     // lastLayerOutput hook read the same buffer on both prefill paths.
     // Pure fp16 move: EXACT, bit patterns preserved.
+    // PF-1 lever 2: batched RMSNorm with a COOPERATIVE per-row reduction —
+    // one threadgroup per row, each thread sums a strided slice of the
+    // squares in fp32, a fixed tree combines the partials through
+    // threadgroup memory (the P4-6 inverse_rms_cooperative pattern), and
+    // each thread then normalizes its strided elements. The per-element
+    // formula is rmsnorm_f16 VERBATIM (one fp32 product chain, one fp16
+    // rounding) — only the sum-of-squares order differs (strided + tree vs
+    // sequential), the reduction-order species the pre-committed
+    // norm-species gate covers (DECISIONS.md 2026-09-12; 2026-09-14 Phase
+    // 5 gates). The order is FIXED, so outputs are bitwise deterministic
+    // across runs. Replaces the naive rmsnorm_f16 on the prefill path,
+    // whose per-THREAD full-row sum is O(dim²) per row (the P5-3
+    // implementation fact; measured as 33.5% of the Mac prefill span at
+    // PF-1's attribution). Callers launch UNIFORM threadgroups of ≤ 256
+    // threads; no early return may precede the barriers.
+    kernel void prefill_rmsnorm_rows_f16(
+        device const half *x             [[buffer(0)]],
+        device const ushort *weight      [[buffer(1)]],
+        constant ulong &weightElemOffset [[buffer(2)]],
+        constant uint &dim               [[buffer(3)]],
+        constant float &eps              [[buffer(4)]],
+        device half *out                 [[buffer(5)]],
+        uint row [[threadgroup_position_in_grid]],
+        uint lid [[thread_position_in_threadgroup]],
+        uint tg  [[threads_per_threadgroup]]) {
+        threadgroup float partial[256];
+        const ulong base = ulong(row) * dim;
+        float mySum = 0.0f;
+        for (uint j = lid; j < dim; j += tg) {
+            float v = float(x[base + j]);
+            mySum += v * v;
+        }
+        partial[lid] = mySum;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint s = 128; s > 0; s >>= 1) {
+            if (lid < s && lid + s < tg) {
+                partial[lid] += partial[lid + s];
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        const float inverseRMS = 1.0f / sqrt(partial[0] / float(dim) + eps);
+        for (uint j = lid; j < dim; j += tg) {
+            float w = bf16_to_f32(weight[weightElemOffset + j]);
+            out[base + j] = half(w * (float(x[base + j]) * inverseRMS));
+        }
+    }
+
     kernel void prefill_copy_row_f16(device const half *src [[buffer(0)]],
                                      constant uint &row     [[buffer(1)]],
                                      constant uint &count   [[buffer(2)]],
@@ -160,6 +207,10 @@ public final class PrefillKernels {
     private let gatherPipeline: MTLComputePipelineState
     private let clusterPipeline: MTLComputePipelineState
     private let copyRowPipeline: MTLComputePipelineState
+    private let rmsnormRowsPipeline: MTLComputePipelineState
+    /// Uniform threadgroup width for the cooperative row norm (the kernel's
+    /// tree assumes ≤ 256 threads).
+    static let rmsnormThreadsPerRow = 256
 
     /// When set, every encoded dispatch increments it at the dispatch call
     /// site (P2-5 instrumentation convention).
@@ -173,6 +224,46 @@ public final class PrefillKernels {
         gatherPipeline = try pipeline("prefill_embedding_gather_q4_f16")
         clusterPipeline = try pipeline("prefill_qknorm_rope_append_f16")
         copyRowPipeline = try pipeline("prefill_copy_row_f16")
+        rmsnormRowsPipeline = try pipeline("prefill_rmsnorm_rows_f16")
+        guard rmsnormRowsPipeline.maxTotalThreadsPerThreadgroup
+                >= Self.rmsnormThreadsPerRow else {
+            throw KVCacheError.fusedKernelUnsupportedDevice(
+                threadExecutionWidth: rmsnormRowsPipeline.threadExecutionWidth,
+                maxThreadsPerThreadgroup:
+                    rmsnormRowsPipeline.maxTotalThreadsPerThreadgroup)
+        }
+    }
+
+    /// PF-1 lever 2: RMSNorm over `rows` rows of `input` ([rows, dim] fp16)
+    /// with the cooperative per-row reduction — one threadgroup per row,
+    /// `dim` elements each, bf16 `weight` at `weightByteOffset` (even, the
+    /// 16-bit-load convention). Same contract as
+    /// `DecodeKernels.encodeRMSNorm` (which it replaces on the prefill
+    /// path): fp16 in/out, fp32 math, one dispatch.
+    public func encodeRMSNormRows(
+        into encoder: MTLComputeCommandEncoder,
+        input: MTLBuffer, weight: MTLBuffer, weightByteOffset: Int,
+        rows: Int, dim: Int, eps: Float, output: MTLBuffer
+    ) throws {
+        try requirePositive(rows, "rows")
+        try requirePositive(dim, "dim")
+        let elemOffset = try normWeightElementOffset(
+            byteOffset: weightByteOffset, dim: dim, buffer: weight, name: "weight")
+        try QuantKernels.requireCapacity(input, bytes: rows * dim * 2, name: "input")
+        try QuantKernels.requireCapacity(output, bytes: rows * dim * 2, name: "output")
+
+        encoder.setComputePipelineState(rmsnormRowsPipeline)
+        encoder.setBuffer(input, offset: 0, index: 0)
+        encoder.setBuffer(weight, offset: 0, index: 1)
+        setScalar(encoder, UInt64(elemOffset), index: 2)
+        setScalar(encoder, UInt32(dim), index: 3)
+        setScalar(encoder, eps, index: 4)
+        encoder.setBuffer(output, offset: 0, index: 5)
+        dispatchCounter?.increment()
+        encoder.dispatchThreadgroups(
+            MTLSize(width: rows, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(
+                width: Self.rmsnormThreadsPerRow, height: 1, depth: 1))
     }
 
     /// Gathers + register-dequants embedding rows for `batch` token ids

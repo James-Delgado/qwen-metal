@@ -173,6 +173,9 @@ public final class GPUModel {
     /// chunk projections run through.
     private let prefillKernels: PrefillKernels?
     private let quantGemm: QuantGemmKernel?
+    /// PF-1 lever 1: the batched causal SDPA (one dispatch per layer per
+    /// chunk, D4 option 2) — present exactly on the tiled prefill path.
+    private let prefillSDPA: PrefillSDPAKernel?
     private let dispatchCounter = DispatchCounter()
 
     private let embeddingRef: MatrixRef
@@ -459,6 +462,8 @@ public final class GPUModel {
             ? try PrefillKernels(context: context) : nil
         quantGemm = prefillPath == .tiled
             ? try QuantGemmKernel(context: context) : nil
+        prefillSDPA = prefillPath == .tiled
+            ? try PrefillSDPAKernel(context: context) : nil
         decodeKernels.dispatchCounter = dispatchCounter
         attentionKernels.dispatchCounter = dispatchCounter
         quantKernels?.dispatchCounter = dispatchCounter
@@ -467,6 +472,7 @@ public final class GPUModel {
         argmaxKernel.dispatchCounter = dispatchCounter
         prefillKernels?.dispatchCounter = dispatchCounter
         quantGemm?.dispatchCounter = dispatchCounter
+        prefillSDPA?.dispatchCounter = dispatchCounter
         kvCache = try KVCache(
             device: context.device, layers: config.numHiddenLayers,
             kvHeads: kvHeads, maxContext: maxContext, headDim: headDim)
@@ -652,7 +658,34 @@ public final class GPUModel {
     ) throws -> (attribution: TokenAttribution, logits: [Float]?) {
         let position = try validateStep(token: token)
         dispatchCounter.reset()
+        let (segments, wallSeconds) = try runClassSplit { encoderFor in
+            try encodeForward(
+                token: token, position: position, computeLogits: computeLogits,
+                encoderFor: encoderFor)
+        }
+        lastStepTiming = nil
+        lastStepDispatchCount = nil
+        cachedTokens.append(token)
+        return (
+            TokenAttribution(
+                position: position, wallSeconds: wallSeconds,
+                segments: segments),
+            computeLogits ? readLogits() : nil)
+    }
 
+    /// The P4-1 class-split machinery shared by `attributedStep` and the
+    /// PF-1 `attributedPrefill`: `encode` receives an `encoderFor(class)`
+    /// that hands back the current encoder while the class is unchanged
+    /// and rolls to a fresh command buffer on every class transition
+    /// (one buffer per contiguous same-class dispatch run). Buffers are
+    /// committed back-to-back on the serial queue; one wait per buffer at
+    /// the end; per-segment GPU timestamps + DispatchCounter deltas come
+    /// back in encode order. On a mid-encode throw the already-committed
+    /// segments run to completion and the current encoder is ended — the
+    /// caller decides what state (cache append) to roll back.
+    private func runClassSplit(
+        _ encode: ((KernelClass) throws -> MTLComputeCommandEncoder) throws -> Void
+    ) throws -> (segments: [TokenAttribution.Segment], wallSeconds: Double) {
         var committed: [(kernelClass: KernelClass, buffer: MTLCommandBuffer, dispatchCount: Int)] = []
         var currentClass: KernelClass?
         var currentBuffer: MTLCommandBuffer?
@@ -674,9 +707,7 @@ public final class GPUModel {
 
         let wallStart = CACurrentMediaTime()
         do {
-            try encodeForward(
-                token: token, position: position, computeLogits: computeLogits
-            ) { kernelClass in
+            try encode { kernelClass in
                 if kernelClass == currentClass, let encoder = currentEncoder {
                     return encoder
                 }
@@ -694,10 +725,10 @@ public final class GPUModel {
                 return encoder
             }
         } catch {
-            // Already-committed segments run to completion; the token is NOT
-            // appended, so any partial KV write at `position` stays
+            // Already-committed segments run to completion; the caller does
+            // NOT append the token(s), so any partial KV write stays
             // unreachable (attention spans 0...position of APPENDED tokens
-            // only) and is overwritten by the next append at this position.
+            // only) and is overwritten by the next append there.
             currentEncoder?.endEncoding()
             throw error
         }
@@ -716,15 +747,7 @@ public final class GPUModel {
                 gpuEnd: buffer.gpuEndTime, dispatchCount: dispatchCount))
         }
         let wallEnd = CACurrentMediaTime()
-
-        lastStepTiming = nil
-        lastStepDispatchCount = nil
-        cachedTokens.append(token)
-        return (
-            TokenAttribution(
-                position: position, wallSeconds: wallEnd - wallStart,
-                segments: segments),
-            computeLogits ? readLogits() : nil)
+        return (segments, wallEnd - wallStart)
     }
 
     private func validateStep(token: Int) throws -> Int {
@@ -1058,20 +1081,7 @@ public final class GPUModel {
         // (validation included) leaves nil, never a stale span. The
         // sequential path's mid-loop throws have the same effect.
         lastCallSpan = nil
-        let suffix = Array(ids[cachedTokens.count...])
-        for token in suffix {
-            guard token >= 0, token < config.vocabSize else {
-                throw ModelError.tokenIdOutOfRange(
-                    id: token, vocabSize: config.vocabSize)
-            }
-        }
-        guard cachedTokens.count + suffix.count <= maxContext else {
-            // The sequential loop appends until the cache fills, then
-            // throws from validateStep with position == maxContext —
-            // identical payload here, thrown before any work.
-            throw KVCacheError.contextFull(
-                position: maxContext, maxContext: maxContext)
-        }
+        let suffix = try validatedTiledSuffix(ids: ids)
 
         let spanWallStart = CACurrentMediaTime()
         var spanGPUSeconds = 0.0
@@ -1095,7 +1105,8 @@ public final class GPUModel {
                 try encodePrefillChunk(
                     batch: chunk.count, basePosition: cachedTokens.count,
                     computeLogits: isLast,
-                    selectToken: isLast && selectToken, into: encoder)
+                    selectToken: isLast && selectToken
+                ) { _ in encoder }
             }
             lastStepDispatchCount = dispatchCounter.count
             spanGPUSeconds += lastStepTiming?.gpuDuration ?? 0
@@ -1117,18 +1128,110 @@ public final class GPUModel {
         return (logits, token)
     }
 
-    /// Encodes one prefill chunk of `batch` positions into one command
-    /// buffer (spec D2): batched embedding gather → per layer [batched
-    /// input norm → q/k/v GEMMs → batched qk-norm/RoPE/append → split-K
-    /// SDPA per position (D4 option 1) → o_proj GEMM → batched residual →
-    /// batched post-norm → gate/up GEMMs → batched SwiGLU → down GEMM →
-    /// batched residual] → (last chunk only) last-row copy + final norm +
-    /// lm_head (+ argmax when selecting). The residual ping-pong
+    /// The uncached suffix of `ids`, validated up front (token ids, total
+    /// context capacity) so a bad prompt throws before any dispatch or
+    /// cache write, with the same error payloads the sequential path
+    /// eventually throws (edge test 10 pins identity).
+    private func validatedTiledSuffix(ids: [Int]) throws -> [Int] {
+        let suffix = Array(ids[cachedTokens.count...])
+        for token in suffix {
+            guard token >= 0, token < config.vocabSize else {
+                throw ModelError.tokenIdOutOfRange(
+                    id: token, vocabSize: config.vocabSize)
+            }
+        }
+        guard cachedTokens.count + suffix.count <= maxContext else {
+            // The sequential loop appends until the cache fills, then
+            // throws from validateStep with position == maxContext —
+            // identical payload here, thrown before any work.
+            throw KVCacheError.contextFull(
+                position: maxContext, maxContext: maxContext)
+        }
+        return suffix
+    }
+
+    /// PF-1 (measure-first): the DIAGNOSTIC class-split form of the tiled
+    /// prefill — the same `encodePrefillChunk` structure, one command
+    /// buffer per contiguous same-class dispatch run per chunk (the P4-1
+    /// `attributedStep` machinery), so per-class GPU time inside each chunk
+    /// is attributable: GEMM / attention / norm+elementwise / head-tail.
+    /// Same validation, same cache writes, same logits as the production
+    /// path (production-path invariance is a pre-committed bound —
+    /// DECISIONS.md 2026-09-18). Requires the tiled prefill path; resets
+    /// the cache first so every attributed prefill runs the whole prompt
+    /// from depth 0 (deterministic depth accounting). Production timing
+    /// fields (`lastStepTiming`, `lastCallSpan`) are cleared — diagnostic
+    /// runs are never rows.
+    public func attributedPrefill(
+        ids: [Int]
+    ) throws -> (attribution: PrefillAttribution, logits: [Float]) {
+        guard prefillPath == .tiled, let scratch = prefillScratch else {
+            throw ModelError.badInput(detail:
+                "attributedPrefill needs the tiled prefill path "
+                + "(phase-5.md D5) — this model runs sequential prefill")
+        }
+        guard ids.count > 1 else {
+            throw ModelError.badInput(detail:
+                "attributedPrefill needs a multi-token prompt (got "
+                + "\(ids.count)); single tokens are decode steps")
+        }
+        reset()
+        lastCallSpan = nil
+        lastStepTiming = nil
+        lastStepDispatchCount = nil
+        let suffix = try validatedTiledSuffix(ids: ids)
+
+        var chunks: [TokenAttribution] = []
+        var chunkSizes: [Int] = []
+        var index = 0
+        while index < suffix.count {
+            let chunk = Array(
+                suffix[index..<min(index + prefillChunkSize, suffix.count)])
+            let isLast = index + chunk.count == suffix.count
+            let idsPtr = scratch.tokenIds.contents()
+                .assumingMemoryBound(to: UInt32.self)
+            for (i, t) in chunk.enumerated() { idsPtr[i] = UInt32(t) }
+            let basePosition = cachedTokens.count
+
+            dispatchCounter.reset()
+            let (segments, wallSeconds) = try runClassSplit { encoderFor in
+                try encodePrefillChunk(
+                    batch: chunk.count, basePosition: basePosition,
+                    computeLogits: isLast, selectToken: false,
+                    encoderFor: encoderFor)
+            }
+            cachedTokens.append(contentsOf: chunk)
+            chunks.append(TokenAttribution(
+                position: basePosition, wallSeconds: wallSeconds,
+                segments: segments))
+            chunkSizes.append(chunk.count)
+            index += chunk.count
+        }
+        return (
+            PrefillAttribution(chunks: chunks, chunkSizes: chunkSizes),
+            readLogits())
+    }
+
+    /// Encodes one prefill chunk of `batch` positions (spec D2): batched
+    /// embedding gather → per layer [cooperative batched input norm
+    /// (PF-1) → q/k/v GEMMs → batched qk-norm/RoPE/append → ONE batched
+    /// causal SDPA dispatch (PF-1, D4 option 2) → o_proj GEMM → batched
+    /// residual → cooperative batched post-norm → gate/up GEMMs → batched
+    /// SwiGLU → down GEMM → batched residual] → (last chunk only) last-row
+    /// copy + final norm + lm_head (+ argmax when selecting). 14 dispatches
+    /// per layer, chunk-size independent (was 13 + 2·B at P5-3). The
+    /// residual ping-pong
     /// (hiddenA → hiddenB → hiddenA per layer) mirrors the per-token
-    /// pipeline row-for-row.
+    /// pipeline row-for-row. `encoderFor(class)` supplies the encoder per
+    /// dispatch: the production path returns ONE encoder for every class
+    /// (one command buffer per chunk); the PF-1 diagnostic
+    /// `attributedPrefill` rolls to a fresh buffer on each class transition.
+    /// The chunk structure lives here exactly once, so the two modes cannot
+    /// drift (the P4-1 `encodeForward` pattern).
     private func encodePrefillChunk(
         batch: Int, basePosition: Int, computeLogits: Bool,
-        selectToken: Bool, into encoder: MTLComputeCommandEncoder
+        selectToken: Bool,
+        encoderFor: (KernelClass) throws -> MTLComputeCommandEncoder
     ) throws {
         let scratch = prefillScratch!
         let prefill = prefillKernels!
@@ -1148,7 +1251,7 @@ public final class GPUModel {
                 + "embedding ref — tiled prefill is packed-only (spec D5)")
         }
         try prefill.encodeEmbeddingGatherBatch(
-            into: encoder, q: weights.buffer, qByteOffset: embQ,
+            into: try encoderFor(.headTail), q: weights.buffer, qByteOffset: embQ,
             scales: weights.buffer, scalesByteOffset: embScales,
             biases: weights.buffer, biasesByteOffset: embBiases,
             tokenIds: scratch.tokenIds, batch: batch,
@@ -1156,25 +1259,29 @@ public final class GPUModel {
             output: scratch.hiddenA)
 
         for (layer, refs) in layerRefs.enumerated() {
-            // Attention half: hiddenB = h + attn(norm(h)).
-            try decodeKernels.encodeRMSNorm(
-                into: encoder, input: scratch.hiddenA, weight: weights.buffer,
+            // Attention half: hiddenB = h + attn(norm(h)). PF-1 lever 2:
+            // the cooperative row norm (the naive rmsnorm_f16 summed the
+            // whole row per THREAD — O(dim²) per row, 33.5% of the Mac
+            // prefill span at the PF-1 attribution).
+            try prefill.encodeRMSNormRows(
+                into: try encoderFor(.normElementwise), input: scratch.hiddenA,
+                weight: weights.buffer,
                 weightByteOffset: refs.inputNorm, rows: batch, dim: hidden,
                 eps: eps, output: scratch.normBatch)
             try encodeGemm(
-                refs.qProj, into: encoder, input: scratch.normBatch,
+                refs.qProj, into: try encoderFor(.gemm), input: scratch.normBatch,
                 batch: batch, outDim: qDim, inDim: hidden,
                 output: scratch.qBatch)
             try encodeGemm(
-                refs.kProj, into: encoder, input: scratch.normBatch,
+                refs.kProj, into: try encoderFor(.gemm), input: scratch.normBatch,
                 batch: batch, outDim: kvDim, inDim: hidden,
                 output: scratch.kBatch)
             try encodeGemm(
-                refs.vProj, into: encoder, input: scratch.normBatch,
+                refs.vProj, into: try encoderFor(.gemm), input: scratch.normBatch,
                 batch: batch, outDim: kvDim, inDim: hidden,
                 output: scratch.vBatch)
             try prefill.encodeQKNormRoPEAppendBatch(
-                into: encoder, qIn: scratch.qBatch, kIn: scratch.kBatch,
+                into: try encoderFor(.normElementwise), qIn: scratch.qBatch, kIn: scratch.kBatch,
                 vIn: scratch.vBatch,
                 qNormWeight: weights.buffer, qNormByteOffset: refs.qNorm,
                 kNormWeight: weights.buffer, kNormByteOffset: refs.kNorm,
@@ -1182,47 +1289,50 @@ public final class GPUModel {
                 basePosition: basePosition, batch: batch,
                 positions: maxContext, numHeads: numHeads, eps: eps,
                 cache: kvCache, layer: layer, qOut: scratch.qRoped)
-            // Causal attention (spec D4 option 1): the chunk's K/V are all
-            // appended, and position i's SDPA reads depth 0...basePosition+i
-            // only — masking within the chunk is the depth limit itself.
-            for p in 0..<batch {
-                try fusedSDPA!.encodeSDPA(
-                    into: encoder, cache: kvCache, layer: layer,
-                    position: basePosition + p,
-                    query: scratch.qRoped, queryByteOffset: p * qDim * 2,
-                    numHeads: numHeads,
-                    output: scratch.attnBatch, outputByteOffset: p * qDim * 2)
-            }
+            // Causal attention (PF-1, spec D4 option 2): the chunk's K/V are
+            // all appended; ONE dispatch covers every chunk position, each
+            // reading depth 0...basePosition+p only — masking within the
+            // chunk is the depth limit itself. Replaces the P5-3 loop of
+            // 2·B per-position split-K dispatches (measured 21.9% of the
+            // Mac prefill span across 47,712 dispatches at 852 tokens).
+            try prefillSDPA!.encodeCausalSDPABatch(
+                into: try encoderFor(.attention), cache: kvCache, layer: layer,
+                basePosition: basePosition, batch: batch,
+                query: scratch.qRoped, numHeads: numHeads,
+                output: scratch.attnBatch)
             try encodeGemm(
-                refs.oProj, into: encoder, input: scratch.attnBatch,
+                refs.oProj, into: try encoderFor(.gemm), input: scratch.attnBatch,
                 batch: batch, outDim: hidden, inDim: qDim,
                 output: scratch.projBatch)
             try decodeKernels.encodeResidualAdd(
-                into: encoder, a: scratch.hiddenA, b: scratch.projBatch,
+                into: try encoderFor(.normElementwise), a: scratch.hiddenA,
+                b: scratch.projBatch,
                 count: batch * hidden, output: scratch.hiddenB)
 
             // MLP half: hiddenA = hiddenB + mlp(norm(hiddenB)).
-            try decodeKernels.encodeRMSNorm(
-                into: encoder, input: scratch.hiddenB, weight: weights.buffer,
+            try prefill.encodeRMSNormRows(
+                into: try encoderFor(.normElementwise), input: scratch.hiddenB,
+                weight: weights.buffer,
                 weightByteOffset: refs.postAttentionNorm, rows: batch,
                 dim: hidden, eps: eps, output: scratch.normBatch)
             try encodeGemm(
-                refs.gateProj, into: encoder, input: scratch.normBatch,
+                refs.gateProj, into: try encoderFor(.gemm), input: scratch.normBatch,
                 batch: batch, outDim: intermediate, inDim: hidden,
                 output: scratch.gateBatch)
             try encodeGemm(
-                refs.upProj, into: encoder, input: scratch.normBatch,
+                refs.upProj, into: try encoderFor(.gemm), input: scratch.normBatch,
                 batch: batch, outDim: intermediate, inDim: hidden,
                 output: scratch.upBatch)
             try decodeKernels.encodeSwiGLU(
-                into: encoder, gate: scratch.gateBatch, up: scratch.upBatch,
+                into: try encoderFor(.normElementwise), gate: scratch.gateBatch, up: scratch.upBatch,
                 count: batch * intermediate, output: scratch.actBatch)
             try encodeGemm(
-                refs.downProj, into: encoder, input: scratch.actBatch,
+                refs.downProj, into: try encoderFor(.gemm), input: scratch.actBatch,
                 batch: batch, outDim: hidden, inDim: intermediate,
                 output: scratch.projBatch)
             try decodeKernels.encodeResidualAdd(
-                into: encoder, a: scratch.hiddenB, b: scratch.projBatch,
+                into: try encoderFor(.normElementwise), a: scratch.hiddenB,
+                b: scratch.projBatch,
                 count: batch * hidden, output: scratch.hiddenA)
         }
 
@@ -1232,20 +1342,21 @@ public final class GPUModel {
         // lastLayerOutput hook reads the same buffer on both prefill paths
         // — then the per-token final-norm + lm_head tail runs unchanged.
         try prefill.encodeCopyRow(
-            into: encoder, source: scratch.hiddenA, row: batch - 1,
+            into: try encoderFor(.headTail), source: scratch.hiddenA, row: batch - 1,
             count: hidden, output: hiddenA)
         try decodeKernels.encodeRMSNorm(
-            into: encoder, input: hiddenA, weight: weights.buffer,
+            into: try encoderFor(.headTail), input: hiddenA,
+            weight: weights.buffer,
             weightByteOffset: finalNormOffset, rows: 1, dim: hidden,
             eps: eps, output: normed)
         try encodeMatvec(
-            lmHeadRef, into: encoder, input: normed,
+            lmHeadRef, into: try encoderFor(.headTail), input: normed,
             outDim: config.vocabSize, inDim: hidden, output: logitsBuf,
             fp32Output: true)
         if selectToken {
             try argmaxKernel.encodeArgmax(
-                into: encoder, values: logitsBuf, count: config.vocabSize,
-                output: argmaxBuf)
+                into: try encoderFor(.headTail), values: logitsBuf,
+                count: config.vocabSize, output: argmaxBuf)
         }
     }
 

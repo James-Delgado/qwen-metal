@@ -16,6 +16,11 @@ public enum KernelClass: String, CaseIterable, Sendable {
     case normElementwise = "norm+elementwise"
     /// Embedding lookup, final norm, and the lm_head projection.
     case headTail = "head/tail"
+    /// PF-1: the batched prefill projections through the P5-2 tiled
+    /// dequant-GEMM (q/k/v, o, gate/up, down at M = chunk positions).
+    /// Labeled distinctly from `matvec` so a prefill breakdown is never
+    /// read as a decode one; always zero in decode attributions.
+    case gemm
 }
 
 /// One diagnostic decode token's per-class GPU time, from per-class

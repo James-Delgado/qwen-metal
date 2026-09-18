@@ -38,11 +38,15 @@ enum BundledPrompt: String, CaseIterable, Identifiable {
 enum AppError: Error, CustomStringConvertible {
     case missingBundledPrompt(String)
     case noModelDirectory(searched: String)
+    case prefillAttributionNeedsTiled
 
     var description: String {
         switch self {
         case .missingBundledPrompt(let name):
             return "bundled prompt '\(name).rendered.txt' missing from the app bundle"
+        case .prefillAttributionNeedsTiled:
+            return "prefill attribution needs the tiled prefill path — set "
+                + "Weights q4g64, Kernels fused, Prefill tiled and reload"
         case .noModelDirectory(let searched):
             return "no model directory found under \(searched)\n\nCopy the "
                 + "pinned model folder (one .safetensors checkpoint + "
@@ -395,7 +399,17 @@ final class AppModel: ObservableObject {
     /// forwards via the engine's AttributionRunner. DIAGNOSTIC ONLY: the
     /// export is never a benchmark row (the P4-5 on-device breakdown James
     /// records comes from this button, labeled as diagnostic).
-    func runAttribution() async {
+    /// Which attribution the Benchmark screen runs: the P4-1 per-token
+    /// DECODE breakdown (decode-essay, 64 interleaved forwards) or the PF-1
+    /// PREFILL breakdown (prefill-summarize, interleaved class-split vs
+    /// production tiled prefills). Both DIAGNOSTIC — never rows.
+    enum AttributionMode: String, CaseIterable, Identifiable {
+        case decode
+        case prefill
+        var id: String { rawValue }
+    }
+
+    func runAttribution(mode: AttributionMode = .decode) async {
         guard !isRunning, !isLoading else { return }
         isRunning = true
         errorMessage = nil
@@ -404,8 +418,40 @@ final class AppModel: ObservableObject {
         defer { isRunning = false }
         do {
             let engine = try await loadEngineIfNeeded()
-            let promptText = try BundledPrompt.decodeEssay.text()
             let stopFlag = self.stopFlag
+            if mode == .prefill {
+                // PF-1: needs the tiled path (q4g64 + fused + Prefill tiled).
+                guard engine.gpuModel.prefillPath == .tiled else {
+                    throw AppError.prefillAttributionNeedsTiled
+                }
+                let promptText = try BundledPrompt.prefillSummarize.text()
+                statusLine = "prefill attribution run (DIAGNOSTIC, "
+                    + "\(BenchDefaults.prefillAttributionRuns) interleaved "
+                    + "prefills)…"
+                let report: String =
+                    try await Task.detached(priority: .userInitiated) {
+                        let promptIds = engine.tokenizer.encode(promptText)
+                        let runner = PrefillAttributionRunner(
+                            gpuModel: engine.gpuModel,
+                            maxContext: engine.contextLimit)
+                        let result = try runner.run(
+                            promptIds: promptIds,
+                            runs: BenchDefaults.prefillAttributionRuns,
+                            shouldStop: { stopFlag.isSet },
+                            onRun: { run in self.postProgress(run * 16) })
+                        return result.exportText(
+                            dateStamp: Self.dateStamp(),
+                            deviceLabel: Self.deviceModelIdentifier(),
+                            osVersion: "iOS \(Self.osVersionString())",
+                            residency: engine.residency)
+                    }.value
+                lastReport = report
+                statusLine = stopFlag.isSet
+                    ? "prefill attribution stopped early — partial diagnostic"
+                    : "prefill attribution complete"
+                return
+            }
+            let promptText = try BundledPrompt.decodeEssay.text()
             statusLine = "attribution run (DIAGNOSTIC, "
                 + "\(BenchDefaults.attributionDecodeTokens) forwards)…"
             let report: String =

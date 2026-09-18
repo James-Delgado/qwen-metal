@@ -57,6 +57,11 @@ QwenMetalApp.entitlements   Increased Memory Limit (Phase 2 needs ~4.0 GB)
     512 — default for the P5-5 session; the M=8 gate is best-of ≥3 runs,
     the curve is reported). Same export shape as the CLI
     `microbench --kernel matvec|gemm`.
+  - *attribution*: breakdown picker decode (P4-1, decode-essay) / prefill
+    (PF-1: per-class GPU time inside the tiled prefill chunks,
+    prefill-summarize, 4 interleaved prefills; needs Prefill = tiled).
+    DIAGNOSTIC exports — never rows; the device prefill split feeds the
+    Phase 5 iterate decisions (PF-2 / GE-1).
   - Prefill toggle sequential / tiled (q4g64 + fused only; P5-4, phase-5.md
     D5) — tiled (chunked batched prefill, C=512) is the default; sequential
     exists for the P5-5 interleaved sequential-vs-tiled before/after row

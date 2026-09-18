@@ -26,6 +26,9 @@ struct BenchmarkView: View {
     /// P5-5 session default: the GEMM M-sweep (the Phase 5 gate); matvec
     /// stays selectable for the Phase 3 protocol.
     @State private var microbenchKernel: AppModel.MicrobenchKernel = .gemm
+    /// PF-1: prefill breakdown by default for the iterate round; decode
+    /// stays selectable (the P4-1 breakdown).
+    @State private var attributionMode: AppModel.AttributionMode = .prefill
     @State private var batteryNote = ""
     @State private var coldWarmNote = ""
 
@@ -144,11 +147,29 @@ struct BenchmarkView: View {
                                 .font(.caption)
                         }
                     case .attribution:
-                        Text("P4 D1 per-kernel-class GPU attribution "
-                            + "(DIAGNOSTIC — never a benchmark row). "
-                            + "decode-essay, 64 interleaved forwards; feeds "
-                            + "the P4-EXEC roofline decomposition.")
-                            .font(.caption)
+                        Picker("Breakdown", selection: $attributionMode) {
+                            ForEach(AppModel.AttributionMode.allCases) {
+                                Text($0.rawValue).tag($0)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(model.isRunning)
+                        switch attributionMode {
+                        case .decode:
+                            Text("P4 D1 per-kernel-class GPU attribution "
+                                + "(DIAGNOSTIC — never a benchmark row). "
+                                + "decode-essay, 64 interleaved forwards; feeds "
+                                + "the P4-EXEC roofline decomposition.")
+                                .font(.caption)
+                        case .prefill:
+                            Text("PF-1 per-kernel-class GPU attribution inside "
+                                + "the tiled prefill chunks (DIAGNOSTIC — never "
+                                + "a benchmark row). prefill-summarize, "
+                                + "\(BenchDefaults.prefillAttributionRuns) "
+                                + "interleaved prefills (class-split vs "
+                                + "production); needs Prefill = tiled.")
+                                .font(.caption)
+                        }
                     case .overheadAnatomy:
                         Text("OA-1 wall-GPU overhead anatomy (DIAGNOSTIC — "
                             + "never a benchmark row). decode-essay, 96 "
@@ -167,6 +188,7 @@ struct BenchmarkView: View {
                         Button("Run") {
                             let prompt = burstPrompt
                             let kernel = microbenchKernel
+                            let attribution = attributionMode
                             let battery = batteryNote
                             let coldWarm = coldWarmNote
                             let mode = mode
@@ -187,7 +209,7 @@ struct BenchmarkView: View {
                                         batteryNote: battery,
                                         coldWarmNote: coldWarm)
                                 case .attribution:
-                                    await model.runAttribution()
+                                    await model.runAttribution(mode: attribution)
                                 case .overheadAnatomy:
                                     await model.runOverheadAnatomy()
                                 }

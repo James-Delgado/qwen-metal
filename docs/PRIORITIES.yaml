@@ -1897,8 +1897,9 @@ tasks:
   - id: PF-1
     rank: 20.46
     title: "Prefill attention throughput levers if measurements say they pay (SDPA scratch serialization / batched causal kernel / batched-norm cost)"
-    status: in_progress
+    status: done
     started_at: 2026-09-18T03:21:34Z
+    completed_at: 2026-09-18T04:11:10Z
     depends_on: [P5-3]
     blocks: []
     deliverable:
@@ -1936,6 +1937,21 @@ tasks:
       loop / norms / GEMMs / encodes, the P4-1 pattern) BEFORE any
       kernel change; then lever 1 (SDPA serialization) and lever 2
       (batched-norm O(dim^2)). Re-walk the floor at the same 135 gate.
+      2026-09-18 (done): prefill attribution harness landed
+      (GPUModel.attributedPrefill + PrefillAttributionRunner; CLI
+      `attribute --mode prefill`; app attribution picker decode/prefill;
+      bounds pre-committed, all held). Mac BEFORE: gemm 44.5% /
+      norm+elem 33.5% (naive O(dim^2) norm) / attention 21.9% (47,712
+      dispatches). Levers landed with kernel-level oracle tests first:
+      cooperative batched RMSNorm (PrefillKernels.encodeRMSNormRows)
+      and ONE batched causal SDPA dispatch per layer (PrefillSDPAKernel,
+      D4 option 2, no scratch). Mac AFTER: production GPU 3.67 -> 2.10 s
+      (norm+elem 1209 -> 37 ms; attention 788 -> 480 ms; dispatches
+      48,446 -> 790); warm rows 234.85 -> 381.84 tok/s median. Tier-M/E
+      + 250-step logit suite re-verified on the new kernels. Follow-ups:
+      PF-2 (query-tiled attention, measure-first), GE-1 (large-M GEMM
+      compute efficiency), P5-5B (device re-walk, James, detached).
+      See DECISIONS.md 2026-09-18 PF-1 entry.
 
   - id: DI-1
     rank: 20.47
@@ -1974,7 +1990,7 @@ tasks:
     title: "M<=8 GEMM weight-stream optimization ahead of the P5-5 gate walk (Mac M=8 at 46% of the matvec aggregate)"
     status: ready
     depends_on: [P5-2]
-    blocks: []
+    blocks: [P5-5B]
     deliverable:
       file: "engine package (Metal GEMM kernel + gemm microbench)"
       tests: "full P5-2 GEMM suite re-passes after every iteration (hard rule 3); microbench spot checks stay green; no gate touched"
@@ -2002,6 +2018,72 @@ tasks:
       (plateau ~0.78 TFLOPS). Per-shape attribution first (P5-2 lever
       list), then the m8 weight-stream levers; re-walk under the same
       gate (never loosened).
+
+  - id: PF-2
+    rank: 20.48
+    title: "Query-tiled causal prefill SDPA (share K/V loads across positions) if the DEVICE prefill attribution says attention pays"
+    status: blocked
+    depends_on: [P5-5B]
+    blocks: []
+    deliverable:
+      file: "engine package (Metal/PrefillSDPAKernel) OR a DECISIONS.md close-out note"
+      tests: "kernel-level oracle tests at the attention constant + causality/determinism (PrefillLeverKernelTests pattern) BEFORE any timing; full prefill suites re-pass"
+    est_complexity: medium
+    notes: |
+      Seeded 2026-09-18 by PF-1 (Mac attribution AFTER the levers):
+      attention is 480 ms / 22.8% of the Mac prefill span at only 56
+      dispatches — the batched causal kernel streams each head's whole
+      K/V prefix once per (position, head) threadgroup (~50 GB of cache
+      reads per 852-token prefill over 28 layers, ~0.17 TFLOPS of
+      attention math). Query-tiling (several positions per threadgroup
+      sharing K/V loads; flash-attention structure) is the lever.
+      Measure-first: engage only if James's DEVICE prefill attribution
+      (app attribution picker -> prefill) shows attention material
+      after P5-5B; the Mac share is not predictive.
+
+  - id: GE-1
+    rank: 20.49
+    title: "Large-M GEMM compute efficiency: the device plateau (0.78 TFLOPS at M>=64) caps prefill at ~276 tok/s — measure where the kernel sits vs the A17 Pro peak and iterate if it pays"
+    status: ready
+    depends_on: [PF-1]
+    blocks: []
+    deliverable:
+      file: "engine package (Metal/QuantGemmKernel large-M path + gemm microbench attribution) OR a DECISIONS.md close-out note"
+      tests: "full P5-2 GEMM suite re-passes after every iteration (hard rule 3); microbench spot checks green; no gate touched"
+    est_complexity: large
+    notes: |
+      Seeded 2026-09-18 by PF-1: after the levers, the Mac prefill span
+      is 75% GEMM running AT the Mac microbench plateau (1.52 of 1.57
+      TFLOPS) — the GEMM kernel's compute efficiency is now the
+      structural ceiling. On device the plateau is 0.776 TFLOPS (P5-5
+      M-sweep, saturating by M=64), i.e. the layer GEMMs alone need
+      >= 3.09 s per 852-token prefill (<= 276 tok/s ceiling), while MLX's
+      ~370 tok/s implies >= 1.04 TFLOPS end-to-end. Measure-first: the
+      kernel's simdgroup_matrix tile shape, threadgroup staging, and
+      dequant placement vs a plain fp16 GEMM ceiling on the same device;
+      P5-2B covers M<=8 separately. Never blocks the P5-5B re-walk.
+
+  - id: P5-5B
+    rank: 20.5
+    title: "Phase 5 device RE-WALK (James, detached): prefill floor + M=8 microbench + decode regression gates, interleaved sequential-vs-tiled before/after, device PREFILL attribution export"
+    status: blocked
+    owner: james
+    depends_on: [PF-1, P5-2B]
+    blocks: [P5-EXEC, PF-2]
+    deliverable:
+      file: "benchmarks/results.md rows + DECISIONS.md gate verdicts"
+      tests: "same pins as P5-5 (D8 + bookends, DETACHED home-screen launch confirmed, validation OFF recorded, >=3 warm repeats median+range); gates unchanged: >=135 tok/s, >=30.69 GB/s at M=8, >=24.0 window median"
+    est_complexity: medium
+    notes: |
+      Seeded 2026-09-18 by the P5-EXEC iterate decision (James). Same
+      session order as P5-5 (T0, T1 bookend, S/T x3 interleaved, T-last
+      x2, decode-essay x3, gemm x3, attached footprint read) PLUS one
+      prefill attribution export (attribution picker -> prefill) so the
+      device per-class split is on record for PF-2/GE-1. Relaunch from
+      the home screen after the Xcode install (the P5-5 caveat). Waits
+      for P5-2B so the M=8 gate is walked on the optimized kernel; the
+      prefill floor could be re-walked earlier if James wants an interim
+      read (the PF-1 Mac gain is x1.63).
 
   - id: P5-5
     rank: 20.5
@@ -2046,8 +2128,8 @@ tasks:
   - id: P5-EXEC
     rank: 21
     title: "Phase 5 exit milestone (all P5 tasks done, exit criteria walked, prefill-vs-MLX judgment)"
-    status: ready
-    depends_on: [P5-1, P5-2, P5-3, P5-4, P5-5]
+    status: blocked
+    depends_on: [P5-1, P5-2, P5-3, P5-4, P5-5, P5-5B]
     blocks: [SPEC-P6]
     deliverable:
       file: "per docs/phases/phase-5.md"

@@ -807,6 +807,80 @@ macOS 26.5.1 (25F80).
 | 2026-09-16 | Apple M2 Pro (Mac, dev machine) | 64 | 6.49 | 6.49 | 6.47–6.49 | 1476.24 | 1477.81 | PROVISIONAL. Effective GB/s is the pinned normalization (actual W traffic 2×). |
 | 2026-09-16 | Apple M2 Pro (Mac, dev machine) | 512 | 0.86 | 0.86 | 0.86–0.86 | 1566.56 | 1567.14 | PROVISIONAL. Compute plateau ≈ 1.57 TFLOPS fp32 — the denominator the P5-4 prefill "after" rows above are read against. Actual W traffic 16×. |
 
+## Phase 5 iterate round — PF-1 prefill attribution + levers, Mac dev-loop (PROVISIONAL)
+
+### 2026-09-18 — Mac prefill attribution "before" and "after" the PF-1 levers, M2 Pro
+
+First per-class GPU attribution INSIDE the tiled prefill chunks (the PF-1
+harness: per-class command-buffer splits per chunk, interleaved with
+production one-buffer-per-chunk prefills of the same prompt from an empty
+cache; DIAGNOSTIC — never a benchmark row; sanity band [0.5×, 2.0×]
+pre-committed in DECISIONS.md 2026-09-18). Release CLI `attribute --mode
+prefill --runs 6`, prefill-summarize 852, C=512, same machine/artifact as
+the P5-4 rows. "Before" = the P5-3/P5-4 pipeline (per-position split-K
+SDPA loop, naive O(dim²) row norm); "after" = PF-1 lever 2 (cooperative
+batched RMSNorm) + lever 1 (one batched causal SDPA dispatch per layer).
+Mac fractions do not predict device fractions (standing precedent) — the
+device attribution is James's (app attribution picker → prefill).
+
+| Date | Build | gemm | attention | norm+elementwise | head/tail | Class-sum (median ms/prefill) | Production GPU ms/prefill @ dispatches | GPU-time tok/s | Sanity ratio |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-18 | before (P5-4 @ ca9cd6c + harness) | 1605.6 ms (44.5%) / 392 | 788.0 ms (21.9%) / 47712 | 1209.0 ms (33.5%) / 336 | 1.9 ms (0.1%) / 5 | 3596.1 (span 3640.1, wall 3725.1) | 3671.4 @ 48445 | 232.1 | 0.98 |
+| 2026-09-18 | after (PF-1 levers 1 + 2) | 1583.3 ms (75.3%) / 392 | 480.0 ms (22.8%) / 56 | 37.4 ms (1.8%) / 336 | 1.9 ms (0.1%) / 5 | 2102.5 (span 2103.0, wall 2103.4) | 2101.1 @ 789 | 405.5 | 1.00 |
+
+Readings:
+
+- **norm+elementwise 1209 → 37 ms (−97%)** with the dispatch count
+  unchanged (336): the naive `rmsnorm_f16` summed the full row per THREAD
+  (O(dim²) per row — 512 rows × 2048² MACs per dispatch); the cooperative
+  row norm pays the sum once per row. On Mac this was a third of the
+  whole prefill.
+- **attention 788 → 480 ms (−39%) at 47,712 → 56 dispatches**: the batched
+  causal kernel removes the per-position serialization and 2·C encodes
+  per layer. What remains is K/V re-reading: every (position, head)
+  threadgroup streams its head's whole K/V prefix — ≈50 GB of cache
+  reads per 852-token prefill across 28 layers — so the kernel runs at
+  ≈0.17 TFLOPS of attention math against ≈100 GB/s of cache traffic.
+  Query-tiling (several positions per threadgroup sharing K/V loads, the
+  flash-attention structure) is the next lever if the DEVICE attribution
+  shows attention material (seeded PF-2, measure-first).
+- **gemm unchanged at ≈1.58–1.61 s** and now 75% of the span: 2.40 TFLOP
+  of layer GEMMs ÷ 1.583 s ≈ **1.52 TFLOPS = the Mac M=512 microbench
+  plateau (1.57)**. On Mac the tiled prefill is GEMM-plateau-bound after
+  PF-1; the device plateau is 0.78 TFLOPS (P5-5 rows), so the device
+  ceiling with everything else free is ≈276 tok/s — the GEMM kernel's
+  compute efficiency is the remaining structural lever (P5-2B for M≤8;
+  a large-M efficiency item is seeded for measurement).
+- Production dispatch count 48,446 → **790** per 852-token prefill (chunk
+  1: 1 + 28·14 = 393; chunk 2: 393 + 3 + 1 = 397) — chunk-size
+  independent per layer now.
+
+### 2026-09-18 — Mac tiled "after PF-1" prefill rows, M2 Pro
+
+Same protocol, command, and prompt feeding as the 2026-09-16 P5-4 rows
+above (release CLI `generate --backend gpu --weights q4g64 --max-tokens 8`,
+tiled default C=512, prefill-summarize 852, `$(cat …)` + `$'\n\n'`).
+Release build, Xcode 26.6 (17F113), macOS 26.5.1 (25F80). Dev-loop sanity
+only; the claim-grade before/after is the device re-walk (P5-5B, James,
+detached).
+
+| Date | Device | Prompt (tokens) | Run | Cold/warm | Prefill path | Prefill span wall s | Prefill tok/s (of record) | Span GPU s | Span wall−GPU s | Prefill dispatches | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-18 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | 1 | cold | tiled (C=512) | 2.743 | 310.66 | 2.115 | 0.628 | 790 | PROVISIONAL. First run after load. |
+| 2026-09-18 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | 2 | warm | tiled (C=512) | 2.547 | 334.49 | 2.104 | 0.443 | 790 | PROVISIONAL. Wall−GPU outlier (GPU time identical to runs 3–4). |
+| 2026-09-18 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | 3 | warm | tiled (C=512) | 2.231 | 381.84 | 2.105 | 0.126 | 790 | PROVISIONAL. **Warm median row: 381.84 tok/s** (warm range 334.49–382.72, n=3; GPU-time range 2.103–2.105 s ⇒ 405 tok/s on GPU time). |
+| 2026-09-18 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | 4 | warm | tiled (C=512) | 2.226 | 382.72 | 2.103 | 0.123 | 790 | PROVISIONAL. |
+| 2026-09-18 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | x | warm | tiled (C=256) | 2.282 | 373.35 | 2.153 | 0.129 | 1576 | PROVISIONAL, chunk-size spot (diagnostic, n=1). |
+| 2026-09-18 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | x | warm | tiled (C=852, one chunk) | 2.204 | 386.54 | 2.077 | 0.127 | 397 | PROVISIONAL, chunk-size spot (diagnostic, n=1): +1.2% GPU over C=512 — the default C stays 512 (reported parameter; re-sweep is a P5-EXEC-time question). |
+
+Readings: vs the 2026-09-16 P5-4 Mac rows (warm median 234.85 tok/s,
+GPU 3.487 s) the same build lineage now measures **381.84 tok/s warm
+median, GPU 2.10 s (−40%)** — ×1.63 on Mac from the two PF-1 levers;
+same-session cross-check ratio vs sequential (52.70 at P5-4) ≈ 7.2×.
+Decode tail unchanged (median GPU 21.84–21.91 ms @ 200; the decode path
+is untouched — the batched SDPA and cooperative norm exist on the prefill
+path only). The DI-1 label now reads "UNSTABLE 200–397".
+
 ## Phase 5 — on-device rows, iPhone 15 Pro (P5-5, James)
 
 ### 2026-09-18 — iPhone 15 Pro Phase 5 rows: prefill floor FAILED (95.37 tok/s vs ≥135), GEMM M=8 FAILED (20.45 GB/s vs ≥30.69), decode regression PASS (30.55), tiled-vs-sequential CLAIM-GRADE ≈2.96×

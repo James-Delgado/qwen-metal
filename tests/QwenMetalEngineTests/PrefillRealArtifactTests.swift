@@ -53,7 +53,8 @@ final class PrefillRealArtifactTests: XCTestCase {
     /// per-engine-exact span, both continue into the unchanged fused
     /// decode, and DispatchCounter tells them apart: sequential measures
     /// (P−1)·197 + 200 on the selecting path (the P5-1 structural
-    /// cross-check), tiled a single-chunk count that is far smaller.
+    /// cross-check), tiled a single-chunk count that is far smaller and
+    /// independent of P since PF-1 (one batched SDPA dispatch per layer).
     func testDefaultTiledAndSequentialBothLoadOnRealArtifact() throws {
         try SharedQuantGPUModel.skipUnlessReady()
         let packed = try PackedCheckpoint(
@@ -87,8 +88,9 @@ final class PrefillRealArtifactTests: XCTestCase {
         XCTAssertEqual(sequentialSpan.dispatchCount, (p - 1) * 197 + 200)
         XCTAssertEqual(
             tiledSpan.dispatchCount,
-            1 + 28 * (13 + 2 * p) + 3 + 1,
-            "one chunk: gather + 28·(13 fixed + 2·P SDPA) + logits tail 3 + argmax")
+            1 + 28 * 14 + 3 + 1,
+            "one chunk: gather + 28·14 (PF-1: one batched SDPA per layer) + "
+            + "logits tail 3 + argmax — chunk-size independent")
         XCTAssertLessThan(tiledSpan.dispatchCount, sequentialSpan.dispatchCount)
         XCTAssertGreaterThanOrEqual(tiledSpan.wallSeconds, tiledSpan.gpuSeconds)
         XCTAssertGreaterThanOrEqual(
