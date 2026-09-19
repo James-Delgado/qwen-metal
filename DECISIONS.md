@@ -4545,3 +4545,110 @@ guarded every microbench figure.
   follow-ups: the device attribution export P5-5B already carries is the
   next measurement; a device re-tune of the m8 geometry, if the re-walk
   shows one is needed, is a constant change under this entry's ledger.
+
+## 2026-09-19 — DI-1 DECIDED (James): keep the step-0 decode record, labeled (option b)
+
+Decided in conversation before the P5-5B rows: the P2-5 per-token
+collector keeps recording the prompt call's last command buffer as
+generated-token 0 (option b — no protocol change, per-token n unchanged on
+every row since Phase 2). The export already labels the consequence on
+tiled rows ("UNSTABLE 200–397 dispatches/token" — the last chunk's
+dispatch count vs decode's 200); that label is the record. Known,
+accepted effects (from the DI-1 seed): short-run `overall tok/s` and
+all-tokens-scope latency variance carry the last-chunk record on tiled
+rows. NOT affected: the canonical 128–512 window rate (the decode gate
+metric), window-scope variance, and the D1 prefill span. No code change;
+DI-1 closes on this entry.
+
+## 2026-09-19 — P5-5B (James, on-device, DETACHED): prefill floor PASS (172.23 vs ≥135), decode regression PASS (31.05), GEMM M=8 FAILED (19.54 vs ≥30.69 — and below P5-5's 20.45), tiled-vs-sequential CLAIM-GRADE ≈4.70×; device prefill attribution on record
+
+Rows: benchmarks/results.md "Phase 5 — on-device RE-WALK (P5-5B)". One
+session, one build @ b3205d6, iPhone16,1, iOS 26.6.1, home-screen launch
+(detached — confirmed by James and by wall−GPU 1.29–1.36 ms/token on
+every decode record), validation OFF, SoC 75 → 67%, battery health
+Normal / 100%. Constants: the 2026-09-14 gates entry + the veto-close
+amendment (135), used verbatim — hard rule 6.
+
+- **Prefill floor ≥ 135 tok/s: PASS at 172.23 tok/s** (warm tiled span
+  median, n=5, range 168.26–186.71; cold 174.74; GPU-only bound 181.9).
+  ×1.81 vs P5-5's 95.37 on the PF-1 levers (Mac had predicted "roughly
+  4 s per 852 tokens ≈ 210 tok/s" as an estimate; the device landed at
+  4.51–4.69 s GPU — the Mac non-GEMM collapse transferred partially).
+  3.8× the sequential structural ceiling.
+- **Decode regression ≥ 24.0 tok/s: PASS** — window median 31.05 (n=3:
+  31.05 / 30.48 / 31.36); −2.0% vs P4-11's 31.67 on the same detached
+  footing (median GPU 30.5–30.9 vs 30.27 ms). Decode untouched by design.
+- **Before/after (D8 + bookend): CLAIM-GRADE — tiled ≈4.70× sequential
+  on-device.** 172.23 (n=5) vs 36.65 (36.60–37.08, n=3), interleaved,
+  ranges disjoint, effect 135.6 ≫ bookend drift (−15.7 / −6.1); GPU-only
+  4.6–4.8×. The first detached rows on both paths; supersedes the
+  P5-5 attached-caveat claim (2.96×) as the number of record.
+- **GEMM microbench M=8 ≥ 30.69 GB/s: FAILED at 19.54 GB/s** (best of
+  n=3; medians 18.72–19.04) = 0.446 × 43.84; 55% of the device matvec
+  (35.29). This is BELOW the P5-5 reading on the P5-2 kernel (20.45 best,
+  medians 18.74–20.26): the P5-2B redesign, ×1.55 on Mac (27.69 → 42.94),
+  did NOT transfer — the standing "Mac fractions do not predict device
+  fractions" precedent, now measured on a kernel redesign.
+- **Anatomy (the finding P5-2B said it would surface rather than act
+  on):** two structurally different M=8 kernels — thread-per-row with
+  broadcast activations (P5-2) and the lane-split row-group design
+  (P5-2B) — differ by ×1.55 on the 16-core Mac and land at the SAME
+  ≈19–20 GB/s on the 6-core A17 Pro. A ceiling common to both is not
+  parallelism (P5-2B has 4× the threads on the small shapes) and not
+  the activation path (P5-2B removed the per-weight converts and halved
+  threadgroup traffic); what both share is the arithmetic: 8 fp32 FMAs
+  + a 4-instruction dequant per weight (~12 scalar instructions for 16
+  useful FLOPs). At 19.5 GB/s that is 34.7 G weights/s × 12 ≈ 0.42 T
+  scalar instructions/s, and the M=8 point already delivers 541 GFLOPS
+  — 70% of the device's 780 GFLOPS matrix-unit plateau. The A17 Pro is
+  compute-bound at M=8: the D7 premise ("a batch size where it remains
+  weight-bandwidth-dominated") holds on the Mac and does not hold on the
+  device — the bandwidth→compute crossover sits below M=8 here. Reaching
+  30.69 GB/s at M=8 needs ≥ 655 G scalar instr/s at 12/weight, above
+  anything measured on this device; the only measured path with more
+  throughput is the matrix unit (simdgroup_matrix, 780 GFLOPS), i.e. an
+  M=8-exact 8×8 fragment kernel that moves the 8 FMAs/weight off the
+  scalar ALUs and leaves ≈5–6 scalar instructions/weight for
+  dequant + staging (the P5-2 "8×128 slab" direction, which measured
+  slow on the Mac for Mac reasons). Gate value UNCHANGED (hard rule 6);
+  the verdict stands as FAILED with this anatomy. Remedy candidate
+  seeded as P5-2C (below), device-swept rather than Mac-tuned.
+- **Device prefill attribution (A1, DIAGNOSTIC):** gemm 3168.7 ms
+  (67.5%, 392 dispatches), attention 1372.0 ms (29.2%, 56), norm+elem
+  151.0 ms (3.2%, 336), head/tail 5.8 ms; class-sum 4697.6 vs production
+  4717.6 ms @ 789 (ratio 1.00, in the pre-committed band); production
+  GPU-time 180.60 tok/s. Readings: (1) the layer GEMMs run at 2.40 TFLOP
+  ÷ 3.169 s = 0.757 TFLOPS = the device M=512 plateau — the tiled prefill
+  is GEMM-plateau-bound on-device; GE-1 (large-M compute efficiency) is
+  the prefill's first lever and now has its device input. (2) attention
+  is 29% of the span (Mac 23%) — the PF-2 trigger is MET; PF-2 flips
+  ready. (3) norms/elementwise collapsed as on Mac (3.2%).
+- **Prefill-vs-MLX judgment inputs (for P5-EXEC):** 172.23 tok/s vs
+  MLX's Phase 0 PROVISIONAL ≈370 → 47%. Per-component headroom at the
+  device's own numbers: GEMM at the 0.78 TFLOPS plateau bounds the whole
+  span at ≤ 276 tok/s even with free attention/norms (GE-1); attention
+  1.37 s of 4.72 (PF-2); norms+head 0.16 s; per-chunk overhead ≈0.1–0.4
+  s wall−GPU on the tiled rows. MLX's ≈370 implies ≈1.04 TFLOPS effective
+  end-to-end on the same silicon, above our GEMM plateau — the compute
+  efficiency of the tiled kernel is the dominant gap.
+- **Thermal (reported):** sequential prefills throttle the device (S2
+  onward: decode tails p95 57–59 ms, S3 median GPU 46.8); tiled spans
+  moved only 4.51 → 4.69 s GPU across the session; G2/G3 M=512 steps to
+  ≈540–550 GFLOPS mid-run as at P5-5.
+- **Footprint:** Xcode gauge not read this session; the P5-5 gauge
+  (573.2 MB) stands for this build family (scratch unchanged); in-app
+  cross-checks tiled 569.7–584.8 MB, sequential 541.2–546.3 MB.
+- **What this means for the phase (decision for James at P5-EXEC):** two
+  of three gates PASS with margin; the M=8 gate FAILED with an anatomy
+  that says its premise does not hold on the device, and a remedy that
+  needs device-side iteration. The Phase 4 precedent (P4-EXEC exited
+  with the overhead gate FAILED-with-anatomy and PIPE-1 approved as the
+  remedy) applies: EXIT Phase 5 with the M=8 gate on record as FAILED
+  with anatomy and P5-2C in the campaign, OR ITERATE on P5-2C before
+  exit. Recommendation (agent, not a decision): exit — the prefill floor
+  the phase exists for passed at 3.8× the ceiling, the m8 path has no
+  production exposure at real prompt sizes (chunks ≤ 8 positions only),
+  and the gate did its job by exposing a false premise rather than a
+  kernel bug. Backlog: P5-5B done; P5-EXEC ready (James); PF-2 ready;
+  GE-1 annotated with the device input; P5-2C seeded (blocked pending
+  the P5-EXEC decision).

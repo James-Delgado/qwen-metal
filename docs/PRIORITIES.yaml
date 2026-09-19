@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -1956,7 +1956,8 @@ tasks:
   - id: DI-1
     rank: 20.47
     title: "Decide the step-0 decode record on the tiled prefill path (prompt call's last command buffer vs. excluded) — P2-5 per-token collector convention"
-    status: ready
+    status: done
+    completed_at: 2026-09-19 03:20:38+00:00
     depends_on: [P5-4]
     blocks: []
     deliverable:
@@ -1984,7 +1985,9 @@ tasks:
       (b) keep it and label the export line. Convention-setting →
       present both to James before coding. Ranked ahead of P5-5 so the
       device rows can carry the decided labeling.
-
+      2026-09-19 (done): DECIDED by James — option (b), keep the record
+      and the existing "UNSTABLE 200–397 dispatches/token" label; no code
+      change. DECISIONS.md 2026-09-19 DI-1 entry.
   - id: P5-2B
     rank: 20.45
     title: "M<=8 GEMM weight-stream optimization ahead of the P5-5 gate walk (Mac M=8 at 46% of the matvec aggregate)"
@@ -2038,7 +2041,7 @@ tasks:
   - id: PF-2
     rank: 20.48
     title: "Query-tiled causal prefill SDPA (share K/V loads across positions) if the DEVICE prefill attribution says attention pays"
-    status: blocked
+    status: ready
     depends_on: [P5-5B]
     blocks: []
     deliverable:
@@ -2056,7 +2059,9 @@ tasks:
       Measure-first: engage only if James's DEVICE prefill attribution
       (app attribution picker -> prefill) shows attention material
       after P5-5B; the Mac share is not predictive.
-
+      2026-09-19 (P5-5B device attribution): TRIGGER MET — attention is
+      29.2% of the device prefill span (1372 ms of 4698; Mac 22.8%).
+      Ready; engage per the P5-EXEC decision (in-phase or campaign).
   - id: GE-1
     rank: 20.49
     title: "Large-M GEMM compute efficiency: the device plateau (0.78 TFLOPS at M>=64) caps prefill at ~276 tok/s — measure where the kernel sits vs the A17 Pro peak and iterate if it pays"
@@ -2078,11 +2083,15 @@ tasks:
       kernel's simdgroup_matrix tile shape, threadgroup staging, and
       dequant placement vs a plain fp16 GEMM ceiling on the same device;
       P5-2B covers M<=8 separately. Never blocks the P5-5B re-walk.
-
+      2026-09-19 (P5-5B device attribution): device GEMM class 3168.7 ms
+      = 0.757 TFLOPS at M=512/340 — the tiled prefill is GEMM-plateau-
+      bound on-device too (67.5% of the span). MLX's ≈370 tok/s implies
+      ≈1.04 TFLOPS effective on the same silicon.
   - id: P5-5B
     rank: 20.5
     title: "Phase 5 device RE-WALK (James, detached): prefill floor + M=8 microbench + decode regression gates, interleaved sequential-vs-tiled before/after, device PREFILL attribution export"
-    status: ready
+    status: done
+    completed_at: 2026-09-19 03:20:38+00:00
     owner: james
     depends_on: [PF-1, P5-2B]
     blocks: [P5-EXEC, PF-2]
@@ -2100,7 +2109,40 @@ tasks:
       for P5-2B so the M=8 gate is walked on the optimized kernel; the
       prefill floor could be re-walked earlier if James wants an interim
       read (the PF-1 Mac gain is x1.63).
-
+      2026-09-19 (done, James, DETACHED @ b3205d6): prefill floor PASS
+      172.23 (n=5 warm tiled, GPU-only bound 181.9); decode PASS 31.05;
+      GEMM M=8 FAILED 19.54 best (below P5-5's 20.45 — the P5-2B Mac
+      gain did not transfer; anatomy: device compute-bound at M=8, D7
+      premise false on A17 Pro); tiled ≈4.70× sequential CLAIM-GRADE;
+      device prefill split gemm 67.5% / attention 29.2% / norm 3.2%.
+      Rows + verdicts: results.md / DECISIONS.md 2026-09-19 P5-5B.
+  - id: P5-2C
+    rank: 20.55
+    title: "M<=8 GEMM path on the matrix unit (M=8-exact simdgroup 8x8 fragments) + on-device geometry sweep picker — the P5-5B M=8 anatomy remedy"
+    status: blocked
+    depends_on: [P5-5B]
+    blocks: []
+    deliverable:
+      file: engine package (Metal GEMM m8 variant + microbench variant picker in CLI/app)
+      tests: full GEMM suite re-passes per variant (hard rule 3); microbench spot checks per variant; no gate touched
+    est_complexity: medium
+    notes: |
+      Seeded 2026-09-19 by P5-5B: two structurally different scalar M=8
+      kernels (P5-2 thread-per-row, P5-2B lane-split) land at the same
+      ~19-20 GB/s on the A17 Pro while differing x1.55 on the Mac — the
+      device is compute-bound at M=8 (541 GFLOPS = 70% of its 780 GFLOPS
+      matrix-unit plateau; ~12 scalar instructions per weight for 16
+      useful FLOPs). The gate (>= 30.69, UNCHANGED) needs the 8 FMAs per
+      weight moved off the scalar ALUs: an M=8-exact simdgroup_float8x8
+      variant (no 32-row padding — the P5-2 "8x128 slab" direction that
+      was slow on Mac for Mac reasons), leaving ~5-6 scalar instructions
+      per weight for dequant + staging. Mac cannot pick the geometry
+      (standing precedent, now measured on a redesign): ship the m8
+      variants (scalar S/R/simdgroup constants + the MMA variant) behind
+      a microbench variant picker so ONE device session sweeps them, then
+      pin the winner. BLOCKED pending the P5-EXEC decision (James): exit
+      with the gate FAILED-with-anatomy and run this in the campaign, or
+      iterate in-phase — flip to ready either way once decided.
   - id: P5-5
     rank: 20.5
     title: "On-device Phase 5 rows: prefill floor + M=8 microbench + decode regression gates, interleaved sequential-vs-tiled before/after, M-sweep report"
@@ -2144,7 +2186,7 @@ tasks:
   - id: P5-EXEC
     rank: 21
     title: "Phase 5 exit milestone (all P5 tasks done, exit criteria walked, prefill-vs-MLX judgment)"
-    status: blocked
+    status: ready
     depends_on: [P5-1, P5-2, P5-3, P5-4, P5-5, P5-5B]
     blocks: [SPEC-P6]
     deliverable:
