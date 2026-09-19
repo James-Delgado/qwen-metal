@@ -2117,10 +2117,10 @@ tasks:
       device prefill split gemm 67.5% / attention 29.2% / norm 3.2%.
       Rows + verdicts: results.md / DECISIONS.md 2026-09-19 P5-5B.
   - id: P5-2C
-    rank: 20.55
+    rank: 23.26
     title: "M<=8 GEMM path on the matrix unit (M=8-exact simdgroup 8x8 fragments) + on-device geometry sweep picker — the P5-5B M=8 anatomy remedy"
     status: blocked
-    depends_on: [P5-5B]
+    depends_on: [P5-5B, SPEC-P7]
     blocks: []
     deliverable:
       file: engine package (Metal GEMM m8 variant + microbench variant picker in CLI/app)
@@ -2143,6 +2143,9 @@ tasks:
       pin the winner. BLOCKED pending the P5-EXEC decision (James): exit
       with the gate FAILED-with-anatomy and run this in the campaign, or
       iterate in-phase — flip to ready either way once decided.
+      2026-09-19 (P5-EXEC decision, James): Phase 5 EXITS with the M=8
+      gate FAILED-with-anatomy; P5-2C is a CAMPAIGN task — re-ranked to
+      23.26 behind SPEC-P7 (alongside PIPE-1), which seeds its gates.
   - id: P5-5
     rank: 20.5
     title: "On-device Phase 5 rows: prefill floor + M=8 microbench + decode regression gates, interleaved sequential-vs-tiled before/after, M-sweep report"
@@ -2204,7 +2207,14 @@ tasks:
       on the six judgment-derived Phase 5 gate items closes before
       work on this milestone's dependencies starts (gates entry,
       2026-09-14).
-
+      2026-09-19 (decided, James): EXIT on the P5-5B detached rows —
+      prefill floor PASS, decode PASS, before/after CLAIM-GRADE 4.70x,
+      M=8 gate FAILED-with-anatomy on record (remedy P5-2C -> campaign).
+      Close-out to run in a fresh context: walk the exit criteria, write
+      the prefill-vs-MLX judgment with the per-component decomposition
+      (DECISIONS.md 2026-09-19 P5-5B has the inputs), refresh
+      README/CLAUDE.md status, regenerate docs/architecture.pdf, flip
+      SPEC-P6 ready. DECISIONS.md 2026-09-19 P5-EXEC decision entry.
   - id: SPEC-P6
     rank: 22
     title: "Write Phase 6 spec (benchmark writeup + final measurement round)"

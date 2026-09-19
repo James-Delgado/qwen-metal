@@ -4652,3 +4652,19 @@ amendment (135), used verbatim — hard rule 6.
   kernel bug. Backlog: P5-5B done; P5-EXEC ready (James); PF-2 ready;
   GE-1 annotated with the device input; P5-2C seeded (blocked pending
   the P5-EXEC decision).
+
+## 2026-09-19 — P5-EXEC decision (James): EXIT Phase 5; P5-2C runs in the campaign
+
+Decided in conversation after the P5-5B rows: Phase 5 EXITS on the
+2026-09-19 detached rows — prefill floor PASS (172.23 vs ≥ 135), decode
+regression PASS (31.05 vs ≥ 24.0), tiled-vs-sequential CLAIM-GRADE
+≈4.70×, and the GEMM M=8 microbench gate on record as **FAILED (19.54 vs
+≥ 30.69) with its anatomy** (device compute-bound at M=8; the D7
+bandwidth-dominated premise does not hold on the A17 Pro) — the Phase 4
+precedent (overhead gate FAILED-with-anatomy, remedy approved for the
+campaign). The remedy P5-2C (M=8-exact matrix-unit variant + on-device
+geometry sweep picker) moves into the optimization campaign behind
+SPEC-P7, alongside PIPE-1; the gate value is unchanged and will be
+re-walked there. The P5-EXEC close-out (exit-criteria walk, prefill-vs-MLX
+judgment entry, README/status refresh, architecture PDF regeneration) is
+the next agent task, to be picked up in a fresh context per James.
