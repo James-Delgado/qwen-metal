@@ -2041,7 +2041,8 @@ tasks:
   - id: PF-2
     rank: 20.48
     title: "Query-tiled causal prefill SDPA (share K/V loads across positions) if the DEVICE prefill attribution says attention pays"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-19 22:50:41+00:00
     depends_on: [P5-5B]
     blocks: []
     deliverable:
