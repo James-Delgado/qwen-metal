@@ -138,14 +138,15 @@ final class BenchmarkReportTests: XCTestCase {
     func testQ4G64ExportRecordsFormatPhaseKernelAndPrefillPath() throws {
         func q4Text(
             _ kernelPath: GPUModel.KernelPath,
-            prefill: GPUModel.PrefillPath, chunk: Int? = nil
+            prefill: GPUModel.PrefillPath, chunk: Int? = nil,
+            attention: GPUModel.PrefillAttention? = nil
         ) -> String {
             BenchmarkReport(
                 dateStamp: "2026-09-02", deviceLabel: "iPhone 15 Pro",
                 osVersion: "19.0", batteryHealthNote: "88%",
                 coldOrWarmNote: "warm", residency: .mmap, weightsFormat: .q4g64,
                 kernelPath: kernelPath, prefillPath: prefill,
-                prefillChunkSize: chunk,
+                prefillChunkSize: chunk, prefillAttention: attention,
                 promptName: "decode-essay", promptTokenCount: 84, mode: .burst,
                 burst: syntheticMetrics(tokens: 64)).exportText()
         }
@@ -157,6 +158,15 @@ final class BenchmarkReportTests: XCTestCase {
         XCTAssertTrue(tiled.contains("kernels fused"))
         XCTAssertTrue(tiled.contains("prefill tiled (C=512)"), tiled)
 
+        // PF-2: tiled rows record the attention kernel (the on-device A/B
+        // rows differ only in this field); either variant is labeled.
+        let queryTiled = q4Text(.fused, prefill: .tiled, chunk: 512, attention: .queryTiled)
+        XCTAssertTrue(queryTiled.contains("prefill tiled (C=512), attention query-tiled"),
+                      queryTiled)
+        let perPosition = q4Text(.fused, prefill: .tiled, chunk: 512, attention: .perPosition)
+        XCTAssertTrue(perPosition.contains("prefill tiled (C=512), attention per-position"),
+                      perPosition)
+
         // The sequential A/B arm is still a Phase 5 row, labeled by prefill.
         let sequential = q4Text(.fused, prefill: .sequential)
         XCTAssertTrue(sequential.contains("Phase 5 row export"))
@@ -164,6 +174,9 @@ final class BenchmarkReportTests: XCTestCase {
         XCTAssertTrue(sequential.contains("prefill sequential"), sequential)
         XCTAssertFalse(sequential.contains("C="),
                        "no chunk size on a sequential row")
+        XCTAssertFalse(q4Text(.fused, prefill: .sequential, attention: .queryTiled)
+                        .contains("attention"),
+                       "no attention kernel label on a sequential row")
 
         // The naive kernel arm (sequential-only) stays labeled by kernels.
         let naive = q4Text(.naive, prefill: .sequential)

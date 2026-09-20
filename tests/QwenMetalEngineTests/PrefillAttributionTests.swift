@@ -419,7 +419,7 @@ final class PrefillAttributionTests: XCTestCase {
             ])
         let result = PrefillAttributionRunResult(
             weightsFormat: .q4g64, kernelPath: .fused, prefillChunkSize: 512,
-            promptTokenCount: 852,
+            prefillAttention: .queryTiled, promptTokenCount: 852,
             attributed: [PrefillAttribution(chunks: [chunk1, chunk2], chunkSizes: [512, 340])],
             productionGPUSeconds: [8.3],
             productionDispatchCount: 48446)
@@ -429,7 +429,7 @@ final class PrefillAttributionTests: XCTestCase {
         XCTAssertTrue(text.contains("PREFILL"), text)
         XCTAssertTrue(text.contains("DIAGNOSTIC"), text)
         XCTAssertTrue(text.contains("never a benchmark row"), text)
-        XCTAssertTrue(text.contains("prefill tiled (C=512)"), text)
+        XCTAssertTrue(text.contains("prefill tiled (C=512), attention query-tiled"), text)
         XCTAssertTrue(text.contains("852 tokens in 2 chunk(s)"), text)
         // gemm 3000 ms at 3.0/8.5 = 35.3% of class-sum; attention 47.1%.
         XCTAssertTrue(text.contains("3000.00 ms"), text)

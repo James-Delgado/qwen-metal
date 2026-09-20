@@ -10,7 +10,8 @@ import QwenMetalEngine
 private let attributeUsage = """
 usage: qwen-metal-cli attribute --model-dir <dir> --prompt "<text>" \
 [--mode decode|prefill] [--tokens N] [--runs N] [--weights bf16|q4g64] \
-[--residency mmap|wired] [--kernels naive|fused] [--prefill-chunk C]
+[--residency mmap|wired] [--kernels naive|fused] [--prefill-chunk C] \
+[--prefill-attention query-tiled|per-position]
   --model-dir   directory with the checkpoint(s), config.json,
                 tokenizer.json, tokenizer_config.json
   --prompt      non-empty prompt text
@@ -22,6 +23,9 @@ usage: qwen-metal-cli attribute --model-dir <dir> --prompt "<text>" \
   --runs        prefill mode: interleaved prefills of the prompt, half
                 attributed + half production (default \(BenchDefaults.prefillAttributionRuns))
   --prefill-chunk  prefill mode: tiled chunk size C (default \(GPUModel.defaultPrefillChunkSize))
+  --prefill-attention  prefill mode: the chunk's causal SDPA kernel —
+                query-tiled (default; PF-2) or per-position (the PF-1
+                kernel, the A/B arm)
   --weights     q4g64 (default — the Phase 3+ performance path) or bf16
   --residency   mmap (default) or wired (heap copy)
   --kernels     fused (default on q4g64 — the P4-4 "after" breakdown) or
@@ -46,6 +50,7 @@ func runAttributeCommand(_ arguments: [String]) async -> Int32 {
     var mode = "decode"
     var runs = BenchDefaults.prefillAttributionRuns
     var prefillChunk: Int?
+    var prefillAttention: GPUModel.PrefillAttention?
     var weightsFormat = WeightsFormat.q4g64
     var residency = WeightsResidency.mmap
     var kernels: GPUModel.KernelPath?
@@ -80,6 +85,13 @@ func runAttributeCommand(_ arguments: [String]) async -> Int32 {
                 return usageError("--prefill-chunk must be a positive integer, got '\(value)'")
             }
             prefillChunk = parsed
+        case "--prefill-attention":
+            guard let parsed = GPUModel.PrefillAttention(rawValue: value) else {
+                return usageError(
+                    "--prefill-attention must be 'query-tiled' or 'per-position', "
+                    + "got '\(value)'")
+            }
+            prefillAttention = parsed
         case "--weights":
             guard let parsed = WeightsFormat(rawValue: value) else {
                 return usageError("--weights must be 'bf16' or 'q4g64', got '\(value)'")
@@ -123,8 +135,9 @@ func runAttributeCommand(_ arguments: [String]) async -> Int32 {
                 "--mode prefill needs --kernels fused (the naive arm runs "
                 + "sequential prefill only, phase-5.md D5)")
         }
-    } else if prefillChunk != nil {
-        return usageError("--prefill-chunk applies to --mode prefill only")
+    } else if prefillChunk != nil || prefillAttention != nil {
+        return usageError(
+            "--prefill-chunk/--prefill-attention apply to --mode prefill only")
     }
 
     do {
@@ -155,14 +168,17 @@ func runAttributeCommand(_ arguments: [String]) async -> Int32 {
                 residency: residency, maxContext: contextLimit,
                 kernelPath: kernels ?? .fused,
                 prefillPath: mode == "prefill" ? .tiled : .sequential,
-                prefillChunkSize: prefillChunk)
+                prefillChunkSize: prefillChunk,
+                prefillAttention: prefillAttention)
         }
         let tokenizer = try await TextTokenizer(modelFolder: directory.directoryURL)
         printStderr(String(
-            format: "loaded in %.1fs (weights %@, residency %@, kernels %@, prefill %@)",
+            format: "loaded in %.1fs (weights %@, residency %@, kernels %@, prefill %@%@)",
             Date().timeIntervalSince(loadStart), weightsFormat.rawValue,
             residency.rawValue, model.kernelPath.rawValue,
-            model.prefillPath.rawValue))
+            model.prefillPath.rawValue,
+            model.prefillPath == .tiled
+                ? ", attention \(model.prefillAttention.rawValue)" : ""))
 
         let promptIds = tokenizer.encode(prompt)
         let eosTokenIds = try directory.stopTokenIds(

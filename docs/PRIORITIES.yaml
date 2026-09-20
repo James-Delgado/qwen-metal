@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-09-19
+last_updated: 2026-09-20
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -2041,8 +2041,9 @@ tasks:
   - id: PF-2
     rank: 20.48
     title: "Query-tiled causal prefill SDPA (share K/V loads across positions) if the DEVICE prefill attribution says attention pays"
-    status: in_progress
+    status: done
     started_at: 2026-09-19 22:50:41+00:00
+    completed_at: 2026-09-20 05:54:02+00:00
     depends_on: [P5-5B]
     blocks: []
     deliverable:
@@ -2063,6 +2064,43 @@ tasks:
       2026-09-19 (P5-5B device attribution): TRIGGER MET — attention is
       29.2% of the device prefill span (1372 ms of 4698; Mac 22.8%).
       Ready; engage per the P5-EXEC decision (in-phase or campaign).
+      2026-09-19 (done): query-tiled causal SDPA landed
+      (PrefillTiledSDPAKernel — 32-row query tiles per threadgroup,
+      both heads of a kv group x 16 positions, K/V blocks of 32 through
+      threadgroup memory, Q·Kᵀ and P·V on simdgroup_matrix with fp32
+      online softmax; fragment ownership PROBED by a test). Kernel
+      oracle tests first (11, all held first run); tiled default =
+      query-tiled, the PF-1 kernel selectable (engine option, CLI
+      --prefill-attention, app "Attention" picker; rows/exports label
+      it). Mac attribution attention 478.1 -> 41.9 ms (x11.4), production
+      prefill GPU 2082.8 -> 1645.6 ms (-21%); Mac warm rows 381.84 ->
+      458.24 tok/s median. Device before/after + attribution re-export
+      is PF-2B (James). See DECISIONS.md 2026-09-19 PF-2 entry.
+  - id: PF-2B
+    rank: 20.485
+    title: "Device A/B of the tiled-prefill attention kernels (query-tiled vs per-position) + device prefill attribution re-export on the PF-2 build (James)"
+    status: ready
+    owner: james
+    depends_on: [PF-2]
+    blocks: []
+    deliverable:
+      file: "benchmarks/results.md rows + DECISIONS.md note (attention class share on the PF-2 build; before/after verdict)"
+      tests: "D8 + bookend protocol as at P5-5B (DETACHED, validation OFF recorded, >=3 warm repeats median+range, interleaved per-position-vs-query-tiled prefills); gates unchanged and not re-walked here (Phase 5 exited 2026-09-19)"
+    est_complexity: small
+    notes: |
+      Seeded 2026-09-19 by PF-2. The Mac gain (attention x11.4, span
+      -21%) is not predictive of the A17 Pro (standing precedent, measured
+      on P5-2B); the claim-grade number is an interleaved same-session
+      device A/B via the new "Attention" picker (query-tiled default vs
+      per-position), plus one attribution export (picker -> prefill) on
+      the query-tiled default so the device per-class split after PF-2
+      is on record for GE-1 and the P5-EXEC judgment. Expectation stated
+      as an ESTIMATE, not a row: if the device attention class (1372 ms
+      at P5-5B) follows the Mac collapse, the 852-token span drops from
+      ~4.7 s toward ~3.4 s (~250 tok/s); the GEMM plateau ceiling (~276
+      tok/s, GE-1) stands either way. If the device disagrees with the
+      Mac, the tile geometry (32 rows x 32 keys, 4 simdgroups) is the
+      first device-sweep candidate — seed it then, not now.
   - id: GE-1
     rank: 20.49
     title: "Large-M GEMM compute efficiency: the device plateau (0.78 TFLOPS at M>=64) caps prefill at ~276 tok/s — measure where the kernel sits vs the A17 Pro peak and iterate if it pays"

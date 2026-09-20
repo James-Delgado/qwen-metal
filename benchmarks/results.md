@@ -936,6 +936,71 @@ per-role tables (tiled kernel, unchanged) were also recorded and are
 flat across roles (M=64: 6.0–7.0 GB/s eff., 1361–1589 GFLOPS; M=512:
 0.83–0.88, 1507–1599 GFLOPS) — the GE-1 input.
 
+## Phase 5 iterate round — PF-2 query-tiled prefill SDPA, Mac dev-loop (PROVISIONAL)
+
+### 2026-09-19 — Mac prefill attribution before/after the PF-2 query-tiled SDPA, M2 Pro
+
+Same harness, command shape, prompt feeding, machine and artifact as the
+2026-09-18 PF-1 attribution rows above (release CLI `attribute --mode
+prefill --runs 6`, prefill-summarize 852, C=512, DIAGNOSTIC — never a
+benchmark row; sanity band [0.5×, 2.0×] pre-committed 2026-09-18). The two
+arms differ ONLY in the tiled chunk's attention kernel (the new
+`--prefill-attention` toggle, DECISIONS.md 2026-09-19 PF-2): "before" =
+the PF-1 per-(position, head) batched kernel (`per-position`), "after" =
+the PF-2 query-tiled kernel on `simdgroup_matrix` (`query-tiled`, the new
+default). Run back-to-back in one session; the GEMM class is the
+unchanged control. Release build, Xcode 26.6 (17F113), macOS 26.5.1
+(25F80). Mac fractions do not predict device fractions (standing
+precedent) — the device before/after is James's (app "Attention" picker,
+attribution picker → prefill).
+
+| Date | Build | gemm | attention | norm+elementwise | head/tail | Class-sum (median ms/prefill) | Production GPU ms/prefill @ dispatches | GPU-time tok/s | Sanity ratio |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-19 | before (attention per-position — the PF-1 kernel) | 1565.2 ms (75.2%) / 392 | 478.1 ms (23.0%) / 56 | 36.5 ms (1.8%) / 336 | 1.8 ms (0.1%) / 5 | 2081.3 (span 2081.7, wall 2082.2) | 2082.8 @ 789 | 409.1 | 1.00 |
+| 2026-09-19 | after (attention query-tiled — PF-2) | 1568.7 ms (95.1%) / 392 | 41.9 ms (2.5%) / 56 | 36.4 ms (2.2%) / 336 | 1.8 ms (0.1%) / 5 | 1648.9 (span 1649.3, wall 1649.8) | 1645.6 @ 789 | 517.7 | 1.00 |
+
+Readings:
+
+- **attention 478.1 → 41.9 ms (−91%, ×11.4) at the same 56 dispatches**:
+  the per-position kernel re-streamed each head's K/V prefix once per
+  (position, head) threadgroup through scalar lanes with a cross-lane
+  reduction per score; the query-tiled kernel shares every 32-key K/V
+  block across a 32-row query tile (both heads of a kv group × 16
+  positions) and runs Q·Kᵀ and P·V on the matrix unit. On the recorded
+  pair count (852·853/2 (query, key) pairs per head-layer × 512 FLOP × 16
+  heads × 28 layers ≈ 83.3 GFLOP of attention math per prefill) that is
+  ≈0.17 → ≈1.99 TFLOPS effective — attention is now 2.5% of the Mac
+  span.
+- **gemm unchanged (1565.2 vs 1568.7 ms — the control)**; the span is now
+  95% GEMM on Mac: GE-1's territory.
+- **production 2082.8 → 1645.6 ms GPU (−21%)** at the identical 789
+  dispatches (one attention dispatch per layer per chunk on both arms —
+  the toggle is invisible to DispatchCounter by design).
+
+### 2026-09-19 — Mac tiled "after PF-2" prefill rows, M2 Pro
+
+Same protocol, command, and prompt feeding as the 2026-09-18 "after PF-1"
+rows above (release CLI `generate --backend gpu --weights q4g64
+--max-tokens 8`, tiled default C=512, attention query-tiled (the new
+default, unspecified), prefill-summarize 852, `$(cat …)` + `$'\n\n'`).
+Release build, Xcode 26.6 (17F113), macOS 26.5.1 (25F80). Dev-loop sanity
+only; the claim-grade before/after is the device A/B (PF-2B, James).
+
+| Date | Device | Prompt (tokens) | Run | Cold/warm | Prefill path | Prefill span wall s | Prefill tok/s (of record) | Span GPU s | Span wall−GPU s | Prefill dispatches | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-19 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | 1 | cold | tiled (C=512), attention query-tiled | 2.093 | 407.05 | 1.655 | 0.438 | 790 | PROVISIONAL. First run after load. |
+| 2026-09-19 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | 2 | warm | tiled (C=512), attention query-tiled | 1.876 | 454.07 | 1.647 | 0.229 | 790 | PROVISIONAL. |
+| 2026-09-19 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | 3 | warm | tiled (C=512), attention query-tiled | 1.859 | 458.24 | 1.650 | 0.209 | 790 | PROVISIONAL. **Warm median row: 458.24 tok/s** (warm range 454.07–462.38, n=3; GPU-time range 1.647–1.655 s ⇒ ≈516 tok/s on GPU time). |
+| 2026-09-19 | Apple M2 Pro (Mac, dev machine) | prefill-summarize (852) | 4 | warm | tiled (C=512), attention query-tiled | 1.843 | 462.38 | 1.654 | 0.189 | 790 | PROVISIONAL. |
+
+Readings: vs the 2026-09-18 "after PF-1" Mac rows (warm median 381.84
+tok/s, GPU 2.10 s) the same build lineage now measures **458.24 tok/s
+warm median, GPU 1.65 s (−22%)** — ×1.20 on Mac from the query-tiled
+attention alone; ×1.95 vs the P5-4 Mac rows (234.85). Decode tail
+unchanged (median GPU 21.39–21.44 ms @ 200; the decode path is untouched
+— the query-tiled kernel exists on the tiled prefill path only). The DI-1
+label still reads "UNSTABLE 200–397".
+
 ## Phase 5 — on-device rows, iPhone 15 Pro (P5-5, James)
 
 ### 2026-09-18 — iPhone 15 Pro Phase 5 rows: prefill floor FAILED (95.37 tok/s vs ≥135), GEMM M=8 FAILED (20.45 GB/s vs ≥30.69), decode regression PASS (30.55), tiled-vs-sequential CLAIM-GRADE ≈2.96×

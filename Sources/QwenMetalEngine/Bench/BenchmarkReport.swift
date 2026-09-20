@@ -35,6 +35,10 @@ public struct BenchmarkReport: Sendable {
     /// The tiled chunk size C (spec D2: recorded on every tiled row).
     /// Rendered only when `prefillPath == .tiled`.
     public var prefillChunkSize: Int?
+    /// The tiled chunk's causal SDPA kernel (PF-2: recorded on every tiled
+    /// row — the on-device A/B rows differ only in this field). Rendered
+    /// only when `prefillPath == .tiled`.
+    public var prefillAttention: GPUModel.PrefillAttention?
     public var promptName: String
     public var promptTokenCount: Int
     public var mode: Mode
@@ -53,6 +57,7 @@ public struct BenchmarkReport: Sendable {
         kernelPath: GPUModel.KernelPath,
         prefillPath: GPUModel.PrefillPath,
         prefillChunkSize: Int? = nil,
+        prefillAttention: GPUModel.PrefillAttention? = nil,
         promptName: String,
         promptTokenCount: Int, mode: Mode,
         burst: GenerationMetrics? = nil,
@@ -69,6 +74,7 @@ public struct BenchmarkReport: Sendable {
         self.kernelPath = kernelPath
         self.prefillPath = prefillPath
         self.prefillChunkSize = prefillChunkSize
+        self.prefillAttention = prefillAttention
         self.promptName = promptName
         self.promptTokenCount = promptTokenCount
         self.mode = mode
@@ -94,6 +100,7 @@ public struct BenchmarkReport: Sendable {
         let prefillLabel: String
         if prefillPath == .tiled, let chunk = prefillChunkSize {
             prefillLabel = "prefill tiled (C=\(chunk))"
+                + (prefillAttention.map { ", attention \($0.rawValue)" } ?? "")
         } else {
             prefillLabel = "prefill \(prefillPath.rawValue)"
         }

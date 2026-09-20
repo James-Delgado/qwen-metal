@@ -90,6 +90,22 @@ struct BenchmarkView: View {
                             model.prefillPathChanged()
                         }
                     }
+                    // PF-2: the tiled chunk's attention kernel — query-tiled
+                    // default; per-position (the PF-1 kernel) for the
+                    // interleaved on-device A/B. Tiled path only.
+                    if model.weightsFormat == .q4g64, model.kernelPath == .fused,
+                       model.prefillPath == .tiled {
+                        Picker("Attention", selection: $model.prefillAttention) {
+                            ForEach(GPUModel.PrefillAttention.allCases, id: \.self) {
+                                Text($0.rawValue)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(model.isRunning || model.isLoading)
+                        .onChange(of: model.prefillAttention) {
+                            model.prefillAttentionChanged()
+                        }
+                    }
                     Button(model.loadSummary == nil
                         ? "Load model" : "Reload model") {
                         Task { await model.loadModel() }

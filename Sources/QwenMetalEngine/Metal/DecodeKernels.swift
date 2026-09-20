@@ -10,6 +10,10 @@ public enum DecodeKernelError: Error, CustomStringConvertible, Equatable {
     case tokenIdOutOfRange(id: Int, vocabSize: Int)
     case positionOutOfRange(position: Int, positions: Int)
     case oddHeadDim(headDim: Int)
+    /// A kernel specialized on headDim asked to run a shape it cannot
+    /// (PF-2: the query-tiled SDPA needs multiples of 8 and a matching
+    /// instance).
+    case unsupportedHeadDim(headDim: Int, requirement: String)
 
     public var description: String {
         switch self {
@@ -27,6 +31,8 @@ public enum DecodeKernelError: Error, CustomStringConvertible, Equatable {
             return "RoPE position \(position) outside the \(positions)-position table"
         case .oddHeadDim(let headDim):
             return "RoPE headDim \(headDim) must be even (half-split rotation)"
+        case .unsupportedHeadDim(let headDim, let requirement):
+            return "headDim \(headDim) unsupported: \(requirement)"
         }
     }
 }

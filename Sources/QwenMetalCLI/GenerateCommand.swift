@@ -13,7 +13,7 @@ import QwenMetalEngine
 private let contextCap = 4096
 
 private let generateUsage = """
-usage: qwen-metal-cli generate --model-dir <dir> --prompt "<text>" [--max-tokens N] [--backend cpu|gpu] [--weights bf16|q4g64] [--kernels naive|fused] [--prefill sequential|tiled] [--prefill-chunk C]
+usage: qwen-metal-cli generate --model-dir <dir> --prompt "<text>" [--max-tokens N] [--backend cpu|gpu] [--weights bf16|q4g64] [--kernels naive|fused] [--prefill sequential|tiled] [--prefill-chunk C] [--prefill-attention query-tiled|per-position]
   --model-dir   directory with exactly one .safetensors checkpoint,
                 config.json, tokenizer.json, tokenizer_config.json
   --prompt      non-empty prompt text
@@ -34,6 +34,10 @@ usage: qwen-metal-cli generate --model-dir <dir> --prompt "<text>" [--max-tokens
   --prefill-chunk  tiled only: chunk size C in positions (default
                 \(GPUModel.defaultPrefillChunkSize), chosen by measurement — a
                 reported parameter, not a pin, spec D2; diagnostic option)
+  --prefill-attention  tiled only: the chunk's causal SDPA kernel —
+                query-tiled (default; PF-2, 32-row query tiles on the
+                matrix unit) or per-position (the PF-1 per-(position, head)
+                kernel, kept for the on-device interleaved A/B)
 """
 
 private func printStderr(_ message: String) {
@@ -60,6 +64,7 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
     var kernels: GPUModel.KernelPath?
     var prefill: GPUModel.PrefillPath?
     var prefillChunk: Int?
+    var prefillAttention: GPUModel.PrefillAttention?
 
     var index = 0
     while index < arguments.count {
@@ -103,6 +108,13 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
                     "--prefill-chunk must be a positive integer, got '\(value)'")
             }
             prefillChunk = parsed
+        case "--prefill-attention":
+            guard let parsed = GPUModel.PrefillAttention(rawValue: value) else {
+                return usageError(
+                    "--prefill-attention must be 'query-tiled' or 'per-position', "
+                    + "got '\(value)'")
+            }
+            prefillAttention = parsed
         default:
             return usageError("unknown flag '\(flag)'")
         }
@@ -123,10 +135,11 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
     // P5-4 (phase-5.md D5): the prefill toggle exists on the GPU packed
     // pipeline; tiled needs the fused kernel structure. Rejected here with
     // usage errors (the engine would refuse the same combinations at load).
-    if prefill != nil || prefillChunk != nil, backend == .cpu {
+    if prefill != nil || prefillChunk != nil || prefillAttention != nil,
+       backend == .cpu {
         return usageError(
-            "--prefill/--prefill-chunk select GPU prompt processing — gpu "
-            + "backend only")
+            "--prefill/--prefill-chunk/--prefill-attention select GPU prompt "
+            + "processing — gpu backend only")
     }
     if prefill == .tiled, weightsFormat == .bf16 {
         return usageError(
@@ -138,12 +151,13 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
             "--prefill tiled needs --kernels fused (the naive kernel arm "
             + "supports sequential prefill only, phase-5.md D5)")
     }
-    if prefillChunk != nil {
+    if prefillChunk != nil || prefillAttention != nil {
         let resolvedPrefill = prefill
             ?? GPUModel.defaultPrefillPath(for: kernels ?? .fused)
         if weightsFormat == .bf16 || resolvedPrefill == .sequential {
             return usageError(
-                "--prefill-chunk applies to the tiled prefill path only")
+                "--prefill-chunk/--prefill-attention apply to the tiled "
+                + "prefill path only")
         }
     }
 
@@ -200,7 +214,8 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
                 let gpu = try GPUModel(
                     packed: packed, config: config, context: metal,
                     maxContext: contextLimit, kernelPath: kernels ?? .fused,
-                    prefillPath: prefill, prefillChunkSize: prefillChunk)
+                    prefillPath: prefill, prefillChunkSize: prefillChunk,
+                    prefillAttention: prefillAttention)
                 model = gpu
                 gpuModel = gpu
             }
@@ -261,8 +276,10 @@ func runGenerateCommand(_ arguments: [String]) async -> Int32 {
             // P5-4: rows record the prefill path (+ C when tiled, spec D2).
             let prefillNote: String
             if let gpu = gpuModel {
+                // PF-2: tiled rows also record the attention kernel.
                 prefillNote = gpu.prefillPath == .tiled
-                    ? "prefill tiled (C=\(gpu.prefillChunkSize))"
+                    ? "prefill tiled (C=\(gpu.prefillChunkSize)), attention "
+                        + gpu.prefillAttention.rawValue
                     : "prefill sequential"
             } else {
                 prefillNote = "prefill ?"

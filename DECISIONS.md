@@ -4668,3 +4668,151 @@ SPEC-P7, alongside PIPE-1; the gate value is unchanged and will be
 re-walked there. The P5-EXEC close-out (exit-criteria walk, prefill-vs-MLX
 judgment entry, README/status refresh, architecture PDF regeneration) is
 the next agent task, to be picked up in a fresh context per James.
+
+## 2026-09-20 — PF-2: query-tiled prefill SDPA on `simdgroup_matrix` landed — Mac attention 478 → 42 ms (×11.4), prefill GPU 2083 → 1646 ms (−21%), warm 381.84 → 458.24 tok/s; the PF-1 kernel stays as the A/B arm
+
+Deliverable (PF-2, rank 20.48 — picked by rank after the 2026-09-19
+P5-EXEC decision; James left PF-2/GE-1 ranked ahead of the P5-EXEC
+close-out). Measure-first per the PLAN rule; no gate touched; every
+constant below is a pre-committed value used verbatim. Work and Mac
+measurements 2026-09-19 (local), entry landed 2026-09-20 (UTC).
+
+- **Trigger and reading:** the P5-5B device attribution put attention at
+  29.2% of the on-device prefill span (1372 of 4698 ms; Mac 23.0%) on the
+  PF-1 kernel — one threadgroup per (position, query head), each
+  streaming its head's whole K/V prefix through scalar lanes with a
+  cross-lane `simd_sum` per (query, key) score, so the prefix is re-read
+  once per position and the arithmetic never touches the matrix unit.
+  On the recorded pair count (852·853/2 pairs per head-layer × 512 FLOP ×
+  16 heads × 28 layers ≈ 83.3 GFLOP per prefill) the Mac ran ≈0.17
+  TFLOPS effective. The lever named at PF-1 — query-tiling with the
+  flash-attention structure — is what landed.
+- **Kernel (`PrefillTiledSDPAKernel`, `Metal/PrefillTiledSDPAKernel.swift`):**
+  one 128-thread threadgroup per 32-row query tile = `headsPerTile`
+  query heads of one GQA group × 32/headsPerTile consecutive chunk
+  positions (largest of {4, 2, 1} dividing the GQA ratio; the pinned
+  16/8 model tiles both heads of a kv group over 16 positions). Each
+  simdgroup owns 8 rows of one head and walks the key range in blocks of
+  32: S = Q·Kᵀ and O += P·V on `simdgroup_multiply_accumulate` (half
+  inputs, fp32 accumulation), fp32 online softmax per row in registers
+  (running max m, denominator l, rescale corr), causal mask applied to
+  the score fragments. Threadgroup memory: the K block TRANSPOSED
+  (`[dim][key]`, so both operand loads are plain — P5-2 measured the
+  transposing `simdgroup_load` slow) and the V block plain, with the Q
+  tile staged once into the buffer V then reuses; 16 KiB at headDim 128;
+  no device scratch (D2 budget unchanged), no new persistent allocation
+  (hard rule 4). Instances are specialized per headDim (compile-time
+  constant ⇒ register-resident fragment arrays; multiples of 8 up to
+  128). Precision: fp16 reads, fp32 scores/statistics, P rounded to
+  fp16 for the matrix unit with the denominator accumulating the SAME
+  rounded weights, fp32 accumulators, fp16 store — attention-species
+  constant max(2⁻⁷·M, 2⁻¹¹), spec D6 "either D4 form"; nothing new,
+  nothing loosened. Exactness carried: depth 1 (absolute position 0) is
+  the bitwise V-row copy; masked keys weigh exactly zero (exp(−∞) = 0 →
+  P = 0 → 0·V) so a position's output is bitwise independent of later
+  slots' finite contents; slots at/after the chunk end are never read
+  (zero-filled tiles). Fixed-order `simd_shuffle_xor` row reductions ⇒
+  bitwise deterministic.
+- **The one hardware assumption, probed not assumed:** the per-row
+  softmax rests on the lane → (row, column) ownership of
+  `thread_elements()` (lane t: row (t/4 & 4) + (t/2 % 4), columns
+  (t/4 & 2)·2 + (t%2)·2 and +1; half and float fragments alike) — an
+  undocumented Apple-silicon fact the MLX steel kernels also rest on.
+  `PrefillTiledSDPAKernelTests` probes it on the running device (plus the
+  half×half→float MMA identity), so drift fails there before the oracle
+  gates. Confirmed on the M2 Pro this session.
+- **Tests first (hard rule 3), all held on the first run:** 12 kernel
+  tests — the probe; oracle sweeps at small dims (one ragged tile), real
+  headDim 128 across three tiles and three key blocks at basePosition 37
+  on layer 1 of 2, the pinned 16/8/128 head shape at basePosition 70 over
+  75 positions, every GQA tiling (ratios 1/2/3/4/6/8 incl. the fallback),
+  headDim 8 (added at review); depth-1 bitwise V-row copy with the
+  adversarial patterns; NaN poison beyond the chunk end bitwise-invariant;
+  large-finite poison of later in-chunk slots bitwise-invariant for every
+  earlier position (single tile and across tile/block seams, with the
+  poisoned rows shown to change); determinism ×3; one dispatch; derived 2×
+  bound vs the PF-1 kernel; rejects (headDim 0/12/136, chunk past
+  maxContext, empty batch, negative base, GQA mismatch, small query,
+  cache headDim ≠ instance). Pipeline: both attention kernels load, pass
+  the full-stack spot check vs CPU-quant, share the dispatch pin (18 —
+  one attention dispatch per layer on both, so the toggle is invisible to
+  DispatchCounter by design), decode untouched (10). Report/attribution
+  exports label the variant (tests updated red-first).
+- **Toggle (the P4 D4 / P5 D5 precedent, reversible):**
+  `GPUModel.PrefillAttention` — `.queryTiled` (default) / `.perPosition`
+  (the PF-1 kernel) behind a shared `PrefillCausalSDPAEncoding` contract;
+  CLI `--prefill-attention query-tiled|per-position` on `generate` and
+  `attribute` (tiled path only, usage-checked); app "Attention" picker
+  (q4g64 + fused + tiled; reloads on change like the other pickers);
+  BenchmarkReport and the prefill-attribution export label it on tiled
+  rows. Measured dispatch pins unchanged (18 tiny / 397 one chunk / 790 at
+  852 tokens). The sequential path and the bf16 backend are untouched.
+- **Mac attribution before/after (release CLI, 6 interleaved prefills
+  each arm, same session; results.md):** attention **478.1 → 41.9 ms
+  (−91%, ×11.4)** at the same 56 dispatches (≈0.17 → ≈1.99 TFLOPS
+  effective on the recorded pair count); gemm 1565.2 vs 1568.7 ms — the
+  unchanged control; norm+elementwise 36.5 vs 36.4; production **2082.8 →
+  1645.6 ms GPU (−21%)** @ 789 dispatches both arms; sanity ratio 1.00
+  both. The Mac span is now 95% GEMM — GE-1's territory.
+- **Mac "after PF-2" prefill rows (D1 span, results.md):** warm median
+  **458.24 tok/s** (454.07–462.38, n=3; cold 407.05), span GPU
+  1.647–1.655 s, 790 dispatches on every run — ×1.20 vs the PF-1 Mac
+  rows (381.84, GPU 2.10 s), ×1.95 vs the P5-4 rows (234.85). Decode
+  tail unchanged (21.39–21.44 ms @ 200).
+- **Device expectation (an ESTIMATE, not a row — Mac fractions do not
+  predict device fractions, measured again at P5-2B):** if the device
+  attention class follows the Mac collapse, the 852-token span drops from
+  ≈4.7 s toward ≈3.4 s (≈250 tok/s vs 172.23); the GEMM plateau ceiling
+  (≈276 tok/s) stands. Seeded **PF-2B (James, rank 20.485)**: interleaved
+  per-position-vs-query-tiled device A/B via the "Attention" picker + one
+  attribution export on the default, D8 + bookend as at P5-5B; if the
+  device disagrees, the tile geometry (32 rows × 32 keys, 4 simdgroups)
+  is the first device-sweep candidate — seeded then, not now.
+- **Free-run divergence report on the query-tiled default (REPORTED, not
+  gated):** 128 free-running greedy steps × 5 prompts on the
+  production default (query-tiled attention + cooperative norm in the
+  tiled prefill, feeding the unchanged fused decode) — **first
+  divergence: NONE on all 5 prompts** (all 128 tokens identical to the
+  CPU-quant reference; texts coherent). Same NONE as
+  P2-4/P3-5/P4-4/P5-4/PF-1. Harness QWEN_FREE_RUN_REPORT=1 +
+  QWEN_FREE_RUN_REPORT_FILE, release build, detached: "Executed 1 test,
+  with 0 failures (0 unexpected) in 1876.775 s".
+- **Verification (SOP step 5), all on the query-tiled default:** debug
+  suite **464 tests, 0 failures** in two foreground batches ("Executed
+  407 tests, with 0 failures" — kernel/plumbing/fixture-model classes,
+  196.1 s; "Executed 57 tests, with 2 tests skipped and 0 failures" —
+  the artifact-loading classes, 95.5 s; the 2 skips are the opt-in
+  harnesses) + QuantQualityMetricUnitTests 6/6. Release: quant Tier-M 4 +
+  Tier-E 3 ("Executed 7 tests, with 0 failures … in 5.842 s", incl.
+  `testSharedModelRunsTheTiledPrefillDefault`); GPU-quant 250-step logit
+  suite **5/5 held** (279.6 / 164.5 / 162.2 / 166.4 / 130.8 s, one test
+  per invocation — see the environment note); real-artifact prefill
+  tests 4 + bf16 ActivationFixture 7 + LogitMatch 5 ("Executed 16 tests,
+  with 2 tests skipped and 0 failures", 1912.6 s); the bf16 GPU 250-step
+  suite (GPULogitSuiteTests) 5/5 in 2113.4 s — an untouched path, run
+  through a class-name mix-up (file names ≠ class names in the suite
+  files), reported since it ran. NOT re-run: the bf16 GPU fixture classes
+  (GPUTierM/EFixtureTests — the bf16 backend keeps sequential prefill and
+  the naive kernels; nothing in this diff reaches it) and the CPU-quant
+  quality gate (PF-1 precedent). +13 new tests (PrefillTiledSDPAKernelTests
+  12, PrefillPipelineTests 1); report/attribution label tests extended.
+  Backlog drift test: 5 passed. App release build (xcodebuild,
+  generic/platform=iOS, unsigned): BUILD SUCCEEDED (only the standing
+  AppIntents metadata warning). Pre-commit review: `ecc:swift-reviewer`
+  (read-only) — no CRITICAL/HIGH; one MEDIUM (headDim 8 untested though
+  documented) fixed with a test; kernel math, GQA mapping, tile aliasing,
+  barrier uniformity, bounds/alignment, and the plumbing verified by
+  reading.
+- **Environment note (recorded for DEV-1):** this session's 16 GiB Mac
+  ran with ≈19 GB of swap held by other applications; the agent
+  harness's low-memory guard killed every backgrounded `swift test`
+  (five attempts), so the suites ran one class or one test per
+  foreground call, and the long suites' wall times above are inflated
+  (the bf16 logit suite 2113 s vs ≈114 s for the whole bf16 piece at
+  PF-1). Two `swift test` processes must never overlap on this machine.
+  The free-run report ran detached (`nohup`, the PF-1 precedent).
+- **Backlog:** PF-2 done; PF-2B seeded (owner james, 20.485). Flag for
+  James: GE-1 (20.49, ready, large) still outranks the P5-EXEC close-out
+  (21) that the 2026-09-19 decision named as the next agent task — the
+  next agent by rank would take GE-1 first; re-rank if the close-out
+  should come first.

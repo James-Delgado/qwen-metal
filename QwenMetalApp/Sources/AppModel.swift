@@ -90,6 +90,11 @@ final class AppModel: ObservableObject {
     /// permanently, and the naive kernel arm supports sequential only (the
     /// engine resolves that; the picker hides itself there).
     @Published var prefillPath: GPUModel.PrefillPath = .tiled
+    /// PF-2: the tiled chunk's causal SDPA kernel — query-tiled default,
+    /// per-position (the PF-1 kernel) for the interleaved on-device A/B.
+    /// Meaningful on q4g64 + fused + Prefill tiled only (the picker hides
+    /// itself elsewhere; the engine ignores it on sequential).
+    @Published var prefillAttention: GPUModel.PrefillAttention = .queryTiled
     @Published var isLoading = false
     @Published var isRunning = false {
         // A locked screen suspends the app mid-generation and ruins the
@@ -144,6 +149,17 @@ final class AppModel: ObservableObject {
     func prefillPathChanged() {
         if let engine, engine.weightsFormat == .q4g64,
            engine.gpuModel.prefillPath != requestedPrefillPath() {
+            self.engine = nil
+            loadSummary = nil
+        }
+    }
+
+    /// Same contract for the attention kernel (PF-2): the kernel is built
+    /// at load, so a toggle on the tiled path reloads.
+    func prefillAttentionChanged() {
+        if let engine, engine.weightsFormat == .q4g64,
+           engine.gpuModel.prefillPath == .tiled,
+           engine.gpuModel.prefillAttention != prefillAttention {
             self.engine = nil
             loadSummary = nil
         }
@@ -246,6 +262,7 @@ final class AppModel: ObservableObject {
                 kernelPath: engine.gpuModel.kernelPath,
                 prefillPath: engine.gpuModel.prefillPath,
                 prefillChunkSize: engine.gpuModel.prefillChunkSize,
+                prefillAttention: engine.gpuModel.prefillAttention,
                 burst: metrics)
             statusLine = stopFlag.isSet
                 ? "burst stopped early — report reflects the partial run"
@@ -302,6 +319,7 @@ final class AppModel: ObservableObject {
                 kernelPath: engine.gpuModel.kernelPath,
                 prefillPath: engine.gpuModel.prefillPath,
                 prefillChunkSize: engine.gpuModel.prefillChunkSize,
+                prefillAttention: engine.gpuModel.prefillAttention,
                 sustained: result)
             statusLine = "sustained loop complete"
         } catch is CancellationError {
@@ -535,17 +553,22 @@ final class AppModel: ObservableObject {
            engine.weightsFormat == weightsFormat,
            weightsFormat == .bf16
                || (engine.gpuModel.kernelPath == kernelPath
-                   && engine.gpuModel.prefillPath == requestedPrefillPath()) {
+                   && engine.gpuModel.prefillPath == requestedPrefillPath()
+                   && (engine.gpuModel.prefillPath == .sequential
+                       || engine.gpuModel.prefillAttention == prefillAttention)) {
             return engine
         }
         let residency = self.residency
         let weightsFormat = self.weightsFormat
         let kernelPath = self.kernelPath
         let prefillPath = requestedPrefillPath()
+        let prefillAttention = self.prefillAttention
         statusLine = "loading model (weights \(weightsFormat.rawValue), "
             + "residency \(residency.rawValue)"
             + (weightsFormat == .q4g64
                 ? ", kernels \(kernelPath.rawValue), prefill \(prefillPath.rawValue)"
+                    + (prefillPath == .tiled
+                        ? ", attention \(prefillAttention.rawValue)" : "")
                 : "")
             + ")…"
         let loaded: LoadedEngine =
@@ -574,10 +597,13 @@ final class AppModel: ObservableObject {
                     // P5-4 (spec D5): the prefill toggle; tiled is the
                     // fused default, sequential the P5-5 A/B arm. Chunk
                     // size stays the engine's measured default (C=512).
+                    // PF-2: the attention-kernel toggle (query-tiled
+                    // default, per-position the A/B arm).
                     gpu = try GPUModel(
                         packed: packed, config: config, context: metal,
                         residency: residency, maxContext: contextLimit,
-                        kernelPath: kernelPath, prefillPath: prefillPath)
+                        kernelPath: kernelPath, prefillPath: prefillPath,
+                        prefillAttention: prefillAttention)
                 }
                 let tokenizer = try await TextTokenizer(
                     modelFolder: directory.directoryURL)
@@ -600,7 +626,9 @@ final class AppModel: ObservableObject {
             loaded.residency.rawValue,
             loaded.gpuModel.kernelPath.rawValue,
             loaded.gpuModel.prefillPath == .tiled
-                ? "tiled (C=\(loaded.gpuModel.prefillChunkSize))" : "sequential",
+                ? "tiled (C=\(loaded.gpuModel.prefillChunkSize)), attention "
+                    + loaded.gpuModel.prefillAttention.rawValue
+                : "sequential",
             loaded.contextLimit)
         return loaded
     }
@@ -660,6 +688,7 @@ final class AppModel: ObservableObject {
         kernelPath: GPUModel.KernelPath,
         prefillPath: GPUModel.PrefillPath,
         prefillChunkSize: Int,
+        prefillAttention: GPUModel.PrefillAttention,
         burst: GenerationMetrics? = nil,
         sustained: SustainedLoopResult? = nil
     ) -> String {
@@ -672,6 +701,7 @@ final class AppModel: ObservableObject {
             kernelPath: kernelPath,
             prefillPath: prefillPath,
             prefillChunkSize: prefillPath == .tiled ? prefillChunkSize : nil,
+            prefillAttention: prefillPath == .tiled ? prefillAttention : nil,
             promptName: promptName,
             promptTokenCount: promptTokenCount, mode: mode,
             burst: burst, sustained: sustained,

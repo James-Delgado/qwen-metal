@@ -161,6 +161,16 @@ final class PrefillPipelineTests: XCTestCase {
             context: context, maxContext: maxContext, prefillPath: .sequential)
     }
 
+    /// The PF-1 per-(position, head) attention kernel on the tiled path
+    /// (PF-2's A/B arm).
+    private func makePerPositionAttentionModel(maxContext: Int = 16) throws -> GPUModel {
+        let context = try makeContextOrSkip()
+        return try GPUModel(
+            packed: try makePackedCheckpoint(), config: try tinyConfig(),
+            context: context, maxContext: maxContext,
+            prefillAttention: .perPosition)
+    }
+
     /// The production DEFAULT (no prefill arguments) — tiled since P5-4.
     private func makeDefaultModel(maxContext: Int = 16) throws -> GPUModel {
         let context = try makeContextOrSkip()
@@ -733,6 +743,46 @@ final class PrefillPipelineTests: XCTestCase {
         _ = try sequential.lastPositionLogits(ids: ids + [6])
         XCTAssertEqual(tiled.lastStepDispatchCount, 10)
         XCTAssertEqual(sequential.lastStepDispatchCount, 10)
+    }
+
+    // MARK: - PF-2: prefill attention-kernel toggle
+
+    /// Both tiled-chunk attention kernels load — query-tiled via the
+    /// DEFAULT, per-position via the explicit option — and both pass the
+    /// shared full-stack spot check against the same CPU-quant oracle at
+    /// the pre-committed constant (bitwise equality between the two is
+    /// NOT required: different reduction partitions, spec D6 "either D4
+    /// form"). The chunk structure is one attention dispatch per layer on
+    /// both, so the measured dispatch pin (18) is identical — the toggle
+    /// is invisible to DispatchCounter by design; the report label
+    /// distinguishes the arms. Decode after the prompt is untouched.
+    func testBothPrefillAttentionKernelsLoadPassSpotCheckAndShareThePin() throws {
+        let queryTiled = try makeDefaultModel()
+        let perPosition = try makePerPositionAttentionModel()
+        XCTAssertEqual(queryTiled.prefillAttention, .queryTiled,
+                       "query-tiled is the tiled default (PF-2)")
+        XCTAssertEqual(perPosition.prefillAttention, .perPosition)
+        XCTAssertEqual(perPosition.prefillPath, .tiled)
+
+        let ids = [1, 2, 3, 4, 5]
+        let ref = try makeCPUModel().lastPositionLogits(ids: ids)
+        assertFullStack(try queryTiled.lastPositionLogits(ids: ids), ref,
+                        "query-tiled attention vs CPU-quant")
+        assertFullStack(try perPosition.lastPositionLogits(ids: ids), ref,
+                        "per-position attention vs CPU-quant")
+        XCTAssertEqual(try XCTUnwrap(queryTiled.lastCallSpan).dispatchCount, 18)
+        XCTAssertEqual(try XCTUnwrap(perPosition.lastCallSpan).dispatchCount, 18)
+
+        _ = try queryTiled.lastPositionLogits(ids: ids + [6])
+        _ = try perPosition.lastPositionLogits(ids: ids + [6])
+        XCTAssertEqual(queryTiled.lastStepDispatchCount, 10)
+        XCTAssertEqual(perPosition.lastStepDispatchCount, 10)
+
+        // The sequential path ignores the option (stored, never used).
+        let sequential = try makeSequentialModel()
+        XCTAssertEqual(sequential.prefillPath, .sequential)
+        assertFullStack(try sequential.lastPositionLogits(ids: ids), ref,
+                        "sequential vs CPU-quant")
     }
 
     // MARK: - Edge 12: instrumentation parity through the production runner

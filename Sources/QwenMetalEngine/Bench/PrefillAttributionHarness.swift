@@ -65,6 +65,9 @@ public struct PrefillAttributionRunResult: Sendable {
     public let weightsFormat: WeightsFormat
     public let kernelPath: GPUModel.KernelPath
     public let prefillChunkSize: Int
+    /// The chunk's causal SDPA kernel (PF-2) — the attention class's
+    /// identity on this export.
+    public let prefillAttention: GPUModel.PrefillAttention
     public let promptTokenCount: Int
     /// The attributed (class-split) prefills — even run offsets.
     public let attributed: [PrefillAttribution]
@@ -76,13 +79,15 @@ public struct PrefillAttributionRunResult: Sendable {
 
     public init(
         weightsFormat: WeightsFormat, kernelPath: GPUModel.KernelPath,
-        prefillChunkSize: Int, promptTokenCount: Int,
+        prefillChunkSize: Int, prefillAttention: GPUModel.PrefillAttention,
+        promptTokenCount: Int,
         attributed: [PrefillAttribution], productionGPUSeconds: [Double],
         productionDispatchCount: Int?
     ) {
         self.weightsFormat = weightsFormat
         self.kernelPath = kernelPath
         self.prefillChunkSize = prefillChunkSize
+        self.prefillAttention = prefillAttention
         self.promptTokenCount = promptTokenCount
         self.attributed = attributed
         self.productionGPUSeconds = productionGPUSeconds
@@ -118,7 +123,8 @@ public struct PrefillAttributionRunResult: Sendable {
         lines.append(
             "engine: weights \(weightsFormat.rawValue), residency "
             + "\(residency.rawValue), kernels \(kernelPath.rawValue), "
-            + "prefill tiled (C=\(prefillChunkSize))")
+            + "prefill tiled (C=\(prefillChunkSize)), attention "
+            + prefillAttention.rawValue)
         let chunkCount = attributed.first?.chunks.count ?? 0
         lines.append(
             "prompt: \(promptTokenCount) tokens in \(chunkCount) chunk(s); "
@@ -244,6 +250,7 @@ public struct PrefillAttributionRunner {
             weightsFormat: gpuModel.weightsFormat,
             kernelPath: gpuModel.kernelPath,
             prefillChunkSize: gpuModel.prefillChunkSize,
+            prefillAttention: gpuModel.prefillAttention,
             promptTokenCount: promptIds.count,
             attributed: attributed,
             productionGPUSeconds: productionGPUSeconds,

@@ -80,6 +80,21 @@ public final class GPUModel {
     /// hold more positions than the context — and the resolved value is
     /// what `prefillChunkSize` reports.
     public static let defaultPrefillChunkSize = 512
+
+    /// Which causal SDPA kernel the tiled prefill chunk runs (PF-2): the
+    /// PF-1 per-(position, head) batched kernel or the PF-2 query-tiled
+    /// kernel on the matrix unit. Query-tiled is the default; per-position
+    /// stays selectable (CLI `--prefill-attention`, app "Attention"
+    /// picker) for the interleaved on-device A/B — the P4 D4 / P5 D5
+    /// toggle precedent. Meaningful on the tiled prefill path only; the
+    /// decode path is untouched by either.
+    public enum PrefillAttention: String, CaseIterable, Sendable {
+        case perPosition = "per-position"
+        case queryTiled = "query-tiled"
+    }
+
+    /// The prefill attention kernel an UNSPECIFIED tiled load runs.
+    public static let defaultPrefillAttention: PrefillAttention = .queryTiled
     /// Where a weight matrix's bytes live inside `weights.buffer`: a bf16
     /// tensor's byte offset (Phase 2 kernels) or the q4g64 triplet's three
     /// byte offsets (P3-4 kernels — the whole-checkpoint buffer bound three
@@ -124,6 +139,9 @@ public final class GPUModel {
     /// Meaningful only when `prefillPath == .tiled`; scratch is sized for
     /// it at load and never grown.
     public let prefillChunkSize: Int
+    /// Which causal SDPA kernel the tiled prefill runs (PF-2). Meaningful
+    /// only when `prefillPath == .tiled`.
+    public let prefillAttention: PrefillAttention
 
     /// Dual timing of the most recent `step` (hard rule 7). Aggregation into
     /// medians/rates is `DecodeTimingCollector`'s job (P2-5).
@@ -175,7 +193,9 @@ public final class GPUModel {
     private let quantGemm: QuantGemmKernel?
     /// PF-1 lever 1: the batched causal SDPA (one dispatch per layer per
     /// chunk, D4 option 2) — present exactly on the tiled prefill path.
-    private let prefillSDPA: PrefillSDPAKernel?
+    /// The tiled chunk's causal SDPA kernel — PF-1 per-position or PF-2
+    /// query-tiled per `prefillAttention` (same contract either way).
+    private let prefillSDPA: (any PrefillCausalSDPAEncoding)?
     private let dispatchCounter = DispatchCounter()
 
     private let embeddingRef: MatrixRef
@@ -279,7 +299,8 @@ public final class GPUModel {
             file: checkpoint, packed: nil, config: config, context: context,
             residency: residency, maxContext: maxContext, kernelPath: .naive,
             prefillPath: .sequential,
-            prefillChunkSize: Self.defaultPrefillChunkSize)
+            prefillChunkSize: Self.defaultPrefillChunkSize,
+            prefillAttention: Self.defaultPrefillAttention)
     }
 
     /// The P3-5 packed path: identical pipeline, q4g64 matrices consumed by
@@ -302,25 +323,32 @@ public final class GPUModel {
     ///   reported, not pinned). nil resolves to min(`defaultPrefillChunkSize`,
     ///   maxContext); an explicit value must lie in 1...maxContext. Ignored
     ///   on the sequential path.
+    /// - Parameter prefillAttention: the tiled chunk's causal SDPA kernel
+    ///   (PF-2). nil resolves to `defaultPrefillAttention` (query-tiled);
+    ///   `.perPosition` selects the PF-1 kernel for the on-device A/B.
+    ///   Ignored on the sequential path.
     public convenience init(
         packed: PackedCheckpoint, config: ModelConfig, context: MetalContext,
         residency: WeightsResidency = .mmap, maxContext: Int,
         kernelPath: KernelPath = .fused,
         prefillPath: PrefillPath? = nil,
-        prefillChunkSize: Int? = nil
+        prefillChunkSize: Int? = nil,
+        prefillAttention: PrefillAttention? = nil
     ) throws {
         try self.init(
             file: packed.file, packed: packed, config: config, context: context,
             residency: residency, maxContext: maxContext, kernelPath: kernelPath,
             prefillPath: prefillPath ?? Self.defaultPrefillPath(for: kernelPath),
             prefillChunkSize: prefillChunkSize
-                ?? min(Self.defaultPrefillChunkSize, max(maxContext, 1)))
+                ?? min(Self.defaultPrefillChunkSize, max(maxContext, 1)),
+            prefillAttention: prefillAttention ?? Self.defaultPrefillAttention)
     }
 
     private init(
         file: SafetensorsFile, packed: PackedCheckpoint?, config: ModelConfig,
         context: MetalContext, residency: WeightsResidency, maxContext: Int,
-        kernelPath: KernelPath, prefillPath: PrefillPath, prefillChunkSize: Int
+        kernelPath: KernelPath, prefillPath: PrefillPath, prefillChunkSize: Int,
+        prefillAttention: PrefillAttention
     ) throws {
         guard config.usesQKNorm, !config.attentionBias else {
             throw ModelError.unsupportedFamily(
@@ -340,6 +368,7 @@ public final class GPUModel {
         self.kernelPath = kernelPath
         self.prefillPath = prefillPath
         self.prefillChunkSize = prefillChunkSize
+        self.prefillAttention = prefillAttention
         if prefillPath == .tiled {
             // Tiled prefill exists exactly on the packed + fused pipeline
             // (spec D5); fail at load with a clear error, never mid-prompt.
@@ -462,8 +491,14 @@ public final class GPUModel {
             ? try PrefillKernels(context: context) : nil
         quantGemm = prefillPath == .tiled
             ? try QuantGemmKernel(context: context) : nil
-        prefillSDPA = prefillPath == .tiled
-            ? try PrefillSDPAKernel(context: context) : nil
+        switch (prefillPath, prefillAttention) {
+        case (.sequential, _):
+            prefillSDPA = nil
+        case (.tiled, .perPosition):
+            prefillSDPA = try PrefillSDPAKernel(context: context)
+        case (.tiled, .queryTiled):
+            prefillSDPA = try PrefillTiledSDPAKernel(context: context, headDim: headDim)
+        }
         decodeKernels.dispatchCounter = dispatchCounter
         attentionKernels.dispatchCounter = dispatchCounter
         quantKernels?.dispatchCounter = dispatchCounter
