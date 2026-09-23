@@ -5014,3 +5014,24 @@ not corrected (append-only): PF-2B's backlog `completed_at`
 (2026-09-23 05:20 UTC) post-dates this session's `started_at`
 (04:18 UTC) — a local-vs-UTC slip in the prior session's stamp;
 the ledger order is unambiguous from the entry sequence.
+
+## 2026-09-23 — Decisions (James, in-conversation, after the P5-EXEC close-out): Phase 6 headlines the PF-2B prefill number; PF-2B backlog stamp corrected
+
+- **Phase 5 prefill number of record for the Phase 6 writeup: 240.86
+  tok/s** (PF-2B, 2026-09-23, warm prefill-span median of n=5 on
+  prefill-summarize, query-tiled attention, build c2c5fd4, detached) —
+  James resolved the open item the P5-EXEC entry surfaced. The P5-5B
+  row (172.23) remains the gate-walk / exit-basis row and stays cited as
+  such; the Phase 5 exit decision itself is unchanged. Phase 6's
+  same-session head-to-head supersedes both per the staleness rule.
+  README.md / CLAUDE.md status now lead with 240.86; SPEC-P6's backlog
+  notes carry the instruction. architecture.pdf v1.8 already shows both
+  numbers labeled and no displayed number changes — not regenerated.
+- **Backlog stamp corrected (the P5-EXEC entry's "record wrinkle"):**
+  PF-2B's `completed_at` in docs/PRIORITIES.yaml was 2026-09-23 05:20
+  UTC, later than the close-out commit that recorded it (c646366,
+  2026-09-23 04:10:35 UTC) and later than the P5-EXEC session start.
+  Corrected to the commit time, 04:10:35 UTC (a bad stamp, not a
+  timezone shift: 05:20 UTC has no local-time reading consistent with
+  the commit). DECISIONS.md itself is untouched (append-only); the
+  backlog is the field that was wrong.

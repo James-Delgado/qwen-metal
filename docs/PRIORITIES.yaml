@@ -2081,7 +2081,7 @@ tasks:
     title: "Device A/B of the tiled-prefill attention kernels (query-tiled vs per-position) + device prefill attribution re-export on the PF-2 build (James)"
     status: done
     started_at: 2026-09-23 03:38:42+00:00
-    completed_at: 2026-09-23 05:20:00+00:00
+    completed_at: 2026-09-23 04:10:35+00:00
     owner: james
     depends_on: [PF-2]
     blocks: []
@@ -2289,9 +2289,12 @@ tasks:
       close-out (PF-2B, in-phase kernel) = 65%; per-component table
       attributes every ms (GEMM 67.5% → 92.8% at the 0.78 TFLOPS plateau
       = the whole remaining gap, GE-1). architecture.pdf v1.8, README +
-      CLAUDE.md status refreshed, SPEC-P6 ready. Which of the two prefill
-      numbers Phase 6 headlines is James's call (surfaced, reversible).
-      DECISIONS.md 2026-09-23 P5-EXEC entry.
+      CLAUDE.md status refreshed, SPEC-P6 ready. DECISIONS.md 2026-09-23
+      P5-EXEC entry.
+      2026-09-23 (decided by James): Phase 6 headlines the PF-2B number
+      (240.86 tok/s) as the Phase 5 prefill result; P5-5B 172.23 stays
+      the gate-walk / exit-basis row. PF-2B completed_at corrected to
+      the close-out commit time (04:10:35 UTC; was a bad 05:20 stamp).
   - id: SPEC-P6
     rank: 22
     title: "Write Phase 6 spec (benchmark writeup + final measurement round)"
@@ -2315,6 +2318,11 @@ tasks:
       charge as SEPARATE fields in all future energy rows. Also: iOS
       version drifted 26.5.2 -> 26.6.1 across Phase 2/3 rows — Phase 6
       re-baselines everything same-session/same-OS per the staleness rule.
+      2026-09-23 (decided by James, at the P5-EXEC close-out): the Phase 6
+      writeup headlines the PF-2B prefill number (240.86 tok/s warm span
+      median, query-tiled attention, c2c5fd4) as the Phase 5 result of
+      record; the P5-5B 172.23 row stays cited as the gate-walk basis.
+      The same-session Phase 6 head-to-head supersedes both.
 
   - id: P6-EXEC
     rank: 23

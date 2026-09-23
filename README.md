@@ -33,13 +33,13 @@ its first run; the GPU free-running trajectory is token-identical to its CPU
 oracle on all fixture prompts, on both prefill paths. Measured (iPhone 15
 Pro, detached): **decode 31.67 tok/s warm-burst** (Phase 4; **the committed
 29.4 target = 0.75 × MLX's measured 39.2 is exceeded**; unchanged through
-Phase 5 at 31.05 / 30.90) and **prefill 172.23 tok/s** at the Phase 5 exit
-rows (852-token prompt; floor ≥135 PASS; ≈4.7× the sequential path
-in-session, claim-grade) — **240.86 tok/s** on the engine as it stands
-after the in-phase query-tiled attention kernel — at 573 MB mmap
-phys_footprint. Against MLX's PROVISIONAL ≈370 tok/s prefill that is 47%
-at exit / 65% at close-out, with the remaining gap attributed to one
-component: the dequant-GEMM's 0.78 TFLOPS compute plateau on the A17 Pro
+Phase 5 at 31.05 / 30.90) and **prefill 240.86 tok/s** (852-token prompt,
+warm span median, on the engine as it stands after the in-phase
+query-tiled attention kernel — the Phase 5 number of record per James;
+the gate-walk rows read 172.23 with the floor ≥135 PASS and ≈4.7× the
+sequential path in-session, claim-grade) at 573 MB mmap phys_footprint.
+Against MLX's PROVISIONAL ≈370 tok/s prefill that is 65% (47% at the
+gate-walk rows), with the remaining gap attributed to one component: the dequant-GEMM's 0.78 TFLOPS compute plateau on the A17 Pro
 (the attention kernel reaches 0.92 on the same silicon), now 93% of the
 prefill span. Two gates are on record FAILED with their full anatomy:
 Phase 4's per-token wall−GPU overhead (1.40 ms vs ≤1.2; ≈62% OS/driver

@@ -22,8 +22,9 @@ SPEC-P6 is the open task. Pinned model: Qwen/Qwen3-1.7B @ 70d244cc on iPhone
 15 Pro. The engine decodes end-to-end from the packed 4-bit q4g64 format
 on-device at 31.67 tok/s warm-burst — the committed 29.4 target (0.75 × MLX)
 is EXCEEDED — and prefills through a tiled dequant-GEMM + query-tiled
-attention at 172.23 tok/s on the Phase 5 exit rows (240.86 at close-out;
-47% / 65% of MLX's PROVISIONAL ≈370, judged not gated). Two gates are on
+attention at 240.86 tok/s (the Phase 5 number of record per James; the
+gate-walk rows read 172.23) — 65% of MLX's PROVISIONAL ≈370, judged not
+gated. Two gates are on
 record as FAILED with their anatomy: Phase 4 overhead (1.40 ms vs ≤1.2;
 ≈62% OS/driver latency; remedy PIPE-1) and Phase 5 GEMM M=8 (19.54 vs
 ≥30.69 GB/s; device compute-bound at M=8; remedy P5-2C) — both in the
