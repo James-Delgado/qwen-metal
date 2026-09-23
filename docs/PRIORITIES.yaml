@@ -2254,7 +2254,8 @@ tasks:
   - id: P5-EXEC
     rank: 21
     title: "Phase 5 exit milestone (all P5 tasks done, exit criteria walked, prefill-vs-MLX judgment)"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-23 04:18:46+00:00
     depends_on: [P5-1, P5-2, P5-3, P5-4, P5-5, P5-5B]
     blocks: [SPEC-P6]
     deliverable:
