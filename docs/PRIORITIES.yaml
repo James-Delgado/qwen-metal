@@ -2111,10 +2111,10 @@ tasks:
       sweep needed — the Mac estimate transferred in full. Rows +
       entry: results.md / DECISIONS.md 2026-09-23 PF-2B.
   - id: GE-1
-    rank: 20.49
+    rank: 23.27
     title: "Large-M GEMM compute efficiency: the device plateau (0.78 TFLOPS at M>=64) caps prefill at ~276 tok/s — measure where the kernel sits vs the A17 Pro peak and iterate if it pays"
-    status: ready
-    depends_on: [PF-1]
+    status: blocked
+    depends_on: [PF-1, SPEC-P7]
     blocks: []
     deliverable:
       file: "engine package (Metal/QuantGemmKernel large-M path + gemm microbench attribution) OR a DECISIONS.md close-out note"
@@ -2144,6 +2144,14 @@ tasks:
       silicon's. Measure-first step should include a plain fp16 GEMM on
       the same shapes as the device reference; ≈370 tok/s needs the
       layer GEMMs at ≈1.17 TFLOPS.
+      2026-09-23 (decided by James): re-ranked 20.49 → 23.27 into the
+      optimization campaign behind SPEC-P7 (alongside PIPE-1 23.25 and
+      P5-2C 23.26), BLOCKED on SPEC-P7 which seeds its gates. Phase 5's
+      committed gates are settled (floor PASS, decode PASS, M=8
+      FAILED-with-anatomy → P5-2C); prefill-vs-MLX is a campaign goal.
+      Expect ≥2 device sessions (ceiling reference + attribution; variant
+      sweep + A/B) — the Mac is non-predictive on this kernel family.
+      P5-EXEC close-out is the next agent task, in a fresh context.
   - id: P5-5B
     rank: 20.5
     title: "Phase 5 device RE-WALK (James, detached): prefill floor + M=8 microbench + decode regression gates, interleaved sequential-vs-tiled before/after, device PREFILL attribution export"

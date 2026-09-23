@@ -4876,3 +4876,20 @@ rows and a judgment input.
 - **Backlog:** PF-2B done; GE-1 notes gain the device input above. The
   ranking flag from PF-2 stands: GE-1 (20.49) outranks the P5-EXEC
   close-out (21).
+
+## 2026-09-23 — Decision (James, in-conversation): GE-1 re-ranked into the campaign; P5-EXEC close-out is next
+
+After the PF-2B rows, James decided that GE-1 (large-M GEMM compute
+efficiency — the whole remaining prefill lever at 92.8% of the device
+span) moves from rank 20.49 into the optimization campaign at 23.27,
+behind SPEC-P7 (alongside PIPE-1 and P5-2C), blocked on SPEC-P7 which
+seeds its gates. Rationale recorded: Phase 5's committed gates are
+settled (prefill floor PASS, decode regression PASS, M=8 FAILED with
+anatomy and remedy assigned), the exit was decided 2026-09-19, and
+prefill-vs-MLX is a campaign goal under the 2026-09-07 north-star
+sequencing (Phase 6 writeup first). GE-1 is expected to need at least
+two device sessions (a plain fp16 GEMM ceiling reference + per-role
+attribution; a variant sweep + interleaved A/B), since the Mac is
+non-predictive on this kernel family (P5-2B precedent). The next agent
+task by rank is now the P5-EXEC close-out (21), to be picked up in a
+fresh context as the 2026-09-19 decision intended.
