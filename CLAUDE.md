@@ -17,8 +17,9 @@
 
 ## Project status
 
-Phases 0–5 exited (as of 2026-09-23); Phase 6 (benchmark writeup) is next —
-SPEC-P6 is the open task. Pinned model: Qwen/Qwen3-1.7B @ 70d244cc on iPhone
+Phases 0–5 exited (as of 2026-09-23); Phase 6 (benchmark writeup) is in
+progress — spec at docs/phases/phase-6.md (SPEC-P6 done 2026-09-23); P6-1
+is the next ready task. Pinned model: Qwen/Qwen3-1.7B @ 70d244cc on iPhone
 15 Pro. The engine decodes end-to-end from the packed 4-bit q4g64 format
 on-device at 31.67 tok/s warm-burst — the committed 29.4 target (0.75 × MLX)
 is EXCEEDED — and prefills through a tiled dequant-GEMM + query-tiled

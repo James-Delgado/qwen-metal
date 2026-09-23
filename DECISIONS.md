@@ -5035,3 +5035,139 @@ the ledger order is unambiguous from the entry sequence.
   timezone shift: 05:20 UTC has no local-time reading consistent with
   the commit). DECISIONS.md itself is untouched (append-only); the
   backlog is the field that was wrong.
+
+## 2026-09-23 — Phase 6 gates pre-committed: run-validity criteria + reused regression tripwires; no new performance constants
+
+Set BEFORE any Phase 6 code, harness patch, or device row exists
+(PLAN.md invariant 4). Spec: docs/phases/phase-6.md. Phase 6 builds no
+kernels — its deliverable is the same-session/same-OS head-to-head plus
+the writeup — so its gates are measurement-VALIDITY criteria (they
+decide whether a row may be a headline row) plus the existing constants
+reused as regression tripwires. Grounding (all on record; nothing
+invented): PLAN.md benchmark + energy protocol pins and the staleness
+rule; the 2026-08-22 dry run (1055 s per 10% SoC at ≈4.3 W gross, idle
+≈0.50 W, ±12% quantization estimate) and its corrected 2026-09-05 basis
+(12.6 Wh rated, health 100% ⇒ 453.6 J per 1% SoC); our device numbers
+(decode 31.67 / 31.05 / 30.90 tok/s window medians; prefill 240.86 of
+record, 172.23 gate walk; 5-min sustained plateau ≈23.6; phys_footprint
+573.2 MB mmap / 1.43 GB wired); the Phase 0 PROVISIONAL external rows
+(MLX 39.2 overall rate validation ON / 39.6 OFF, prefill ≈370;
+llama.cpp 32.44, ≈452; corrected energy ~0.122 / ~0.154 J/token).
+
+- **Same-build/same-OS validity (OV#7 made operational):** a headline
+  row comes only from the speed session (one calendar session, one iOS
+  build, all three engines interleaved in rotating order, opened and
+  closed by our warm-burst bookend row, detached, validation OFF
+  recorded) or from the energy round run on that same iOS build. A
+  mid-session/mid-round OS change invalidates the incomplete unit —
+  restart. Rows violating this appear only in the provisional-vs-final
+  limitations table, labeled.
+- **Metric definitions pinned across engines (D1):** decode tok/s = 384 ÷
+  (t₅₁₂ − t₁₂₈) on host wall time at which generated token k is
+  available (our DecodeInstrumentation definition, unchanged); prefill
+  tok/s = per-engine prompt token count ÷ span from prompt-processing
+  start to the FIRST generated token id being available (no second
+  forward inside the span — our D1 span, unchanged; llama.cpp's
+  `completion_init` bracket; MLX's first stream token); sustained =
+  per-generation timeline. The external harnesses move to our
+  definitions, never the reverse.
+- **Energy-cycle validity (PLAN pins walked per cycle):** 80→70% SoC band
+  (Settings → Battery is the value of record at the marks; programmatic
+  SoC is a cross-check field), ≥8% burned, implied gross watts in 3–9,
+  idle baseline subtracted, ≥3 valid cycles per engine, mean ± spread;
+  capacity basis = 12.6 Wh × 36 × (battery HEALTH % ÷ 100) read from
+  Settings at that cycle, with health and SoC recorded as SEPARATE
+  fields (the binding 2026-09-05 obligation — every earlier "health"
+  field was SoC). Cycles rotate in a Latin-square engine order across
+  the round; recharge ≥81% then rest between cycles.
+- **Idle baseline ≥ 4% SoC drop, once per iOS build** (the one derived
+  number in this entry): idle ≈0.50 W is ≈12% of the ≈4.3 W gross;
+  ±0.5%-per-reading quantization on a ≥4% drop bounds the idle term to
+  ±25% of itself ⇒ ≤ ±3% on the net J/token, below the run's own ±10%
+  (±1% of a 10% burn). Phase 0's 1%/15 min idle reading carried ±50%.
+- **Our engine's regression tripwires on the speed-session rows (reused
+  constants):** decode warm-burst window median ≥ 24.0 tok/s (the Phase
+  4 constant, reused in Phase 5), prefill warm span median ≥ 135 tok/s
+  (the Phase 5 constant), both on the tagged `phase6-build` whose full
+  correctness evidence (Tier-M/E, 250-step logit suite, free-run ×5) is
+  re-run green and recorded BEFORE any device row. Harness-only changes
+  must lose nothing.
+- **Success-metric verdict at P6-EXEC (PLAN formula, no new number):**
+  MET iff (our warm-burst window median) ÷ (MLX warm-burst window
+  median, same session, same definition) ≥ 0.75; the committed 29.4
+  absolute is reported alongside (hard rule 6 — never loosens; already
+  exceeded at 31.67). A NOT MET verdict does not block the phase exit
+  (PLAN row 6 exits on the writeup's completeness); it is recorded with
+  its anatomy and becomes the campaign's first headline gap.
+- **Rest discipline (procedural — no temperature readout exists):** rest
+  to ambient for at least the duration of the preceding thermally
+  loaded run (sustained loop, energy cycle, or charging), unplugged;
+  the speed-session bookend delta demotes any smaller cross-engine
+  claim to "unresolved (drift-dominated)".
+- **Feeding mode:** the pinned RENDERED prompt string on every engine;
+  the MLX harness gains a rendered-input mode whose parity check is an
+  EXACT prompt-token-count match with ours (852 / 84 — both HF
+  tokenizers over the same string); fallback within a one-day timebox
+  = raw text + LLMEval's template, count recorded, delta named in the
+  limitations section. Metal API validation OFF on every row, recorded.
+- **Judged, never gated:** every cross-engine comparison (prefill,
+  energy, memory, thermal), roofline fractions, headroom decompositions.
+- **Engine freeze:** no kernel or pipeline change after the
+  `phase6-build` tag until the round closes; a change would re-open
+  the round.
+
+Honest flag (surfaced for James; veto window = before P6-1 work starts,
+the SPEC-P2..P5 precedent): the validity criteria and tripwires are
+PLAN pins and reuses, but these items are judgment-derived or
+convention-setting — (1) the ≥4% idle-baseline rule; (2) the
+rest-≥-preceding-run-duration rule and the Latin-square cycle order;
+(3) the first-token prefill-span parity definition applied to the
+external engines; (4) rendered-form feeding on MLX with the exact-count
+signature; (5) the success-metric verdict as a recorded judgment that
+does not block exit; (6) llama.cpp energy KEPT at n=3 (recommended;
+PLAN says decide in DECISIONS.md — the pre-declared cut rule is in
+spec D4); (7) the writeup's home (docs/writeup.md + docs/writeup/
+figures) and the raw-export archive dir benchmarks/phase6/ + the
+analysis script tools/phase6_analyze.py; (8) BW-1 and LD-1 stay at
+their ranks (writeup cites them as open caveats if unlanded) — pulling
+them ahead of P6-6 is a re-rank James may choose. Per hard rule 6 none
+of the tripwire constants can loosen; the validity criteria can only
+tighten.
+
+## 2026-09-23 — SPEC-P6: Phase 6 spec written; P6 build tasks seeded
+
+- **Spec landed: docs/phases/phase-6.md** (benchmark writeup + final
+  same-session measurement round). The PLAN phase-table row-6 exit
+  criterion is covered item by item (same-session/same-OS table,
+  sustained-thermal chart, energy with error bars, roofline from
+  measured denominators, limitations section, honest gaps); the three
+  Part 4 review obligations are honored (OV#7 → D3/D7 validity gate;
+  OV#8 → D4's calendar budget ≈10 device-hours ≈ 3 James sessions and
+  the llama.cpp-energy recommendation with a pre-declared cut rule;
+  Issue 3 → D8 §7 enumerated limitations); the 2026-09-05
+  capacity-basis obligation is D4/D7 binding text; the 2026-09-07
+  north-star binding is D8 §6 (both decompositions re-exported on the
+  Phase 6 build); the 2026-09-23 headline decision is D8.
+- **Design decisions (D1–D9, rationale in the spec):** one metric
+  definition per metric with the external harnesses instrumented to
+  ours (window rate, first-token prefill span, per-generation timeline,
+  separate health/SoC fields); parity pins re-applied with the two
+  Phase 0 loose ends closed (rendered feeding on MLX, validation OFF
+  everywhere); the speed session = one day/one OS build, rotating
+  engine order, our bookends, per-engine cold rows, memory in both
+  residency modes for ours; the energy round = PLAN protocol with the
+  health-based basis, ≥4% idle rule, Latin-square cycle order, both
+  error bars, each cycle doubling as the thermal chart's data; engine
+  frozen at a tagged build with suites re-run first; procedural rest
+  rule; gates = validity + reused tripwires + the PLAN-formula verdict;
+  writeup home/sections/data-of-record with every number regenerated
+  from archived exports; harness provenance as stacked `*-p6.patch`.
+- **Backlog:** P6-1..P6-6 seeded at ranks 22.1–22.6 (P6-4 / P6-5 owner:
+  james — the device sessions); P6-EXEC re-pointed at P6-6 and becomes
+  the exit walk + success-metric verdict + llama.cpp-energy decision +
+  the standing *-EXEC close-out (architecture.pdf v1.9, README/CLAUDE.md
+  refresh); CAMP-1 stays blocked on P6-EXEC. No engine change is seeded.
+- **NOTE for James (veto window before P6-1 work starts):** eight
+  judgment-derived / convention-setting items are flagged in the gates
+  entry above and reported item-by-item in the session report per
+  AGENT_OPERATION.md step 11.

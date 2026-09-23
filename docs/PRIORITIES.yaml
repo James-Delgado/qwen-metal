@@ -2298,13 +2298,14 @@ tasks:
   - id: SPEC-P6
     rank: 22
     title: "Write Phase 6 spec (benchmark writeup + final measurement round)"
-    status: in_progress
+    status: done
     started_at: 2026-09-23T04:35:26Z
+    completed_at: 2026-09-23T04:42:03Z
     depends_on: [P5-EXEC]
-    blocks: [P6-EXEC]
+    blocks: [P6-EXEC, P6-1, P6-2]
     deliverable:
       file: docs/phases/phase-6.md
-      tests: "n/a (spec)"
+      tests: "n/a (spec); Phase 6 validity gates + reused tripwires committed pre-phase"
     est_complexity: small
     notes: |
       Context: review record Part 4 — same-session/same-OS re-runs (OV#7),
@@ -2324,20 +2325,188 @@ tasks:
       median, query-tiled attention, c2c5fd4) as the Phase 5 result of
       record; the P5-5B 172.23 row stays cited as the gate-walk basis.
       The same-session Phase 6 head-to-head supersedes both.
+      2026-09-23 (done): spec landed (docs/phases/phase-6.md, D1-D9) +
+      Phase 6 gates pre-committed in DECISIONS.md (run-validity
+      criteria: same-session/same-OS headline rows, energy-cycle
+      validity on the health-based capacity basis with health/SoC as
+      separate fields, idle baseline >=4% SoC; reused tripwires decode
+      >=24.0 / prefill >=135 on the tagged build; success-metric
+      verdict by the PLAN formula, recorded not blocking; no new
+      performance constants). P6-1..P6-6 seeded below; P6-EXEC
+      re-pointed at P6-6. NOTE for James: eight judgment-derived /
+      convention-setting items are flagged in the gates entry — veto
+      window is before P6-1 work starts.
+
+  # ---------- Phase 6 build tasks (seeded 2026-09-23 by SPEC-P6; spec: docs/phases/phase-6.md) ----------
+  - id: P6-1
+    rank: 22.1
+    title: "Engine/app harness for the Phase 6 round: energy-mode loop (operator stop + report), battery health + SoC as separate fields, per-generation timeline JSON export, round marker"
+    status: ready
+    depends_on: [SPEC-P6]
+    blocks: [P6-3]
+    deliverable:
+      file: "engine package (Bench module) + QwenMetalApp"
+      tests: "spec edge tests 1-4: operator-stopped loop still reports (truncated gen flagged, cumulative == sum of records, empty-gen refusal); health/SoC separate fields with placeholder discipline + start/end programmatic SoC cross-check; timeline JSON round-trip == text export; round marker gates the PROVISIONAL header; every existing suite unchanged"
+    est_complexity: medium
+    notes: |
+      Spec D1/D4/D5. Harness surfaces only — the engine core stays at
+      c2c5fd4 (PF-2); any kernel/pipeline change is out of scope and
+      would re-open the round. Today Stop during a sustained loop
+      aborts WITHOUT a report (P2-6 limitation) — the energy cycle is
+      operator-bounded (stop at exactly 70% SoC), so the loop must end
+      at the next token boundary and still report. Battery health
+      (Settings -> Battery Health max capacity %) has no public API —
+      operator-typed; SoC is programmatic (UIDevice batteryLevel with
+      monitoring enabled) AND operator-read at the band marks. Mac
+      sanity run of the energy mode with a short duration bound (no
+      numbers of record).
+
+  - id: P6-2
+    rank: 22.2
+    title: "External-harness parity patches (MLX LLMEval + llama.swiftui): canonical-window decode rate, first-token prefill span, per-generation loop log, SoC fields, MLX rendered-input mode with the exact token-count signature, validation OFF pins — archived as *-p6.patch"
+    status: ready
+    depends_on: [SPEC-P6]
+    blocks: [P6-3]
+    deliverable:
+      file: "benchmarks/patches/mlx-swift-examples-p6.patch + benchmarks/patches/llama-swiftui-p6.patch (stacked on the P0A-1 patches; clones ~/Projects/mlx-swift-examples @ 992118b, ~/Projects/llama.cpp @ bceddff)"
+      tests: "build-verified (LLMEval macOS destination; llama.swiftui generic/platform=iOS, signing disabled); spec check 7 documented in the patch commit (MLX rendered-mode prompt token count must equal ours EXACTLY: 852 / 84; llama.cpp counts recorded 852 / 92); never run for numbers by agents"
+    est_complexity: medium
+    notes: |
+      Spec D1/D2/D9. Definitions to match ours: window rate = 384 /
+      (t512 - t128) on host wall time at which generated token k is
+      available (per-token timestamps — MLX stream callback,
+      llama.cpp completion_loop); prefill span = prompt-processing
+      start -> first generated token id available (llama.cpp: bracket
+      completion_init = tokenize + llama_decode(prompt batch) + first
+      sample; MLX: generation start -> first streamed token — VERIFY
+      whether it comes from the prompt forward or a second forward,
+      the Phase 0 entry assumed a ~26 ms second step, and bracket
+      accordingly, recording which); sustained
+      loop logs one line per generation (window tok/s, overall tok/s,
+      tokens, wall, stop reason) — today both loops report only
+      cumulative first/last. MLX rendered-input mode: tokenize the
+      rendered string directly (added/special tokens parsed, NO
+      template) and pass the tokens to generate; parity = exact count
+      match with ours. One-day timebox on that mode (the Phase 0
+      pattern); fallback = raw text + template, count recorded, delta
+      named in the limitations section. Upstream revisions and
+      checkpoints stay pinned — no version bumps (a bump = a new
+      PROVISIONAL baseline, not the head-to-head).
+
+  - id: P6-3
+    rank: 22.3
+    title: "Phase 6 runbook + row templates + tools/phase6_analyze.py (exports -> tables + figures) with tests; tag phase6-build; full correctness evidence re-run on the tag"
+    status: blocked
+    depends_on: [P6-1, P6-2]
+    blocks: [P6-4]
+    deliverable:
+      file: "benchmarks/phase6-runbook.md + tools/phase6_analyze.py (+ tools tests) + benchmarks/phase6/README.md (archive layout) + DECISIONS.md tag-evidence entry"
+      tests: "spec edge tests 5-6 on synthetic exports: energy math (J per 1% from health, idle scaling, net J/token, implied W, 3-9 W verdict, >=8% / n>=3 checks), window-rate parser, OS-build mismatch — each invalid input REFUSES a headline value; thermal chart + energy bars render from the D1 timeline; Tier-M/E + 250-step logit suite (GPU-quant) + free-run x5 green on the tag, output quoted"
+    est_complexity: medium
+    notes: |
+      Spec D3/D4/D5/D8. The runbook is the Phase 0 runbook's successor:
+      run order (D3 rotation with our bookends, per-engine cold row
+      first, 5-min loops with D6 rests, footprint launches last — ours
+      mmap AND wired; D4 Latin-square cycle order, recharge >=81% then
+      rest, idle baseline >=4% once per iOS build), per-row checklists,
+      the operator fields (iOS build, health %, SoC at marks,
+      validation OFF, cold/warm, rest), row templates for results.md,
+      and the export-archival step into benchmarks/phase6/ (one file
+      per row: text export + JSON timeline). Every writeup number is
+      regenerated by the script — none typed. Python deps stay pinned
+      (tools/requirements.txt; matplotlib is already a generator dep).
+
+  - id: P6-4
+    rank: 22.4
+    title: "Phase 6 speed session (James, detached): all three engines, one session, one iOS build, rotating order + our bookends — burst cold/warm, prefill, 5-min sustained loops, phys_footprint (ours mmap + wired); tripwires walked; exports archived"
+    status: blocked
+    owner: james
+    depends_on: [P6-3]
+    blocks: [P6-5]
+    deliverable:
+      file: "benchmarks/results.md Phase 6 speed-session rows + benchmarks/phase6/ exports + DECISIONS.md entry"
+      tests: "D7 validity walked (one session, one iOS build, interleaved, bookends, detached, validation OFF); tripwires decode >=24.0 / prefill >=135 on phase6-build; MLX prompt-count signature confirmed; bookend delta recorded"
+    est_complexity: large
+    notes: |
+      Spec D3/D6/D7. ~2-2.5 h of device time incl. rests. Order per
+      the runbook: our warm-burst bookend opens; each engine's first
+      launch = its cold row; warm burst x3 per engine in rotating
+      order (ours, MLX, llama.cpp) x3; prefill x3 per engine likewise;
+      one 5-min loop per engine with rests >= preceding run; footprint
+      launches (attached, footprint-only) after the timed rows; our
+      warm-burst bookend closes. Attribution exports (decode + prefill,
+      DIAGNOSTIC) on the same build/session feed writeup section 6.
+      The MLX window rate from this session is the denominator of the
+      success-metric verdict (P6-EXEC).
+
+  - id: P6-5
+    rank: 22.5
+    title: "Phase 6 energy round (James, detached): idle baseline (>=4% SoC) + >=3 battery-delta cycles per engine in the 80->70 band, Latin-square order, health-based capacity basis, validity walked per cycle; timelines archived (the sustained-thermal chart data)"
+    status: blocked
+    owner: james
+    depends_on: [P6-4]
+    blocks: [P6-6]
+    deliverable:
+      file: "benchmarks/results.md Phase 6 energy rows (per-cycle table) + benchmarks/phase6/ timelines + DECISIONS.md entry"
+      tests: "per cycle: band 80->70, >=8% burned, 3-9 W implied gross, idle subtracted, health and SoC recorded separately, iOS build == speed session; n>=3 valid per engine or the shortfall recorded per the D4 cut rule"
+    est_complexity: large
+    notes: |
+      Spec D4/D6/D7. Budget ~7 h across two half-day sessions (9
+      cycles x ~45 min incl. recharge + rest) + ~60 min idle baseline.
+      Cycle order (ours, MLX, llama.cpp), (MLX, llama.cpp, ours),
+      (llama.cpp, ours, MLX). Each cycle is the ~17-min thermal run:
+      its per-generation timeline is the chart of record. llama.cpp
+      energy is KEPT at n=3 (spec recommendation; James's call per
+      PLAN) — if the calendar forces a cut, llama.cpp's cycles are the
+      ones dropped and a partial round is reported labeled, never
+      averaged into the table; the decision lands in DECISIONS.md.
+      Instruments Energy Log, if captured, is "energy impact
+      (relative, unitless)" only.
+
+  - id: P6-6
+    rank: 22.6
+    title: "The writeup: docs/writeup.md + docs/writeup/ figures regenerated from benchmarks/phase6/ — headline table, verdict input, thermal chart, energy with both error bars, roofline from measured denominators, per-component headroom, measurement limitations, honest gaps, reproducibility"
+    status: blocked
+    depends_on: [P6-5]
+    blocks: [P6-EXEC]
+    deliverable:
+      file: "docs/writeup.md + docs/writeup/*.png (+ optional PDF render) + DECISIONS.md entry"
+      tests: "every number regenerated by tools/phase6_analyze.py from the archived exports (none typed); sections 1-9 per spec D8 present; provisional-vs-final table per engine with causes named; BW-1 / LD-1 cited as measured or as open caveats"
+    est_complexity: large
+    notes: |
+      Spec D8. Headline numbers = the Phase 6 same-session rows; where
+      the Phase 5 state is narrated, 240.86 tok/s is the prefill number
+      of record and 172.23 the gate-walk basis (James, 2026-09-23).
+      Roofline: decode vs 43.84 GB/s / bytes-per-token (967,753,728 B
+      weights + KV at the window depth + activations; the P4-EXEC ~80%
+      stream-rate finding) with each engine's implied effective
+      bandwidth and the BW-1 read-only caveat; prefill vs the measured
+      0.78 TFLOPS GEMM plateau and the 45.3 tok/s sequential ceiling.
+      Headroom: the P4-EXEC and P5-EXEC decompositions re-exported at
+      P6-4 with each residual's named owner (PIPE-1, P5-2C, GE-1,
+      matvec stream rate). Honest gaps: the two FAILED gates with
+      anatomy + whatever Phase 6 adds. This is the document the
+      project is defined by — a curious engineer reads it first.
 
   - id: P6-EXEC
     rank: 23
-    title: "Execute Phase 6: final same-session benchmark round (james) + writeup"
+    title: "Phase 6 exit milestone: exit criteria walked, success-metric verdict (PLAN formula), llama.cpp-energy decision recorded, architecture.pdf v1.9 + README/CLAUDE.md refresh; unblocks CAMP-1"
     status: blocked
-    depends_on: [SPEC-P6]
+    depends_on: [P6-6]
     blocks: [CAMP-1]
     deliverable:
-      file: "writeup + benchmarks/results.md final rows"
-      tests: "Phase 6 exit criteria (PLAN.md table)"
-    est_complexity: large
+      file: "DECISIONS.md exit entry + docs/architecture.pdf + README.md/CLAUDE.md status"
+      tests: "Phase 6 exit criteria (PLAN.md table row 6, walked per docs/phases/phase-6.md); verdict = ours window median / MLX same-session window median >= 0.75 reported MET or NOT MET with anatomy (never blocks exit); 29.4 constant reported alongside"
+    est_complexity: medium
     notes: |
       Milestone placeholder. Heavy James involvement: interleaved re-runs of all
       three engines on one OS build; full energy rounds (budget real days).
+      2026-09-23 (SPEC-P6): re-pointed at P6-6 — the device sessions are
+      P6-4/P6-5 (owner james), the writeup is P6-6; this task is the
+      walk + close-out per the standing *-EXEC rules (2026-08-26). The
+      llama.cpp-energy decision (OV#8) is recorded here at the latest
+      (earlier at P6-5 if the calendar forces it). Exit flips CAMP-1
+      live (the campaign chain seeded 2026-09-07).
 
   # ---------- Post-Phase-6 optimization campaign (seeded 2026-09-07; north star: DECISIONS.md 2026-09-07) ----------
   - id: CAMP-1
