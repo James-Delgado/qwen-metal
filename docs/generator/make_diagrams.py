@@ -262,6 +262,8 @@ bpt = np.linspace(0.4, 3.7, 300)  # GB per token
 # Phase 4 (2026-09-14): fused point added — same ~0.97 GB/token, warm-burst
 # window median 31.67 tok/s (n=4, 31.11–31.79); ~70% of the packed ceiling,
 # past the 29.4 target; ~95% of GPU time is weight streaming (DECISIONS.md P4-11).
+# Phase 5 (2026-09-19/23): decode untouched by design; the regression rows measured
+# 31.05 / 30.90 window median on the same detached footing — no new decode point.
 for bw, c, ls, lab in [
     (43.84, BLUE, "-", "43.84 GB/s (MEASURED triad, iPhone 15 Pro)"),
     (51.2, "#93c5fd", "--", "51.2 GB/s (A17 Pro rated)"),
@@ -361,8 +363,8 @@ phases = [
     ("2", "Naive Metal port + minimal KV cache — DONE 2026-08-25", "all fp16 gates held first run; free-run divergence none; 'before' 6.7–8.6 tok/s on-device; mmap default", 3.0, 2.0, GREEN, GREENF),
     ("3", "4-bit quant + fused dequant-matvec — DONE 2026-09-05", "all gates in-band; microbench 35.3 GB/s ≥ 30.7 gate; decode 20.6 tok/s (3.0×); mmap default", 4.5, 2.5, GREEN, GREENF),
     ("4", "Fused attention + kernel fusion — DONE 2026-09-14", "fused SDPA + folds + GPU argmax: 200 disp/tok; 31.67 tok/s (29.4 target exceeded); overhead gate failed w/ anatomy → PIPE-1", 6.5, 2.5, GREEN, GREENF),
-    ("5", "Tiled prefill GEMM — NEXT (spec pending)", "threadgroup memory + simdgroup_matrix; prefill vs MLX ('before': 8.2–10.7 tok/s)", 8.5, 2.0, BLUE, BLUEF),
-    ("6", "Benchmark writeup", "full cross-engine table; thermal + J/tok (battery-delta); roofline analysis", 10.0, 1.5, INK, "#e2e8f0"),
+    ("5", "Tiled prefill GEMM — DONE 2026-09-19", "tiled dequant-GEMM + chunked prefill (C=512): 172.23 tok/s (floor 135 PASS; 47% of MLX ≈370), 240.86 at close-out (65%); M=8 gate failed w/ anatomy → P5-2C", 8.5, 2.0, GREEN, GREENF),
+    ("6", "Benchmark writeup — NEXT (spec pending)", "full cross-engine table same-session; thermal + J/tok (battery-delta); roofline analysis from measured bandwidth + GEMM plateau", 10.0, 1.5, BLUE, BLUEF),
 ]
 ax.set_xlim(-0.2, 12.4); ax.set_ylim(-0.6, len(phases)*1.02); ax.axis("off")
 for i, (num, name, desc, start, dur, ec, fc) in enumerate(reversed(phases)):

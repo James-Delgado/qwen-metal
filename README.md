@@ -19,24 +19,36 @@ assumed.
 
 ## Status
 
-**Phases 0–4 exited; Phase 5 (tiled prefill GEMM) is next** (as of
-2026-09-14). The engine decodes Qwen3-1.7B end-to-end from its own packed
-4-bit format (q4g64, ~0.97 GB) through a fused kernel path — fused GQA SDPA
-with online softmax (split-K), norm/RoPE/append and SwiGLU/residual folds,
-GPU argmax — at 200 dispatches/token (was 591), with dequantization fused
-into every weight-consuming kernel. Every pre-committed correctness gate has
-held unmodified on its first run; the GPU free-running trajectory is
-token-identical to its CPU oracle on all fixture prompts. Measured (iPhone
-15 Pro): **decode 31.67 tok/s warm-burst** — **the committed 29.4 tok/s
-target (0.75 × MLX's measured 39.2) is exceeded** — at 538 MB mmap
-phys_footprint; sustained plateau ≈23.6 tok/s; fused-vs-naive +48%
-in-session (claim-grade). Attribution: ≈95% of GPU time is weight streaming
-at ≈80% of the measured 43.84 GB/s roofline. One Phase 4 gate is recorded
-FAILED with its full anatomy: per-token wall−GPU overhead 1.40 ms vs the
-≤1.2 ms gate — ≈62% is OS/driver latency around an idle GPU; the approved
-structural remedy (pipelined GPU-driven decode) is seeded for the
-post-Phase-6 optimization campaign. Ledger: `DECISIONS.md`; rows:
-`benchmarks/results.md`.
+**Phases 0–5 exited; Phase 6 (benchmark writeup) is next** (as of
+2026-09-23). The engine runs Qwen3-1.7B end-to-end from its own packed
+4-bit format (q4g64, ~0.97 GB) with dequantization fused into every
+weight-consuming kernel: a fused decode path (GQA SDPA with online softmax,
+split-K; norm/RoPE/append and SwiGLU/residual folds; GPU argmax) at 200
+dispatches/token, and — new in Phase 5 — a batched prefill path: the prompt
+is processed in 512-position chunks through a tiled q4g64 dequant-GEMM
+(threadgroup tiles + `simdgroup_matrix`, fp32 accumulate) and a query-tiled
+causal attention kernel, streaming the weights once per chunk instead of
+once per token. Every pre-committed correctness gate has held unmodified on
+its first run; the GPU free-running trajectory is token-identical to its CPU
+oracle on all fixture prompts, on both prefill paths. Measured (iPhone 15
+Pro, detached): **decode 31.67 tok/s warm-burst** (Phase 4; **the committed
+29.4 target = 0.75 × MLX's measured 39.2 is exceeded**; unchanged through
+Phase 5 at 31.05 / 30.90) and **prefill 172.23 tok/s** at the Phase 5 exit
+rows (852-token prompt; floor ≥135 PASS; ≈4.7× the sequential path
+in-session, claim-grade) — **240.86 tok/s** on the engine as it stands
+after the in-phase query-tiled attention kernel — at 573 MB mmap
+phys_footprint. Against MLX's PROVISIONAL ≈370 tok/s prefill that is 47%
+at exit / 65% at close-out, with the remaining gap attributed to one
+component: the dequant-GEMM's 0.78 TFLOPS compute plateau on the A17 Pro
+(the attention kernel reaches 0.92 on the same silicon), now 93% of the
+prefill span. Two gates are on record FAILED with their full anatomy:
+Phase 4's per-token wall−GPU overhead (1.40 ms vs ≤1.2; ≈62% OS/driver
+latency around an idle GPU) and Phase 5's GEMM microbench at M=8 (19.54
+vs ≥30.69 GB/s; the A17 Pro is already compute-bound at M=8, so the
+gate's bandwidth premise does not hold there). Their approved remedies
+(pipelined decode; an M=8-exact matrix-unit kernel) and the GEMM
+efficiency lever are seeded for the post-Phase-6 optimization campaign.
+Ledger: `DECISIONS.md`; rows: `benchmarks/results.md`.
 
 ## Documents
 

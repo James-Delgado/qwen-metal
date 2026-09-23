@@ -2254,8 +2254,9 @@ tasks:
   - id: P5-EXEC
     rank: 21
     title: "Phase 5 exit milestone (all P5 tasks done, exit criteria walked, prefill-vs-MLX judgment)"
-    status: in_progress
+    status: done
     started_at: 2026-09-23 04:18:46+00:00
+    completed_at: 2026-09-23 04:25:00+00:00
     depends_on: [P5-1, P5-2, P5-3, P5-4, P5-5, P5-5B]
     blocks: [SPEC-P6]
     deliverable:
@@ -2281,10 +2282,20 @@ tasks:
       (DECISIONS.md 2026-09-19 P5-5B has the inputs), refresh
       README/CLAUDE.md status, regenerate docs/architecture.pdf, flip
       SPEC-P6 ready. DECISIONS.md 2026-09-19 P5-EXEC decision entry.
+      2026-09-23 (done): close-out walked in a fresh context — 4 criteria:
+      3 MET, 1 SPLIT (M=8 gate FAILED 19.54 vs ≥30.69 on record with
+      anatomy, remedy P5-2C in the campaign). Judgment recorded: 172.23
+      tok/s at the exit rows = 47% of MLX's PROVISIONAL ≈370; 240.86 at
+      close-out (PF-2B, in-phase kernel) = 65%; per-component table
+      attributes every ms (GEMM 67.5% → 92.8% at the 0.78 TFLOPS plateau
+      = the whole remaining gap, GE-1). architecture.pdf v1.8, README +
+      CLAUDE.md status refreshed, SPEC-P6 ready. Which of the two prefill
+      numbers Phase 6 headlines is James's call (surfaced, reversible).
+      DECISIONS.md 2026-09-23 P5-EXEC entry.
   - id: SPEC-P6
     rank: 22
     title: "Write Phase 6 spec (benchmark writeup + final measurement round)"
-    status: blocked
+    status: ready
     depends_on: [P5-EXEC]
     blocks: [P6-EXEC]
     deliverable:

@@ -4893,3 +4893,124 @@ attribution; a variant sweep + interleaved A/B), since the Mac is
 non-predictive on this kernel family (P5-2B precedent). The next agent
 task by rank is now the P5-EXEC close-out (21), to be picked up in a
 fresh context as the 2026-09-19 decision intended.
+
+## 2026-09-23 — P5-EXEC: Phase 5 exit criteria walked — Phase 5 EXITED (decided by James 2026-09-19); prefill-vs-MLX judgment: 47% at the exit rows (172.23 vs ≈370), 65% at close-out (240.86); GEMM compute plateau is the remaining lever
+
+The close-out mandated by the 2026-09-19 P5-EXEC decision (EXIT on the
+P5-5B detached rows), run in a fresh context as James intended. The
+exit itself was decided on 2026-09-19; this entry walks the criteria,
+records the judgment with its per-component decomposition, and performs
+the standing *-EXEC close-out actions. Engine code is unchanged since
+the PF-2 commit (c2c5fd4, 2026-09-20); the suite evidence of record is
+that entry's verification ("Executed 407 tests, with 0 failures" +
+"Executed 57 tests, with 2 tests skipped and 0 failures" debug; release
+Tier-M/E "Executed 7 tests, with 0 failures"; GPU-quant 250-step logit
+suite 5/5; free-run report NONE ×5). Per hard rule 6 no gate value
+moves anywhere in this entry.
+
+**Exit criteria (docs/phases/phase-5.md, walked):**
+
+| Criterion | Verdict | Evidence |
+|---|---|---|
+| Tiled prefill GEMM using threadgroup memory + simdgroup_matrix; layered correctness suite (edge tests 1–8) at the reused constants, re-passed through every optimization iteration | MET | P5-2 (Metal/QuantGemmKernel: 32×32×32 threadgroup tiles + simdgroup_float8x8, dequant inside the consuming kernel; edge tests 1–2 incl. EXACT one-hot adversarial probes; six measured iterations each re-passing the suite); P5-3 (edge tests 3–8, 10–11, all gates held first run); P5-4 (tests 9, 12–13; Tier-M/E + the 250-step logit suite verbatim on the tiled default); the iterate levers PF-1, P5-2B, PF-2 each re-passed the suites, PF-2 with its 12 kernel-oracle tests landing first (hard rule 3) |
+| Prefill tok/s benchmarked separately vs MLX (D1 metric; device rows + the P5-EXEC judgment) | MET | P5-5B device rows (prefill-span metric of record, dual-timed, 790 dispatches exact on every row) + the judgment below |
+| Pre-committed gates walked: microbench fraction ≥30.69 GB/s @ M=8, prefill floor ≥135 tok/s (amended at the veto close), decode regression ≥24.0, Tier-M/E + KV-contents suites on the tiled path | SPLIT | Prefill floor PASS 172.23 (n=5, 168.26–186.71; GPU-only bound 181.9). Decode regression PASS 31.05 (n=3: 31.05 / 30.48 / 31.36). Correctness suites PASS (P5-4, re-verified at PF-2). **GEMM M=8 FAILED 19.54 GB/s best of n=3 vs ≥30.69 (gate unmodified)** — anatomy below |
+| DECISIONS.md entries for every gate outcome, the before/after result, the judgment, and anything else decided/measured | MET | Per-task entries 2026-09-14 … 2026-09-23 (gates, veto close, P5-1..P5-4, P5-5, iterate decision, PF-1, P5-2B, P5-5B, exit decision, PF-2, PF-2B, GE-1 re-rank) + this close-out |
+
+**The M=8 gate failure, recorded honestly (criterion 3):** two
+structurally different M≤8 kernels (P5-2 thread-per-row, P5-2B
+lane-split — ×1.55 apart on the Mac) land at the same ≈19–20 GB/s on
+the A17 Pro; at M=8 the device already delivers 541 GFLOPS = 70% of its
+780 GFLOPS matrix-unit plateau, i.e. the bandwidth→compute crossover
+sits BELOW M=8 on this silicon and the D7 premise ("a batch size where
+the kernel remains weight-bandwidth-dominated") holds on the Mac but not
+on the device. The gate's tripwire purpose was served: it exposed a
+false premise rather than a kernel bug, with the arithmetic (≈12 scalar
+instructions per weight for 16 useful FLOPs) as the named cause. The
+value stays FAILED on the record, unmodified (hard rule 6; nothing
+loosened); the approved remedy is P5-2C (M=8-exact simdgroup_float8x8
+variant + on-device geometry sweep) in the optimization campaign behind
+SPEC-P7 — the Phase 4 precedent (overhead gate FAILED-with-anatomy,
+PIPE-1). The m8 path has no production exposure at real prompt sizes
+(only chunks of ≤8 positions reach it).
+
+**D7 prefill-vs-MLX judgment (mandatory at this milestone; judged, not
+gated — the 2026-09-14 gates entry):**
+
+- **Number of record for the Phase 5 exit: 172.23 tok/s** (P5-5B,
+  2026-09-19, warm tiled prefill-span median of n=5 on the pinned
+  prefill-summarize prompt, 852 HF tokens, detached, C=512) **vs MLX's
+  Phase 0 PROVISIONAL ≈370 tok/s ⇒ 47%** (llama.cpp ≈452 ⇒ 38%). These
+  are the rows the exit decision was taken on and the rows the gates
+  were walked on. Staleness rule: the MLX/llama.cpp prefill figures are
+  2026-08-22 rows on iOS 26.5.2; ours are on 26.6.1 — the publishable
+  head-to-head is Phase 6, same-session/same-OS, and this judgment does
+  not substitute for it.
+- **State at close-out: 240.86 tok/s ⇒ 65%** (PF-2B, 2026-09-23, same
+  protocol, on the PF-2 query-tiled attention kernel that landed inside
+  Phase 5 on 2026-09-20 with its oracle tests; gates not re-walked on
+  that build — Phase 5 had exited). Recorded alongside the exit number
+  because it is the engine's measured state on the day of close-out;
+  which of the two the Phase 6 writeup headlines is James's call (the
+  PF-2B entry surfaced this; this entry records both, labeled — a
+  reversible convention, flagged not blocked).
+- **Device trajectory (all prefill-summarize, 852 tokens):** 8.23
+  (Phase 2 bf16 sequential) → 36.65 (packed sequential, P5-5B) → 95.37
+  (tiled, P5-5, attached) → 172.23 (tiled + PF-1 levers, P5-5B) →
+  240.86 (+ PF-2 query-tiled attention, PF-2B). Against the 45.3 tok/s
+  sequential structural ceiling (weights re-streamed per token at 100%
+  of the 43.84 GB/s roofline): 3.8× at exit, 5.3× at close-out. The
+  in-session claim rows: tiled ≈4.70× sequential (P5-5B, CLAIM-GRADE),
+  query-tiled ≈1.37× per-position attention (PF-2B, CLAIM-GRADE).
+
+**Per-component headroom decomposition (the 2026-09-07 north-star
+binding), every term a measured device number (P5-5B / PF-2B
+attribution exports, sanity ratio 1.00 / 0.99):**
+
+| Component | At exit (P5-5B, span ≈4.95 s wall / 4.61 s GPU) | At close-out (PF-2B, span ≈3.54 s wall / 3.35 s GPU) | Headroom reading |
+|---|---|---|---|
+| Weight stream (the Phase 3–4 lever) | 2 chunks × ≈0.79 GB + lm_head once ≈1.76 GB ⇒ ≈40 ms at the 43.84 GB/s roofline, ≈1% of the span | same | Batching removed weight streaming as a term: the sequential path spent ≥18.8 s here (852 × 22.1 ms). Not a lever any more at C=512 |
+| Layer GEMMs (M=512/340, tiled kernel) | 3168.7 ms = 67.5% at 2.40 TFLOP ⇒ **0.757 TFLOPS** — AT the device M=512 microbench plateau (0.78 TFLOPS) | 3075.1 ms = **92.8%** (the unchanged control, −2%) | **The dominant gap.** At the current plateau the whole span is bounded at ≤276 tok/s even with everything else free; ≈370 needs the layer GEMMs at ≈1.17 TFLOPS (≤2.05 s). The PF-2 attention kernel sustains ≈0.92 TFLOPS of useful matrix-unit work in a real forward pass on the same silicon, so the plateau is the dequant-GEMM kernel's, not the device's — GE-1 (campaign, behind SPEC-P7) |
+| Attention (causal SDPA over the chunk) | 1372.0 ms = 29.2% (per-position PF-1 kernel; 56 dispatches) | **90.2 ms = 2.7%** (query-tiled, ×15.0 collapse; same 56 dispatches) | Closed in-phase by PF-2; ≈0.09 s remains |
+| Norm + elementwise (batched RMSNorm, qk-norm/RoPE/append, SwiGLU) | 151.0 ms = 3.2% (336 dispatches) | 144.1 ms = 4.3% | Collapsed by the PF-1 cooperative batched norm (was 1209 ms on Mac before it); no material lever left |
+| Head/tail (final norm + last-position lm_head) | 5.8 ms | 5.8 ms | Paid once per prompt by design (D2); negligible |
+| Per-chunk overhead (span wall − GPU) | 0.03–0.42 s across the tiled rows (0.334 at the median row) | 0.04–0.63 s (0.183 at the median row) | 2 command buffers per prefill; the spread is session state (first-run-after-reload rows carry the high values), not encode cost. A small lever at most (≈5% of the span) |
+| GEMM microbench, M-sweep (the measured compute denominator) | M=8 ≈19–20 GB/s / ≈540 GFLOPS; M=64 ≈755–768; M=512 ≈760–781 GFLOPS (thermal steps to ≈540–550 mid-run) | unchanged (kernel untouched by PF-2) | The device saturates by M=64; the Mac plateau is 1.57 TFLOPS. Feeds the Phase 6 roofline analysis as the compute-side ceiling |
+
+Class-sum sanity: at exit 3168.7 + 1372.0 + 151.0 + 5.8 = 4697.6 ms vs
+production GPU 4717.6 (ratio 1.00); at close-out 3075.1 + 90.2 + 144.1 +
+5.8 = 3315.1 vs 3359.2 (0.99). No unexplained slack on either build.
+
+**What the judgment says:** Phase 5 removed the structural ceiling it
+was chartered against — prefill is no longer weight-stream-bound, the
+per-token re-streaming term is gone, and the residual is a single
+component, the tiled dequant-GEMM's compute efficiency on the A17 Pro
+(0.78 vs the ≈1.17 TFLOPS the MLX figure implies for the layer GEMMs).
+That is a kernel-engineering gap with a measured ceiling reference
+(0.92 TFLOPS reached by the attention kernel), not a physics gap; it
+is assigned to GE-1 in the campaign by James's 2026-09-23 decision and
+is NOT pursued in-phase. The "measuring, explaining, narrowing" framing
+is satisfied: every ms of the span is attributed and the gap has one
+named owner.
+
+**Decision (James, 2026-09-19, recorded here as the exit of record):
+Phase 5 EXITED** with criterion 3 SPLIT — the M=8 microbench gate stays
+FAILED on the record, unmodified, with the anatomy above and the
+approved remedy P5-2C as the METHODOLOGY deviation record. Rationale:
+the prefill floor the phase exists for passed at 3.8× the ceiling, the
+decode path measurably lost nothing (31.05 vs 31.67; 30.90 at PF-2B),
+the failed gate did its diagnostic job, and its remedy needs device-side
+iteration the campaign is structured for.
+
+**Close-out actions (this entry):** exit criteria walked (above);
+architecture.pdf regenerated v1.8 (phase table, executive summary,
+§4 footprint, §5.2 prefill outcome, metric definition, roadmap figure
+— the roofline figure is unchanged because decode is unchanged, which
+the Phase 5 regression rows measure); README.md + CLAUDE.md status
+refreshed per the standing *-EXEC rules; P5-EXEC marked done; SPEC-P6
+flipped to ready (next agent task by rank; Phase 6 = the same-session
+head-to-head that supersedes this judgment). Record wrinkle noticed,
+not corrected (append-only): PF-2B's backlog `completed_at`
+(2026-09-23 05:20 UTC) post-dates this session's `started_at`
+(04:18 UTC) — a local-vs-UTC slip in the prior session's stamp;
+the ledger order is unambiguous from the entry sequence.

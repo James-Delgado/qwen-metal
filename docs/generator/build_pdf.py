@@ -65,7 +65,7 @@ def footer(canvas, doc):
     canvas.setFont("Helvetica", 7.5)
     canvas.setFillColor(GRAY)
     canvas.drawString(0.75 * inch, 0.45 * inch,
-                      "qwen-metal — Architecture & System Design  ·  v1.7  ·  2026-09-14")
+                      "qwen-metal — Architecture & System Design  ·  v1.8  ·  2026-09-23")
     canvas.drawRightString(letter[0] - 0.75 * inch, 0.45 * inch, f"Page {doc.page}")
     canvas.setStrokeColor(colors.HexColor("#e2e8f0"))
     canvas.line(0.75 * inch, 0.62 * inch, letter[0] - 0.75 * inch, 0.62 * inch)
@@ -86,7 +86,7 @@ S.append(Paragraph("Architecture &amp; System Design Document", ParagraphStyle(
 S.append(Paragraph("A from-scratch, single-model LLM inference engine in Swift + Metal for iPhone — "
                    "Qwen ~1.5–2B, 4-bit quantized — benchmarked head-to-head against MLX Swift and "
                    "llama.cpp on the same physical device.", SUB))
-S.append(Paragraph("Version 1.7 · September 14, 2026 (Phase 4 exit: fused engine past the decode target on-device) · Companion to PLAN.md, CLAUDE.md, DECISIONS.md, and the phase specs. "
+S.append(Paragraph("Version 1.8 · September 23, 2026 (Phase 5 exit: batched prefill on-device; prefill-vs-MLX judged) · Companion to PLAN.md, CLAUDE.md, DECISIONS.md, and the phase specs. "
                    "Where this document and DECISIONS.md disagree, DECISIONS.md (the append-only log) wins.", CAP))
 S.append(HRFlowable(width="100%", color=INK, thickness=1.2, spaceAfter=10))
 
@@ -118,7 +118,17 @@ S.append(Paragraph(
     "attribution showing ~95% of GPU time as weight streaming at ~80% of roofline. One Phase 4 gate is on record "
     "as FAILED with its anatomy: per-token wall−GPU overhead 1.40 ms vs the ≤1.2 ms gate, ~62% of it OS/driver "
     "latency around an idle GPU; the approved structural remedy (pipelined GPU-driven decode, PIPE-1) is seeded "
-    "for the post-Phase-6 optimization campaign. Phase 5 (tiled prefill GEMM) is next.", BODY))
+    "for the post-Phase-6 optimization campaign. Phase 5 (exited 2026-09-19) removed prefill's structural ceiling: "
+    "the prompt is now processed in 512-position chunks through a tiled q4g64 dequant-GEMM (threadgroup tiles + "
+    "simdgroup_matrix, dequant inside the consuming kernel) and a query-tiled causal attention kernel, streaming the "
+    "weights once per chunk instead of once per token. On-device prefill of the pinned 852-token prompt went from "
+    "36.65 tok/s (packed sequential) to <b>172.23 tok/s</b> at the exit rows (floor ≥135 PASS; ≈4.7× in-session, "
+    "claim-grade) and <b>240.86 tok/s</b> at close-out after the in-phase attention kernel — 47% / 65% of MLX's "
+    "PROVISIONAL ≈370, judged not gated, with the whole remaining gap attributed to the dequant-GEMM's 0.78 TFLOPS "
+    "compute plateau on the A17 Pro (GE-1, campaign). Decode measured unchanged (31.05 / 30.90). A second gate is on "
+    "record FAILED with its anatomy: the GEMM microbench at M=8 (19.54 vs ≥30.69 GB/s) — the device is already "
+    "compute-bound at M=8, so the gate's bandwidth premise does not hold there; remedy P5-2C in the campaign. "
+    "Phase 6 (benchmark writeup: the same-session head-to-head) is next.", BODY))
 S.append(Paragraph("1.1 · Non-goals (scope is a feature)", H2))
 S.append(Paragraph(
     "Breadth is where mature engines spend most of their engineering, and it teaches little per hour invested. Each "
@@ -202,7 +212,10 @@ S.append(Paragraph(
     "agrees with the Xcode gauge within ~2% in both modes. The residency question is now <b>closed</b>: an interleaved "
     "sustained comparison on the packed weights left speed unresolved at n=3 (session-scale thermal drift dominates any "
     "residency effect; no mmap page-fault bimodality on the 0.97 GB working set), so mmap — ~1 GB lighter and 5× faster "
-    "to load — stays the default for Phase 4+, with wired-copy retained in the app only as a diagnostic toggle.", BODY))
+    "to load — stays the default for Phase 4+, with wired-copy retained in the app only as a diagnostic toggle. "
+    "Phase 5 added the only new persistent allocation since: the preallocated prefill scratch (34.0 MiB at chunk "
+    "size 512, inside its pre-committed ≤64 MiB budget; no per-chunk allocation, asserted by test) — phys_footprint "
+    "<b>573.2 MB</b> mmap on the Phase 5 device rows (DECISIONS.md 2026-09-18), +35 MB over the Phase 4 gauge.", BODY))
 S += fig(f"{D}/d3_memory.png", CW,
          "Figure 3 — Static memory budget against the practical iOS ceiling (with the Increased Memory Limit "
          "entitlement). Figures derive from the pinned Qwen3-1.7B config (DECISIONS.md PIN-1): ~0.97 GB packed "
@@ -271,14 +284,24 @@ S.append(Paragraph(
     "The wall−GPU overhead gate (≤1.2 ms) FAILED at 1.40 ms and is recorded with its anatomy: ~62% is OS/driver "
     "scheduling + wakeup latency around an idle GPU that submission tweaks measurably cannot reach; the approved "
     "remedy — pipelined GPU-driven decode overlapping the whole fixed cost — is seeded for the campaign (PIPE-1). "
-    "Sustained decode plateaus at ~23.6 tok/s at thermal equilibrium (+22% vs the Phase 4 first session); sequential "
-    "prefill measured 8.2–10.7 tok/s (Phase 5's 'before' number).", BODY))
+    "Sustained decode plateaus at ~23.6 tok/s at thermal equilibrium (+22% vs the Phase 4 first session). Phase 5's "
+    "decode regression rows measured the fused path unchanged (window median 31.05, then 30.90 on the PF-2 build) — "
+    "the decode point on Figure 5 stands.", BODY))
 S.append(Paragraph(
     "Prefill obeys different physics: processing the whole prompt at once is matrix-matrix work in which each weight "
     "read is reused across all prompt positions, so it is compute-bound and rewards classical GEMM engineering — "
-    "threadgroup-memory tiling and simdgroup_matrix (8×8 cooperative tile-multiply) accumulation. It is deliberately "
+    "threadgroup-memory tiling and simdgroup_matrix (8×8 cooperative tile-multiply) accumulation. It was deliberately "
     "scheduled late (Phase 5) because it is a separate discipline from the bandwidth work of Phases 3–4, and a naive "
-    "prefill still functions, merely slowly. The two phases are therefore always benchmarked as separate numbers.", BODY))
+    "prefill still functions, merely slowly. The two are always benchmarked as separate numbers. Phase 5 (exited "
+    "2026-09-19) made the physics concrete on-device: sequential prefill re-streams the full 0.97 GB of packed weights "
+    "per prompt position, a structural ceiling of ≈45 tok/s at 100% of the measured roofline (measured 36.65). The "
+    "chunked path (C=512, weights streamed once per chunk ≈ 40 ms per prompt) moved the prefill-span metric of "
+    "record to <b>172.23 tok/s</b> (exit rows) and <b>240.86 tok/s</b> (close-out, after a query-tiled causal SDPA "
+    "that cut the attention class 1353 → 90 ms). The device attribution now reads 93% layer GEMMs at 0.76 TFLOPS — "
+    "exactly the tiled kernel's measured M-sweep plateau (0.78 TFLOPS, saturating by M=64) — so the span is bounded "
+    "at ≈276 tok/s until that kernel improves; MLX's ≈370 implies ≈1.17 TFLOPS for the same GEMMs, and the attention "
+    "kernel already sustains 0.92 on this silicon. The M-sweep is also the project's first measured compute-side "
+    "denominator, which the Phase 6 roofline analysis consumes.", BODY))
 S.append(Paragraph(
     "Two secondary kernel concerns round out the design. Dispatch overhead: each kernel launch costs fixed time, so "
     "Phase 4 folded RMSNorm and RoPE into neighboring kernels and fused scaled-dot-product attention (with the GQA head "
@@ -390,7 +413,7 @@ S.append(Paragraph(
     "KV-depth-dependent bytes/token cannot skew comparisons.", BODY))
 S.append(table([
     ["Metric", "Definition", "Instrument", "Notes"],
-    ["Prefill tok/s", "prompt tokens ÷ prefill wall time", "in-app timer", "compute-bound; reported separately from decode, always"],
+    ["Prefill tok/s", "per-engine prompt tokens ÷ engine-measured prefill-span wall time (prompt processing only, excluding the first decode forward; GPU time recorded alongside)", "engine span timer (Phase 5 D1)", "compute-bound; reported separately from decode, always"],
     ["Decode tok/s", "generated tokens ÷ decode wall time", "in-app timer", "the roofline-governed headline; burst and sustained"],
     ["Peak memory", "high-water mark during generation", "phys_footprint (Xcode memory gauge)", "one metric everywhere; Instruments Allocations misses Metal resource memory — not used for headline rows"],
     ["Energy (J/tok)", "(run − idle baseline) joules ÷ tokens", "battery-delta protocol (below)", "sustained runs only; mean ± spread over ≥3 runs"],
@@ -427,7 +450,7 @@ S.append(table([
     ["2", "Incremental decode on the physical iPhone via preallocated cache + naive attention kernel; pre-committed fp16 gate vs CPU reference; 'before' row; mmap vs wired-copy comparison — EXITED 2026-08-25: all gates held first run, free-run divergence none, 'before' 6.7–8.6 tok/s, mmap default recorded"],
     ["3", "CPU-quant oracle exists; dequant tile test bit-exact; matvec within tolerance; quality gate passed; ~4× memory drop; matvec GB/s microbench — EXITED 2026-09-05: all gates in-band (quality at KL parity with mlx-lm after two recipe amendments), microbench 35.3 GB/s ≥ 30.7 gate, decode 20.6 tok/s (3.0× Phase 2), wired footprint 1.43 GB vs 4.3, mmap default closed"],
     ["4", "Fused GQA SDPA replaces naive attention; norm/RoPE folded into neighbors; dispatches-per-token reduced; latency variance measured — EXITED 2026-09-14: decode 31.67 tok/s (29.4 target exceeded), 200 dispatches/token, fused +48% claim-grade, ~95% of GPU time weight streaming @ 80% roofline; overhead gate FAILED 1.40 vs ≤1.2 ms, recorded with anatomy (~62% OS/driver latency) — remedy PIPE-1 (pipelined decode) approved for the campaign"],
-    ["5", "Tiled prefill GEMM (threadgroup memory + simdgroup_matrix); prefill benchmarked separately vs MLX"],
+    ["5", "Tiled prefill GEMM (threadgroup memory + simdgroup_matrix); prefill benchmarked separately vs MLX — EXITED 2026-09-19: tiled q4g64 dequant-GEMM + chunked prefill (C=512) landed with the layered suite at reused constants; device prefill 172.23 tok/s (floor ≥135 PASS; 3.8× the 45.3 sequential ceiling; ≈4.70× sequential claim-grade), decode regression PASS 31.05; GEMM M=8 microbench gate FAILED 19.54 vs ≥30.69 GB/s, recorded with anatomy (A17 Pro compute-bound at M=8) — remedy P5-2C in the campaign; prefill-vs-MLX judged 47% (65% = 240.86 tok/s after the in-phase query-tiled attention), remaining gap = the 0.78 TFLOPS GEMM plateau (GE-1)"],
     ["6", "Full cross-engine table (incl. optional Core ML column), sustained-thermal chart, J/tok with error bars, roofline analysis, honest gaps"],
 ], [0.55 * inch, 6.45 * inch]))
 S.append(Spacer(1, 4))
@@ -478,8 +501,8 @@ S.append(Spacer(1, 10))
 S.append(HRFlowable(width="100%", color=colors.HexColor("#e2e8f0"), thickness=0.8, spaceAfter=6))
 S.append(Paragraph(
     "Document lineage: this PDF renders the state of PLAN.md, CLAUDE.md, docs/phases/phase-0-1.md, "
-    "docs/phases/phase-2.md, docs/phases/phase-3.md, docs/phases/phase-4.md, DECISIONS.md, and benchmarks/results.md as of 2026-09-14 "
-    "(Phase 4 exit) into one navigable artifact. It is a snapshot: when the build produces new "
+    "docs/phases/phase-2.md, docs/phases/phase-3.md, docs/phases/phase-4.md, docs/phases/phase-5.md, DECISIONS.md, and benchmarks/results.md as of 2026-09-23 "
+    "(Phase 5 exit) into one navigable artifact. It is a snapshot: when the build produces new "
     "measurements or decisions, DECISIONS.md is updated first and this document is regenerated from it, not edited "
     "independently.", CAP))
 

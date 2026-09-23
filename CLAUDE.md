@@ -17,13 +17,18 @@
 
 ## Project status
 
-Phases 0–4 exited (as of 2026-09-14); Phase 5 (tiled prefill GEMM) is next —
-SPEC-P5 is the open task. Pinned model: Qwen/Qwen3-1.7B @ 70d244cc on iPhone
-15 Pro. The fused engine decodes end-to-end from the packed 4-bit q4g64
-format on-device at 31.67 tok/s warm-burst — the committed 29.4 target
-(0.75 × MLX) is EXCEEDED. One Phase 4 gate is on record as FAILED with its
-anatomy (overhead 1.40 ms vs ≤1.2; ≈62% OS/driver latency; remedy PIPE-1
-approved for the campaign). See PLAN.md phase table for the roadmap and
+Phases 0–5 exited (as of 2026-09-23); Phase 6 (benchmark writeup) is next —
+SPEC-P6 is the open task. Pinned model: Qwen/Qwen3-1.7B @ 70d244cc on iPhone
+15 Pro. The engine decodes end-to-end from the packed 4-bit q4g64 format
+on-device at 31.67 tok/s warm-burst — the committed 29.4 target (0.75 × MLX)
+is EXCEEDED — and prefills through a tiled dequant-GEMM + query-tiled
+attention at 172.23 tok/s on the Phase 5 exit rows (240.86 at close-out;
+47% / 65% of MLX's PROVISIONAL ≈370, judged not gated). Two gates are on
+record as FAILED with their anatomy: Phase 4 overhead (1.40 ms vs ≤1.2;
+≈62% OS/driver latency; remedy PIPE-1) and Phase 5 GEMM M=8 (19.54 vs
+≥30.69 GB/s; device compute-bound at M=8; remedy P5-2C) — both in the
+campaign behind SPEC-P7, with GE-1 (the GEMM compute plateau, the whole
+remaining prefill gap). See PLAN.md phase table for the roadmap and
 DECISIONS.md for the measurement ledger.
 
 ## Codebase map
