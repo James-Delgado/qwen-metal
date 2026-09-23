@@ -2079,8 +2079,9 @@ tasks:
   - id: PF-2B
     rank: 20.485
     title: "Device A/B of the tiled-prefill attention kernels (query-tiled vs per-position) + device prefill attribution re-export on the PF-2 build (James)"
-    status: in_progress
+    status: done
     started_at: 2026-09-23 03:38:42+00:00
+    completed_at: 2026-09-23 05:20:00+00:00
     owner: james
     depends_on: [PF-2]
     blocks: []
@@ -2102,6 +2103,13 @@ tasks:
       tok/s, GE-1) stands either way. If the device disagrees with the
       Mac, the tile geometry (32 rows x 32 keys, 4 simdgroups) is the
       first device-sweep candidate — seed it then, not now.
+      2026-09-23 (done, James, DETACHED @ c2c5fd4): CLAIM-GRADE
+      query-tiled ≈1.37× per-position (240.86 vs 176.41 warm medians,
+      ranges disjoint, effect 64.5 ≫ drift −17.0/−3.1); device
+      attention class 1353 → 90 ms (×15.0), GEMM control unchanged,
+      production GPU 4669 → 3359 ms; decode sanity 30.90. No geometry
+      sweep needed — the Mac estimate transferred in full. Rows +
+      entry: results.md / DECISIONS.md 2026-09-23 PF-2B.
   - id: GE-1
     rank: 20.49
     title: "Large-M GEMM compute efficiency: the device plateau (0.78 TFLOPS at M>=64) caps prefill at ~276 tok/s — measure where the kernel sits vs the A17 Pro peak and iterate if it pays"
@@ -2127,6 +2135,15 @@ tasks:
       = 0.757 TFLOPS at M=512/340 — the tiled prefill is GEMM-plateau-
       bound on-device too (67.5% of the span). MLX's ≈370 tok/s implies
       ≈1.04 TFLOPS effective on the same silicon.
+      2026-09-23 (PF-2B device rows): after the query-tiled attention the
+      device span is 92.8% GEMM (3075 of 3315 ms; span 240.86 tok/s =
+      65% of MLX) — GE-1 is the whole remaining prefill lever. New
+      ceiling reference: the PF-2 attention kernel sustains ≈0.92 TFLOPS
+      of useful matrix-unit work in a real forward pass on this device,
+      so the 0.78 TFLOPS dequant-GEMM plateau is the kernel's, not the
+      silicon's. Measure-first step should include a plain fp16 GEMM on
+      the same shapes as the device reference; ≈370 tok/s needs the
+      layer GEMMs at ≈1.17 TFLOPS.
   - id: P5-5B
     rank: 20.5
     title: "Phase 5 device RE-WALK (James, detached): prefill floor + M=8 microbench + decode regression gates, interleaved sequential-vs-tiled before/after, device PREFILL attribution export"

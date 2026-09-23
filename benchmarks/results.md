@@ -1257,6 +1257,108 @@ hard rule 6 — no constant touched):**
   tiled prefill is GEMM-plateau-bound on-device as on Mac — the GE-1
   input); attention 29.2% (the PF-2 trigger: material).
 
+## Phase 5 iterate round — PF-2B device rows, iPhone 15 Pro (James, DETACHED)
+
+### 2026-09-23 — iPhone 15 Pro PF-2B: query-tiled vs per-position prefill attention, interleaved A/B — CLAIM-GRADE query-tiled ≈1.37× (240.86 vs 176.41 tok/s); device attention class 1353 → 90 ms; decode untouched (window 30.90)
+
+Session conditions (one session, one build @ c2c5fd4 — PF-2 — run in the
+listed order): device iPhone16,1 (the pinned iPhone 15 Pro), iOS 26.6.1;
+weights q4g64, residency mmap, kernels fused, prefill tiled (C=512); the
+two arms differ ONLY in the PF-2 "Attention" picker (query-tiled = the
+default, per-position = the PF-1 kernel; a picker change reloads the
+model). Prompts prefill-summarize (852 tokens) for the A/B rows,
+decode-essay (84) for the decode sanity row; burst cap 640, greedy.
+**DETACHED — home-screen launch after the Xcode install, confirmed by
+James and by the data: wall−GPU 1.285–1.357 ms/token on every record
+(P5-5B detached 1.29–1.36).** Metal API validation OFF (scheme-pinned).
+Battery health 100%, state of charge 100% at start; the export "battery
+health" strings are SoC per the 2026-09-05 correction: 99 → 95 at close.
+phys_footprint: Xcode gauge not read (the P5-5 gauge 573.2 MB stands for
+the build family — the PF-2 kernel adds no allocation); in-app
+cross-checks 567.7–578.0 MB on both arms (P5-5B tiled 569.7–584.8).
+Phase 5 exited 2026-09-19; no gate is re-walked here (rows only).
+
+**Prefill A/B rows (D1 span metric of record; prompt prefill-summarize, 852):**
+
+| Run | Attention kernel | Cold/warm | Prefill span wall s | Prefill tok/s (of record) | Span GPU s | Span wall−GPU s | Prefill dispatches | Decode tail median GPU ms @ dispatches (tokens to eos) | phys_footprint (in-app) |
+|---|---|---|---|---|---|---|---|---|---|
+| Q0 | query-tiled | cold | 3.739 | 227.85 | 3.292 | 0.447 | 790 | 33.86 @ 200 (343) | 571.9 MB |
+| Q1 (bookend) | query-tiled | warm | 3.325 | 256.23 | 3.282 | 0.043 | 790 | 34.14 @ 200 (343) | 578.0 MB |
+| P1 | per-position | warm | 5.159 | 165.14 | 4.560 | 0.599 | 790 | 34.61 @ 200 (387) | 567.9 MB |
+| Q2 | query-tiled | warm | 3.930 | 216.78 | 3.301 | 0.629 | 790 | 34.44 @ 200 (343) | 567.7 MB |
+| P2 | per-position | warm | 4.803 | 177.38 | 4.633 | 0.170 | 790 | 34.48 @ 200 (387) | 567.7 MB |
+| Q3 | query-tiled | warm | 3.537 | 240.86 | 3.354 | 0.183 | 790 | 34.49 @ 200 (343) | 567.9 MB |
+| P3 | per-position | warm | 4.830 | 176.41 | 4.599 | 0.231 | 790 | 34.26 @ 200 (387) | 567.9 MB |
+| Q-last a (bookend) | query-tiled | warm | 3.562 | 239.20 | 3.333 | 0.229 | 790 | 34.36 @ 200 (343) | 567.8 MB |
+| Q-last b (bookend) | query-tiled | warm | 3.366 | 253.15 | 3.330 | 0.036 | 790 | 34.15 @ 200 (343) | 567.9 MB |
+
+Dispatch counts are exact structural cross-checks on every row: **790 on
+both arms** (one attention dispatch per layer per chunk on each kernel —
+the toggle is invisible to DispatchCounter by design). The per-token line
+on every row reads "UNSTABLE 200–397 dispatches/token" — the DI-1 step-0
+record, kept and labeled per James's 2026-09-19 decision. P1 was the
+first run after the reload to per-position (wall−GPU 0.60 s vs 0.17–0.23
+on P2/P3; its GPU time 4.560 s is in line with P2/P3). The two arms stop
+at eos after 343 (query-tiled) vs 387 (per-position) generated tokens —
+the greedy continuations differ, which the D6 "either D4 form" rule
+allows (the kernels are not bitwise equal; both gate against the same
+CPU-quant oracle, and the 250-step teacher-forced suite held on
+query-tiled — DECISIONS.md 2026-09-20 PF-2). Latency variance: all
+tokens p95 36.4–37.2 ms, max ≤ 38.9 ms, 0 stalls on every row.
+
+**Before/after (D8 + bookend): CLAIM-GRADE — query-tiled ≈1.37×
+per-position on-device.** Warm query-tiled span median **240.86 tok/s**
+(n=5: 216.78 / 239.20 / 240.86 / 253.15 / 256.23; cold 227.85) vs
+per-position **176.41** (n=3: 165.14 / 176.41 / 177.38), interleaved in
+one session: ranges disjoint, effect 64.5 tok/s ≫ bookend drift (Q1
+256.23 → Q-last a/b 239.20 / 253.15 = −17.0 / −3.1). GPU-only:
+4.560–4.633 s → 3.282–3.354 s = **1.36–1.41×** (GPU-time bound 852/3.330
+≈ 256 tok/s at the median). The per-position arm reproduces the P5-5B
+tiled rows on the previous build (172.23 warm median, 168.26–186.71),
+so the two sessions splice.
+
+**Device prefill attribution (DIAGNOSTIC — app attribution picker →
+prefill, 2 attributed + 2 production interleaved per arm, same session;
+sanity band [0.5×, 2.0×] pre-committed 2026-09-18):**
+
+| Arm | gemm | attention | norm+elementwise | head/tail | Class-sum (median ms/prefill) | Production GPU ms/prefill @ dispatches | GPU-time tok/s | Sanity ratio |
+|---|---|---|---|---|---|---|---|---|
+| per-position (PF-1 kernel) | 3141.97 ms (67.7%) / 392 | 1353.17 ms (29.1%) / 56 | 141.65 ms (3.1%) / 336 | 5.76 ms (0.1%) / 5 | 4642.5 (span 4643.3, wall 4695.4) | 4669.1 @ 789 | 182.48 | 0.99 |
+| query-tiled (PF-2) | 3075.09 ms (92.8%) / 392 | 90.20 ms (2.7%) / 56 | 144.07 ms (4.3%) / 336 | 5.76 ms (0.2%) / 5 | 3315.1 (span 3315.7, wall 3328.2) | 3359.2 @ 789 | 253.63 | 0.99 |
+
+Readings:
+
+- **attention 1353.17 → 90.20 ms (−93%, ×15.0)** at the same 56
+  dispatches — a larger collapse than the Mac's ×11.4 (478 → 42 ms). The
+  per-position arm reproduces the P5-5B export (1372.0 ms) within 1.4%.
+  On the recorded useful pair count (≈83.3 GFLOP per prefill) the
+  query-tiled kernel sustains **≈0.92 TFLOPS** on the A17 Pro's matrix
+  unit inside a real forward pass — above the dequant-GEMM's 0.78 TFLOPS
+  M-sweep plateau. The plateau is therefore the GEMM kernel's, not the
+  silicon's: GE-1's input.
+- **gemm 3141.97 vs 3075.09 ms — the unchanged control** (−2%, within
+  the session's thermal spread); it is now **92.8% of the device span**.
+  norm+elementwise 141.65 vs 144.07 (unchanged).
+- **production 4669.1 → 3359.2 ms GPU (−28%)** @ 789 dispatches on both
+  arms; GPU-time tok/s 182.48 → 253.63.
+
+**Decode sanity row (decode-essay, 84; query-tiled default; NOT a gate
+walk — Phase 5 exited 2026-09-19, decode untouched by PF-2):**
+
+| Run | Prefill (84 tokens) | Window median tok/s (128–512) | Per-token median GPU / wall / wall−GPU ms @ dispatches | Latency (window) | phys_footprint (in-app) |
+|---|---|---|---|---|---|
+| D1 | 0.612 s wall / 0.361 s GPU, 397 dispatches, 137.36 tok/s | **30.90** (overall 30.93; 640 tokens, maxNewTokens) | 31.05 / 32.41 / 1.304 @ UNSTABLE 200–397 | p50 32.38, p95 33.58, p99 33.77, max 34.22 ms, 0 stalls (n=384) | 574.5 MB |
+
+Reading: 30.90 vs P5-5B's 31.05 and P4-11's 31.67 on the same detached
+footing (−0.5% / −2.4%; median GPU 31.05 vs 30.5–30.9 / 30.27 ms) — the
+decode path is unchanged by construction and measures unchanged.
+
+**Prefill-vs-MLX (judgment input, not a gate):** 240.86 tok/s vs MLX's
+Phase 0 PROVISIONAL ≈370 → **65%** (47% at P5-5B). With the span 92.8%
+GEMM at the 0.78 TFLOPS plateau (3.08 s per 852 tokens), the remaining
+non-GEMM work is ≈0.25 s; reaching ≈370 needs the layer GEMMs at
+≈1.17 TFLOPS — the entire remaining gap is GE-1's.
+
 ## Phase 0a — energy dry-run + corrections (PROVISIONAL)
 
 ### 2026-08-22 — sustained battery-delta cycles, iPhone 15 Pro (method VALIDATED)

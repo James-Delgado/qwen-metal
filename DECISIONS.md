@@ -4816,3 +4816,63 @@ measurements 2026-09-19 (local), entry landed 2026-09-20 (UTC).
   (21) that the 2026-09-19 decision named as the next agent task — the
   next agent by rank would take GE-1 first; re-rank if the close-out
   should come first.
+
+## 2026-09-23 — PF-2B (James, on-device, DETACHED): query-tiled vs per-position prefill attention CLAIM-GRADE ≈1.37× (240.86 vs 176.41 tok/s); device attention class 1353 → 90 ms (×15); GEMM now 92.8% of the span; decode untouched (30.90)
+
+Rows: benchmarks/results.md "Phase 5 iterate round — PF-2B device rows".
+One session, one build @ c2c5fd4 (PF-2), iPhone16,1, iOS 26.6.1,
+home-screen launch (detached — confirmed by James and by wall−GPU
+1.285–1.357 ms/token on every record), validation OFF, battery health
+100%, SoC 100% → 95%. The arms differ only in the PF-2 "Attention"
+picker. No gate is re-walked (Phase 5 exited 2026-09-19); these are
+rows and a judgment input.
+
+- **Before/after (D8 + bookend): CLAIM-GRADE — query-tiled ≈1.37×
+  per-position on-device.** Warm span median 240.86 tok/s (n=5,
+  216.78–256.23; cold 227.85) vs 176.41 (n=3, 165.14–177.38),
+  interleaved; ranges disjoint, effect 64.5 ≫ bookend drift (−17.0 /
+  −3.1); GPU-only 1.36–1.41× (4.560–4.633 → 3.282–3.354 s). The
+  per-position arm reproduces the P5-5B tiled rows on the previous build
+  (172.23; 168.26–186.71), so the sessions splice: the tiled prefill has
+  moved 95.37 (P5-5) → 172.23 (P5-5B, PF-1 levers) → 240.86 (PF-2) on
+  this device — 6.6× the sequential 36.65 of P5-5B and 5.3× the 45.3
+  tok/s sequential structural ceiling.
+- **Device attribution (DIAGNOSTIC, both arms same session, sanity 0.99
+  each):** attention **1353.17 → 90.20 ms (×15.0)** at 56 dispatches —
+  larger than the Mac's ×11.4; the per-position arm reproduces P5-5B's
+  1372 ms within 1.4%. gemm 3141.97 vs 3075.09 ms (the control, −2%);
+  norm+elementwise unchanged (≈142–144 ms). Production GPU 4669.1 →
+  3359.2 ms (−28%); GPU-time tok/s 182.48 → 253.63. The Mac estimate at
+  PF-2 ("≈4.7 s toward ≈3.4 s, ≈250 tok/s") landed: 3.36 s GPU, 253.6
+  tok/s on GPU time — the first Mac→device transfer of this campaign that
+  held in full (PF-1 transferred partially, P5-2B not at all).
+- **The GE-1 input this session produced:** on the recorded useful pair
+  count (≈83.3 GFLOP per prefill) the query-tiled kernel sustains ≈0.92
+  TFLOPS on the matrix unit inside a real forward pass — above the
+  dequant-GEMM's 0.78 TFLOPS M-sweep plateau on the same silicon (executed
+  FLOPs are higher still: whole 32×32 blocks on the causal diagonal). The
+  plateau is the GEMM kernel's, not the device's. With the span 92.8%
+  GEMM (3.08 s of 3.32), the remaining non-GEMM work is ≈0.25 s per
+  852 tokens; ≈370 tok/s needs the layer GEMMs at ≈1.17 TFLOPS. GE-1 is
+  the whole remaining prefill lever; its measure-first step should
+  include a plain fp16 (non-dequant) GEMM on the same shapes as the
+  device ceiling reference, with 0.92 TFLOPS already known reachable.
+- **Decode sanity (not a gate walk):** decode-essay window median 30.90
+  (P5-5B 31.05, P4-11 31.67), median GPU 31.05 ms, wall−GPU 1.30 — the
+  decode path is unchanged by construction and measures unchanged.
+- **Text species:** the two arms stop at eos after 343 (query-tiled) vs
+  387 (per-position) tokens on prefill-summarize — a near-tie flip
+  somewhere in the continuation, allowed by D6 (not bitwise; both gate
+  against the same oracle; the 250-step teacher-forced suite and the
+  free-run report (NONE ×5) held on query-tiled at PF-2). Recorded, not
+  a finding.
+- **Footprint:** in-app 567.7–578.0 MB both arms (P5-5B 569.7–584.8);
+  the PF-2 kernel allocates nothing — the P5-5 Xcode gauge (573.2 MB)
+  stands for the build family.
+- **Prefill-vs-MLX (judgment input):** 240.86 vs the Phase 0 PROVISIONAL
+  ≈370 → 65% (47% at P5-5B). The Phase 5 exit was decided on the P5-5B
+  rows; whether the P5-EXEC close-out cites these later-build rows in
+  its judgment is James's call at close-out (surfaced, not decided).
+- **Backlog:** PF-2B done; GE-1 notes gain the device input above. The
+  ranking flag from PF-2 stands: GE-1 (20.49) outranks the P5-EXEC
+  close-out (21).
