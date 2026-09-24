@@ -3,7 +3,7 @@ import UIKit
 import QwenMetalEngine
 
 /// D8 benchmark screen: runs the pinned protocol (burst decode-essay,
-/// sustained 5-min regenerate loop), weights bf16/q4g64 toggle (P3-5),
+/// sustained 5-min regenerate loop, P6-1 energy cycle), weights bf16/q4g64 toggle (P3-5),
 /// residency mmap/wired toggle, kernels toggle (P4-4), prefill toggle
 /// (P5-4), and displays + exports the row fields. The prompt picker on burst also
 /// serves the prefill row (prefill-summarize — prompts/README roles).
@@ -15,6 +15,8 @@ struct BenchmarkView: View {
     private enum RunMode: String, CaseIterable {
         case burst
         case sustained
+        /// P6-1: the operator-bounded energy cycle (phase-6.md D4).
+        case energy
         case microbench
         case attribution
         case overheadAnatomy
@@ -29,8 +31,6 @@ struct BenchmarkView: View {
     /// PF-1: prefill breakdown by default for the iterate round; decode
     /// stays selectable (the P4-1 breakdown).
     @State private var attributionMode: AppModel.AttributionMode = .prefill
-    @State private var batteryNote = ""
-    @State private var coldWarmNote = ""
 
     var body: some View {
         NavigationStack {
@@ -120,6 +120,7 @@ struct BenchmarkView: View {
                     Picker("Mode", selection: $mode) {
                         Text("burst").tag(RunMode.burst)
                         Text("sustained (≥5 min)").tag(RunMode.sustained)
+                        Text("energy").tag(RunMode.energy)
                         Text("microbench").tag(RunMode.microbench)
                         Text("attribution").tag(RunMode.attribution)
                         Text("overhead").tag(RunMode.overheadAnatomy)
@@ -137,6 +138,16 @@ struct BenchmarkView: View {
                     case .sustained:
                         Text("sustained is pinned to decode-essay "
                             + "(prompt role separation)")
+                            .font(.caption)
+                    case .energy:
+                        Text("P6 D4 energy cycle: decode-essay regenerate loop, "
+                            + "OPERATOR-bounded. Airplane mode, min brightness, "
+                            + "Auto-Lock Never, unplugged, rested. Run at exactly "
+                            + "80% SoC (Settings → Battery), Stop at exactly 70% — "
+                            + "the loop ends at the next token boundary and still "
+                            + "reports. Type the Settings SoC marks + battery "
+                            + "health below; J/token is computed by "
+                            + "tools/phase6_analyze.py, never here.")
                             .font(.caption)
                     case .microbench:
                         Picker("Kernel", selection: $microbenchKernel) {
@@ -194,9 +205,28 @@ struct BenchmarkView: View {
                             .font(.caption)
                     }
                     TextField(
-                        "battery health % (Settings → Battery)",
-                        text: $batteryNote)
-                    TextField("cold / warm annotation", text: $coldWarmNote)
+                        "battery health: max capacity % (Settings → Battery Health)",
+                        text: $model.operatorFields.batteryHealth)
+                    TextField("cold / warm annotation",
+                              text: $model.operatorFields.coldWarm)
+                    if mode == .energy {
+                        TextField(
+                            "SoC at start, % (Settings → Battery, at the 80% mark)",
+                            text: $model.operatorFields.socStart)
+                        TextField(
+                            "SoC at stop, % (typed AFTER Stop, at the 70% mark)",
+                            text: $model.operatorFields.socEnd)
+                    }
+                    TextField(
+                        "round marker (Phase 6 round only; empty ⇒ PROVISIONAL)",
+                        text: $model.operatorFields.round)
+                    Text("P6-1: fields are read when a run's export is "
+                        + "published and re-render the export shown below on "
+                        + "later edits — archive a row before typing for the next.")
+                        .font(.caption)
+                }
+                .onChange(of: model.operatorFields) {
+                    model.operatorFieldsChanged()
                 }
 
                 Section("Run") {
@@ -205,25 +235,21 @@ struct BenchmarkView: View {
                             let prompt = burstPrompt
                             let kernel = microbenchKernel
                             let attribution = attributionMode
-                            let battery = batteryNote
-                            let coldWarm = coldWarmNote
+                            let fields = model.operatorFields
                             let mode = mode
                             Task {
                                 switch mode {
                                 case .burst:
-                                    await model.runBurst(
-                                        prompt: prompt,
-                                        batteryNote: battery,
-                                        coldWarmNote: coldWarm)
+                                    await model.runBurst(prompt: prompt)
                                 case .sustained:
-                                    await model.runSustained(
-                                        batteryNote: battery,
-                                        coldWarmNote: coldWarm)
+                                    await model.runSustained()
+                                case .energy:
+                                    await model.runEnergy()
                                 case .microbench:
                                     await model.runMicrobench(
                                         kernel: kernel,
-                                        batteryNote: battery,
-                                        coldWarmNote: coldWarm)
+                                        batteryNote: fields.batteryHealth,
+                                        coldWarmNote: fields.coldWarm)
                                 case .attribution:
                                     await model.runAttribution(mode: attribution)
                                 case .overheadAnatomy:
@@ -263,6 +289,20 @@ struct BenchmarkView: View {
                             UIPasteboard.general.string = report
                         } label: {
                             Label("Copy", systemImage: "doc.on.doc")
+                        }
+                        // P6-1 (phase-6.md D8): the per-generation timeline
+                        // JSON, archived next to the text export under
+                        // benchmarks/phase6/ (one file each per row).
+                        if let timeline = model.lastTimelineJSON {
+                            ShareLink(item: timeline) {
+                                Label("Share timeline JSON",
+                                      systemImage: "square.and.arrow.up")
+                            }
+                            Button {
+                                UIPasteboard.general.string = timeline
+                            } label: {
+                                Label("Copy timeline JSON", systemImage: "doc.on.doc")
+                            }
                         }
                     }
                 }

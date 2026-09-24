@@ -46,7 +46,20 @@ QwenMetalApp.entitlements   Increased Memory Limit (Phase 2 needs ~4.0 GB)
   - *burst*: 640-token cap (P2-5 Mac row precedent), prompt picker
     (decode-essay for decode rows; prefill-summarize for the prefill row).
   - *sustained*: ≥5-min regenerate loop, pinned to decode-essay; per-generation
-    tok/s sequence is kept (the OV#9 bimodality signal).
+    tok/s sequence is kept (the OV#9 bimodality signal). Stop aborts without
+    a report (P2-6 behavior, unchanged).
+  - *energy* (P6-1, phase-6.md D4): the operator-bounded energy cycle —
+    decode-essay regenerate loop with NO duration bound. Run at exactly 80%
+    SoC (Settings → Battery), Stop at exactly 70%: the loop ends at the next
+    token boundary and ALWAYS reports (the truncated final generation is
+    flagged; cumulative tokens/wall are the sums of the per-generation
+    records). Battery health (max capacity %) and the Settings SoC marks are
+    operator-typed — SoC at stop is typed AFTER Stop and the export re-renders
+    — as fields SEPARATE from each other (fields are read at publish time,
+    so a value typed while the last token was in flight still lands); the programmatic
+    `UIDevice.batteryLevel` reading at start/end is exported as a cross-check
+    only. No energy arithmetic happens in-app: `tools/phase6_analyze.py`
+    (P6-3) derives J/token from the archived exports.
   - Residency toggle mmap / wiredCopy — switching drops the loaded model; the
     next run reloads in the new mode (residency is baked in at load, spec D1).
   - Kernels toggle naive / fused (q4g64 only; P4-4, phase-4.md D4) — fused is
@@ -74,6 +87,16 @@ QwenMetalApp.entitlements   Increased Memory Limit (Phase 2 needs ~4.0 GB)
     cross-check, PROVISIONAL marker) as shareable/copyable text. The Xcode
     memory gauge remains the phys_footprint metric of record; battery health
     and cold/warm are operator-entered fields.
+  - Round marker (P6-1, phase-6.md D5): the header reads "Phase 6 row export
+    (PROVISIONAL)" unless the operator types a round marker (e.g.
+    `phase6-speed-2026-10-01`), which is set ONLY on rows produced inside the
+    Phase 6 round; bf16 rows stay "Phase 2 … (PROVISIONAL)" regardless.
+    Editing any operator field after a run re-renders the export.
+  - Timeline JSON (P6-1, phase-6.md D8): every burst/sustained/energy export
+    also publishes a per-generation timeline as JSON (window tok/s, overall
+    tok/s, tokens, wall, elapsed, stop reason — the same numbers as the text
+    lines) with its own Share/Copy controls; archive it next to the text
+    export under `benchmarks/phase6/`.
 
 ## P2-7 run protocol
 

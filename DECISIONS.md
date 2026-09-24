@@ -5225,3 +5225,120 @@ Hard rule 6 now binds: the reused tripwires (decode ≥ 24.0, prefill
 ≥ 135 on the tagged build) never loosen; the validity criteria can only
 tighten. No Phase 6 code, harness patch, or device row existed when the
 window closed. P6-1 may proceed with no open questions on the gates.
+
+## 2026-09-24 — P6-1: Phase 6 harness surfaces — energy-mode loop (operator stop + report), battery health vs SoC as separate fields, per-generation timeline JSON, round marker; engine core untouched
+
+Spec: docs/phases/phase-6.md D1/D4/D5 + edge tests 1–4. Harness surfaces
+only — no kernel, pipeline, gate, or protocol pin changed (the engine
+core is unchanged since c2c5fd4; hard rule 6 untouched). Nothing here is
+a benchmark row.
+
+**What landed (engine package, Bench module):**
+
+- `EnergyLoop` (new): the operator-bounded regenerate loop for the D4
+  energy cycle. The operator Stop ends the in-flight generation at its
+  next token boundary AND the loop returns its result (the P2-6 sustained
+  mode's Stop-aborts-without-a-report behavior is left exactly as it was
+  — sustained rows are duration-bounded and unchanged). The result keeps
+  every generation's metrics in order, a real loop-clock end offset per
+  generation (the thermal chart's x-axis), the cycle wall (idle-baseline
+  pro-rata basis), the end reason (`operatorStop` vs `durationBound`),
+  and the truncated-final-generation flag; cumulative tokens / Σ wall
+  are computed from the records, never carried separately. The
+  empty-generation refusal is carried over from SustainedLoop (a
+  zero-token generation with a stop already pending is kept, flagged).
+  An optional `maxDurationSeconds` safety bound exists for Mac sanity
+  runs only; it is labeled loudly in the export and the app never sets
+  it — the protocol's stop is the operator's.
+- `BenchmarkReport`: new `.energy` mode; `batteryStateOfCharge` (operator
+  Settings→Battery readings at the start/stop marks = value of record,
+  plus the programmatic `UIDevice.batteryLevel` at start/end, exported
+  as "cross-check only, never the value of record"); `round` marker. The
+  health line now reads `battery health: <n>% (maximum capacity %,
+  Settings → Battery → Battery Health, operator-typed — NOT state of
+  charge)` — the 2026-09-05 obligation made visible on every export; an
+  empty operator field renders `(record manually)`, and the programmatic
+  SoC can never populate it (separate struct, separate lines; tested).
+  Energy exports carry only raw fields (generations, end reason,
+  cumulative tokens, Σ generation wall, cycle wall, the per-generation
+  lines, the last generation's per-token block) and state explicitly
+  that J/token is derived by tools/phase6_analyze.py (P6-3) — no energy
+  arithmetic in-app (METHODOLOGY 4: one implementation of the math, in
+  the script of record).
+- `TimelineExport` (new, Codable): the per-generation timeline JSON
+  (schema `qwen-metal-timeline/1`; header fields, engine fields, battery
+  block, cycle totals, `elapsedBasis` loopClock|sumOfGenerationWall, one
+  entry per generation with window tok/s, overall tok/s, tokens, wall,
+  elapsed, stop reason, truncated). The text export's `gen N:` lines
+  are rendered FROM the same entries (`TimelineEntry.textLine`), so the
+  two surfaces cannot disagree. JSON is deterministic (sorted keys,
+  pretty). `SustainedLoopResult` gained an optional
+  `generationEndOffsetsSeconds` (default nil; `SustainedLoop.run` now
+  records it) so the 5-min loop rows get the same timeline.
+- Header (spec D5): q4g64 rows now read `qwen-metal Phase 6 row export
+  (PROVISIONAL)`; with a round marker set they read `(round: <marker>)`
+  and the PROVISIONAL word disappears; a `round:` line is always
+  present. bf16 rows stay `Phase 2 … (PROVISIONAL)` regardless (the
+  permanent correctness artifact, never a head-to-head row). The round
+  marker is free-text operator-typed (the P6-3 runbook pins its
+  naming); blank ⇒ PROVISIONAL.
+
+**App (QwenMetalApp, thin):** `energy` run mode (`AppModel+Energy.swift`
+— a new file so AppModel stays under the 800-line rule) reading
+programmatic SoC at start and end; operator fields (health, cold/warm,
+SoC at start, SoC at stop, round) now re-render the last export when
+edited AFTER the run (the stop-mark SoC is only known after Stop); the
+round marker rides burst and sustained rows too (the speed-session
+rows); Share/Copy controls for the timeline JSON next to the text
+export. Sustained mode's Stop behavior unchanged. README updated.
+
+**Verification (quoted):**
+- Engine: `swift build --build-tests` → "Build complete!". Targeted:
+  `swift test --skip-build --filter "EnergyLoopTests|Phase6ExportTests|
+  BenchHarnessTests|BenchmarkReportTests|QuantGemmMicrobenchTests|
+  QuantMatvecMicrobenchTests|AppBundledPromptTests"` → "Executed 73
+  tests, with 0 failures (0 unexpected)". Broad (everything except the
+  four multi-hour oracle suites GPUQuantLogitSuiteTests /
+  GPULogitSuiteTests / QuantQualityGateTests / LogitMatchSuiteTests —
+  those are P6-3's tag re-run, D5): "Executed 526 tests, with 7 tests
+  skipped and 0 failures (0 unexpected) in 222.681 s" — the 7 skips are
+  the opt-in report/diagnostic tests (DispatchCostDiagnostic,
+  OverheadAnatomy sweep, PrefillRealArtifact ×2, both free-run reports,
+  and the new EnergyLoopSanityTests, run separately below).
+- Mac sanity run of the energy mode (opt-in `QWEN_ENERGY_SANITY=1`,
+  real q4g64 pipeline, shared model at maxContext 256, PROVISIONAL —
+  never a row): bounded run "3 generations, 543 tokens, cycle wall
+  12.0 s, ended by durationBound"; operator-stop run "energy cycle: 2
+  generations — ended by operator stop (final generation truncated at a
+  token boundary)", "cumulative: 257 generated tokens; Σ generation
+  wall 5.4 s; cycle wall 5.4 s", gen 0 contextFull 217 tokens, gen 1
+  stopRequested 40 tokens; text export + JSON rendered and the JSON
+  decoded back to 2 entries. The last-generation line reads "UNSTABLE
+  200-397 dispatches/token" — the standing DI-1 tiled-row label, not new.
+- App: `xcodebuild -scheme QwenMetalApp -destination
+  'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build` → BUILD SUCCEEDED.
+- Backlog drift test: 5 passed.
+
+**Deviations / notes (post-task review):** one existing assertion moved
+from "Phase 5 row export" to "Phase 6 row export"
+(BenchmarkReportTests, 3 occurrences) — the D5-mandated header move; no
+other existing test changed. Spec item "CLI parity where the CLI already
+exports": the CLI has no sustained/energy mode and does not produce
+BenchmarkReport text, so there was nothing to mirror (CLI-2 already
+covers routing the CLI through the shared runner). The programmatic SoC
+reading is quantized by iOS; it is exported to one decimal and labeled
+cross-check. Follow-up seeded: EX-1 (microbench exports still carry the
+bare pre-correction "battery health:" label; cosmetic).
+
+**Fresh-eyes review (ecc:swift-reviewer, read-only): no CRITICAL/HIGH.**
+Two MEDIUM findings fixed in-task before commit: (1) the app built the
+export from operator fields captured at Run-press, so a stop-mark SoC
+typed while the final token was still in flight could miss the export —
+the fields now live on the model and are read at publish time, with a
+caption stating that edits annotate the export currently shown (archive
+a row before typing for the next); (2) a `try?` swallowed a timeline
+JSON encoder failure — now surfaced in the app's error line. LOW notes
+(end-reason re-reads a monotonic flag after the loop; the shared
+empty-generation pattern; the pre-existing detached-task `self`
+capture) left as-is, recorded here. App rebuilt after the fixes: BUILD
+SUCCEEDED.

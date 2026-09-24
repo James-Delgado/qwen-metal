@@ -29,14 +29,25 @@ public struct SustainedLoopResult: Sendable {
     /// (its rate spans a shorter window than the others — annotate, don't
     /// silently mix).
     public let lastGenerationTruncated: Bool
+    /// P6-1 (phase-6.md D1): loop-clock offset at which each generation
+    /// ended — the sustained timeline's x-axis. nil for results assembled
+    /// without the loop (legacy call sites); `SustainedLoop.run` always
+    /// records it.
+    public let generationEndOffsetsSeconds: [Double]?
 
     public init(
         generations: [GenerationMetrics], totalElapsedSeconds: Double,
-        lastGenerationTruncated: Bool
+        lastGenerationTruncated: Bool,
+        generationEndOffsetsSeconds: [Double]? = nil
     ) {
+        if let offsets = generationEndOffsetsSeconds {
+            precondition(offsets.count == generations.count,
+                         "one end offset per generation")
+        }
         self.generations = generations
         self.totalElapsedSeconds = totalElapsedSeconds
         self.lastGenerationTruncated = lastGenerationTruncated
+        self.generationEndOffsetsSeconds = generationEndOffsetsSeconds
     }
 }
 
@@ -64,17 +75,20 @@ public struct SustainedLoop {
         let start = clock()
         let durationElapsed = { clock() - start >= minDurationSeconds }
         var generations: [GenerationMetrics] = []
+        var offsets: [Double] = []
         repeat {
             let metrics = try generate(durationElapsed)
             if metrics.generatedTokenCount == 0, !durationElapsed() {
                 throw SustainedLoopError.emptyGeneration(index: generations.count)
             }
             generations.append(metrics)
+            offsets.append(clock() - start)
         } while !durationElapsed()
         return SustainedLoopResult(
             generations: generations,
             totalElapsedSeconds: clock() - start,
             lastGenerationTruncated:
-                generations.last?.stopReason == .stopRequested)
+                generations.last?.stopReason == .stopRequested,
+            generationEndOffsetsSeconds: offsets)
     }
 }

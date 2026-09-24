@@ -10,6 +10,8 @@ public struct BenchmarkReport: Sendable {
     public enum Mode: String, Sendable {
         case burst
         case sustained
+        /// P6-1 (phase-6.md D4): the operator-bounded energy cycle.
+        case energy
     }
 
     /// ISO date (YYYY-MM-DD), supplied by the caller — deterministic tests.
@@ -46,9 +48,19 @@ public struct BenchmarkReport: Sendable {
     public var burst: GenerationMetrics?
     /// The sustained loop result (mode .sustained).
     public var sustained: SustainedLoopResult?
+    /// The energy cycle result (mode .energy; P6-1).
+    public var energy: EnergyLoopResult?
     /// In-app phys_footprint reading. Cross-check only — the Xcode memory
     /// gauge stays the metric of record (PLAN.md protocol pin).
     public var physFootprintBytes: UInt64?
+    /// P6-1: state of charge around the run, SEPARATE from
+    /// `batteryHealthNote` (the 2026-09-05 obligation). nil omits the lines.
+    public var batteryStateOfCharge: BatteryStateOfCharge?
+    /// P6-1 (spec D5): the Phase 6 round marker. Set ONLY on rows produced
+    /// inside the Phase 6 round — it lifts the PROVISIONAL marker on q4g64
+    /// rows. nil / blank ⇒ PROVISIONAL. Operator-typed; the app never
+    /// guesses it.
+    public var round: String?
 
     public init(
         dateStamp: String, deviceLabel: String, osVersion: String,
@@ -62,7 +74,10 @@ public struct BenchmarkReport: Sendable {
         promptTokenCount: Int, mode: Mode,
         burst: GenerationMetrics? = nil,
         sustained: SustainedLoopResult? = nil,
-        physFootprintBytes: UInt64? = nil
+        energy: EnergyLoopResult? = nil,
+        physFootprintBytes: UInt64? = nil,
+        batteryStateOfCharge: BatteryStateOfCharge? = nil,
+        round: String? = nil
     ) {
         self.dateStamp = dateStamp
         self.deviceLabel = deviceLabel
@@ -80,20 +95,39 @@ public struct BenchmarkReport: Sendable {
         self.mode = mode
         self.burst = burst
         self.sustained = sustained
+        self.energy = energy
         self.physFootprintBytes = physFootprintBytes
+        self.batteryStateOfCharge = batteryStateOfCharge
+        self.round = round
+    }
+
+    /// The round marker, trimmed; nil when unset or blank.
+    public var effectiveRound: String? { Self.nonEmpty(round ?? "") }
+
+    /// bf16 rows are the permanent Phase 2 correctness artifact; q4g64 rows
+    /// are Phase 6 rows now (the P5-EXEC → SPEC-P6 handover, spec D5).
+    var phaseLabel: String { weightsFormat == .bf16 ? "Phase 2" : "Phase 6" }
+
+    /// PROVISIONAL unless the row was produced inside the Phase 6 round
+    /// (spec D5). bf16 rows never leave PROVISIONAL — they are not
+    /// head-to-head rows.
+    public var isProvisional: Bool {
+        weightsFormat == .bf16 || effectiveRound == nil
     }
 
     public func exportText() -> String {
         var lines: [String] = []
         // bf16 rows are the Phase 2 correctness artifact; q4g64 rows are
-        // Phase 5 rows now (both prefill paths — the P5-5 sequential arm is
-        // a Phase 5 A/B row, distinguished by the prefill field below; the
-        // P4-era kernels field stays for the naive arm).
-        let phase = weightsFormat == .bf16 ? "Phase 2" : "Phase 5"
-        lines.append("qwen-metal \(phase) row export (PROVISIONAL)")
+        // Phase 6 rows now (both prefill paths and both kernel arms —
+        // distinguished by the engine fields below). P6-1 (spec D5): the
+        // PROVISIONAL marker drops ONLY inside the Phase 6 round.
+        let marker = isProvisional
+            ? "PROVISIONAL" : "round: \(effectiveRound ?? "")"
+        lines.append("qwen-metal \(phaseLabel) row export (\(marker))")
         lines.append("date: \(dateStamp)")
         lines.append("device: \(deviceLabel) (iOS \(osVersion))")
-        lines.append("battery health: \(orPlaceholder(batteryHealthNote))")
+        lines.append(roundLine)
+        lines.append(contentsOf: batteryLines)
         let engineDescription = weightsFormat == .bf16
             ? "naive fp16 GPU"
             : "q4g64 fused-dequant GPU"
@@ -127,6 +161,12 @@ public struct BenchmarkReport: Sendable {
             } else {
                 lines.append("sustained: no loop recorded")
             }
+        case .energy:
+            if let energy {
+                lines.append(contentsOf: energyLines(energy))
+            } else {
+                lines.append("energy: no cycle recorded")
+            }
         }
 
         if let physFootprintBytes {
@@ -140,6 +180,54 @@ public struct BenchmarkReport: Sendable {
 
     private func orPlaceholder(_ note: String) -> String {
         note.isEmpty ? "(record manually)" : note
+    }
+
+    /// Operator-typed percent notes: "88", "88%", " 88 % " all render as
+    /// "88%"; empty renders the placeholder (never a number).
+    private func percentOrPlaceholder(_ note: String) -> String {
+        guard var trimmed = Self.nonEmpty(note) else { return "(record manually)" }
+        while trimmed.hasSuffix("%") || trimmed.hasSuffix(" ") {
+            trimmed.removeLast()
+        }
+        return trimmed.isEmpty ? "(record manually)" : trimmed + "%"
+    }
+
+    private var roundLine: String {
+        guard let round = effectiveRound else {
+            return "round: (none — PROVISIONAL)"
+        }
+        return weightsFormat == .bf16
+            ? "round: \(round) (bf16 rows stay PROVISIONAL — Phase 2 "
+                + "correctness artifact, never a head-to-head row)"
+            : "round: \(round)"
+    }
+
+    /// P6-1 (edge test 2): health and state of charge are SEPARATE fields.
+    /// Health is the operator-typed Battery Health maximum capacity % (no
+    /// public API); SoC lines render only when the app supplied readings
+    /// (the energy mode), with the programmatic value labeled a cross-check.
+    private var batteryLines: [String] {
+        var lines = [
+            "battery health: \(percentOrPlaceholder(batteryHealthNote)) "
+                + "(maximum capacity %, Settings → Battery → Battery Health, "
+                + "operator-typed — NOT state of charge)"
+        ]
+        if let soc = batteryStateOfCharge {
+            lines.append(
+                "state of charge (Settings → Battery, operator-read at the "
+                    + "band marks — value of record): start "
+                    + "\(percentOrPlaceholder(soc.operatorStartNote)), end "
+                    + "\(percentOrPlaceholder(soc.operatorEndNote))")
+            func programmatic(_ value: Double?) -> String {
+                value.map { String(format: "%.1f%%", $0) } ?? "n/a (unavailable)"
+            }
+            lines.append(
+                "state of charge (programmatic UIDevice.batteryLevel — "
+                    + "cross-check only, never the value of record): start "
+                    + "\(programmatic(soc.programmaticStartPercent)), end "
+                    + "\(programmatic(soc.programmaticEndPercent))")
+        }
+        return lines
     }
 
     /// The CLI's P2-5 per-token block vocabulary, one field per line.
@@ -197,20 +285,52 @@ public struct BenchmarkReport: Sendable {
             result.generations.count, result.totalElapsedSeconds / 60,
             result.lastGenerationTruncated
                 ? " (final generation truncated by the duration bound)" : ""))
-        // Per-generation sequence — the OV#9 bimodality signal.
-        for (index, m) in result.generations.enumerated() {
-            let overall = m.overallTokensPerSecond.map {
-                String(format: "%.2f tok/s", $0)
-            } ?? "n/a"
-            let windowed = m.canonicalWindowTokensPerSecond.map {
-                String(format: ", window %.2f tok/s", $0)
-            } ?? ""
-            lines.append(String(
-                format: "  gen %d: overall %@%@ — %d tokens in %.1f s (stop: %@)",
-                index, overall, windowed, m.generatedTokenCount,
-                m.wallSeconds, m.stopReason.rawValue))
+        // Per-generation sequence — the OV#9 bimodality signal. P6-1: the
+        // lines render from the timeline entries, the JSON export's source.
+        lines.append(contentsOf: Self.timelineEntries(
+            result.generations, offsets: result.generationEndOffsetsSeconds,
+            lastTruncated: result.lastGenerationTruncated).map(\.textLine))
+        lines.append(contentsOf: lastGenerationLines(result.generations.last))
+        return lines
+    }
+
+    /// P6-1 (phase-6.md D4): the energy cycle's raw fields. The energy math
+    /// (J per 1% from health, idle scaling, net J/token, implied watts)
+    /// lives in tools/phase6_analyze.py (P6-3) — no number is derived here.
+    private func energyLines(_ result: EnergyLoopResult) -> [String] {
+        var lines: [String] = []
+        let ended: String
+        switch result.endedBy {
+        case .operatorStop: ended = "operator stop"
+        case .durationBound:
+            ended = "duration bound (safety cap — NOT the protocol's operator stop)"
         }
-        if let last = result.generations.last, let t = last.timing {
+        lines.append(String(
+            format: "energy cycle: %d generations — ended by %@%@",
+            result.generations.count, ended,
+            result.lastGenerationTruncated
+                ? " (final generation truncated at a token boundary)" : ""))
+        lines.append(String(
+            format: "  cumulative: %d generated tokens; Σ generation wall %.1f s; "
+                + "cycle wall %.1f s (idle-baseline pro-rata basis)",
+            result.totalGeneratedTokens, result.totalGenerationWallSeconds,
+            result.cycleWallSeconds))
+        lines.append(contentsOf: Self.timelineEntries(
+            result.generations, offsets: result.generationEndOffsetsSeconds,
+            lastTruncated: result.lastGenerationTruncated).map(\.textLine))
+        lines.append(contentsOf: lastGenerationLines(result.generations.last))
+        lines.append(
+            "energy J/token: not computed in-app — tools/phase6_analyze.py "
+                + "(P6-3) derives it from the health/SoC fields and the token "
+                + "total above")
+        return lines
+    }
+
+    /// The last (steady-state) generation's per-token block, shared by the
+    /// sustained and energy exports.
+    private func lastGenerationLines(_ last: GenerationMetrics?) -> [String] {
+        var lines: [String] = []
+        if let last, let t = last.timing {
             let dispatches = t.minDispatchCount == t.maxDispatchCount
                 ? "\(t.minDispatchCount)"
                 : "UNSTABLE \(t.minDispatchCount)-\(t.maxDispatchCount)"
@@ -221,7 +341,7 @@ public struct BenchmarkReport: Sendable {
                 t.medianOverheadSeconds * 1000, dispatches))
         }
         // P4-1 (spec D7): variance for the last (steady-state) generation.
-        if let variance = result.generations.last?.latencyVariance {
+        if let variance = last?.latencyVariance {
             lines.append("last generation " + variance.summaryLine)
         }
         return lines

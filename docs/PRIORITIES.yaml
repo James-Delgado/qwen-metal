@@ -2345,7 +2345,8 @@ tasks:
   - id: P6-1
     rank: 22.1
     title: "Engine/app harness for the Phase 6 round: energy-mode loop (operator stop + report), battery health + SoC as separate fields, per-generation timeline JSON export, round marker"
-    status: in_progress
+    status: done
+    completed_at: 2026-09-24T04:31:38Z
     started_at: 2026-09-24T04:11:47Z
     depends_on: [SPEC-P6]
     blocks: [P6-3]
@@ -2365,6 +2366,19 @@ tasks:
       monitoring enabled) AND operator-read at the band marks. Mac
       sanity run of the energy mode with a short duration bound (no
       numbers of record).
+      2026-09-24 (done): EnergyLoop (operator stop ends at the token
+      boundary AND reports; empty-generation refusal carried over;
+      optional Mac-only safety bound labeled loudly), BenchmarkReport
+      .energy mode + separate health/SoC lines (programmatic SoC =
+      cross-check only) + round marker (header now "Phase 6 row export",
+      PROVISIONAL drops only with a round set; bf16 stays Phase 2),
+      TimelineExport JSON (text gen-lines render from the same entries),
+      app energy mode + timeline Share/Copy + fields read at publish time.
+      Edge tests 1-4 in EnergyLoopTests + Phase6ExportTests (23 tests);
+      broad suite 526/0 failures; Mac sanity run (opt-in
+      EnergyLoopSanityTests) quoted in DECISIONS.md. Review: no HIGH+;
+      two MEDIUM fixed in-task. Follow-up EX-1 seeded. Engine core
+      unchanged (c2c5fd4).
 
   - id: P6-2
     rank: 22.2
@@ -2924,6 +2938,26 @@ tasks:
       diff additive). Same species as CLI-2 (shared wiring extracted
       engine- or CLI-side); rides well with CLI-1/CLI-2 in one pass.
       Filler: never blocks the phase chain.
+
+  - id: EX-1
+    rank: 29.7
+    title: "Microbench exports (matvec/GEMM) still render a bare 'battery health:' line — apply the P6-1 health-vs-SoC label discipline"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: "Sources/QwenMetalEngine/Bench/QuantMatvecMicrobench.swift + QuantGemmMicrobench.swift (+ their export tests)"
+      tests: "export line reads the operator field as maximum capacity % (never SoC), placeholder when empty; existing microbench tests unchanged otherwise"
+    est_complexity: small
+    notes: |
+      Seeded 2026-09-24 from P6-1: BenchmarkReport now labels the
+      operator's battery field as Battery Health maximum capacity %
+      ("NOT state of charge") per the 2026-09-05 capacity-basis
+      correction, but the two standalone microbench exports keep the
+      pre-correction bare "battery health: <note>" line (they are not
+      energy rows, so nothing is computed from it). Cosmetic parity so
+      no export surface carries the ambiguous label. Filler: never
+      blocks the phase chain.
 
   - id: KP-1
     rank: 30

@@ -107,12 +107,75 @@ final class AppModel: ObservableObject {
     @Published var statusLine = ""
     @Published var outputText = ""
     @Published var lastReport: String?
+    /// P6-1 (phase-6.md D8): the per-generation timeline JSON of the last
+    /// row export (nil for exports without generations — microbench,
+    /// attribution, overhead anatomy). Archived next to the text export.
+    @Published var lastTimelineJSON: String?
     @Published var lastPrompt: String?
 
+    /// P6-1: the last row export's report value. The operator fields
+    /// (health, SoC marks, round, cold/warm) re-render it AFTER the run —
+    /// the energy cycle's end SoC is only known once the loop has stopped.
+    var reportTemplate: BenchmarkReport?
+
     private(set) var engine: LoadedEngine?
-    private let stopFlag = StopFlag()
+    let stopFlag = StopFlag()
 
     func requestStop() { stopFlag.request() }
+
+    /// Operator-entered row context (P6-1): never guessed by the app.
+    /// `round` lifts the PROVISIONAL marker on q4g64 rows (spec D5) — set
+    /// it ONLY inside the Phase 6 round.
+    struct OperatorFields: Equatable {
+        var batteryHealth = ""
+        var coldWarm = ""
+        var socStart = ""
+        var socEnd = ""
+        var round = ""
+    }
+
+    /// The live operator fields (the view binds to them). Reports read
+    /// these at PUBLISH time, never a copy captured at Run-press — a stop-
+    /// mark SoC typed while the final token was still in flight must land
+    /// in the export.
+    @Published var operatorFields = OperatorFields()
+
+    /// Re-renders the last row export with the current operator fields.
+    /// No-op when no report is displayed (during a run, or after a
+    /// microbench/diagnostic export). Editing a field always annotates the
+    /// export currently shown — archive a row before typing for the next.
+    func operatorFieldsChanged() {
+        guard var report = reportTemplate else { return }
+        report.batteryHealthNote = operatorFields.batteryHealth
+        report.coldOrWarmNote = operatorFields.coldWarm
+        report.round = operatorFields.round
+        if var soc = report.batteryStateOfCharge {
+            soc.operatorStartNote = operatorFields.socStart
+            soc.operatorEndNote = operatorFields.socEnd
+            report.batteryStateOfCharge = soc
+        }
+        publishReport(report)
+    }
+
+    /// Publishes a row export: text + timeline JSON, and keeps the report
+    /// as the template the operator fields re-render. An encoder failure
+    /// is surfaced (never swallowed) — the text export still publishes.
+    func publishReport(_ report: BenchmarkReport) {
+        reportTemplate = report
+        lastReport = report.exportText()
+        do {
+            lastTimelineJSON = try report.timelineJSON()
+        } catch {
+            lastTimelineJSON = nil
+            errorMessage = "timeline JSON export failed: \(error)"
+        }
+    }
+
+    func clearExports() {
+        lastReport = nil
+        lastTimelineJSON = nil
+        reportTemplate = nil
+    }
 
     /// Residency is baked into the weights buffer at load (spec D1), so a
     /// toggle drops the engine; the next run reloads in the new mode.
@@ -225,13 +288,11 @@ final class AppModel: ObservableObject {
 
     // MARK: - Benchmark screen (pinned protocol via the engine harness)
 
-    func runBurst(
-        prompt: BundledPrompt, batteryNote: String, coldWarmNote: String
-    ) async {
+    func runBurst(prompt: BundledPrompt) async {
         guard !isRunning, !isLoading else { return }
         isRunning = true
         errorMessage = nil
-        lastReport = nil
+        clearExports()
         stopFlag.reset()
         defer { isRunning = false }
         do {
@@ -253,17 +314,16 @@ final class AppModel: ObservableObject {
                         onToken: { step, _ in self.postProgress(step) }
                     ).metrics
                 }.value
-            lastReport = report(
+            publishReport(makeReport(
                 mode: .burst, promptName: prompt.rawValue,
                 promptTokenCount: metrics.promptTokenCount,
-                batteryNote: batteryNote, coldWarmNote: coldWarmNote,
                 residency: engine.residency,
                 weightsFormat: engine.weightsFormat,
                 kernelPath: engine.gpuModel.kernelPath,
                 prefillPath: engine.gpuModel.prefillPath,
                 prefillChunkSize: engine.gpuModel.prefillChunkSize,
                 prefillAttention: engine.gpuModel.prefillAttention,
-                burst: metrics)
+                burst: metrics))
             statusLine = stopFlag.isSet
                 ? "burst stopped early — report reflects the partial run"
                 : "burst complete"
@@ -274,11 +334,11 @@ final class AppModel: ObservableObject {
 
     /// Sustained rows are pinned to decode-essay (prompts/README role
     /// separation); the regenerate policy is the engine's SustainedLoop.
-    func runSustained(batteryNote: String, coldWarmNote: String) async {
+    func runSustained() async {
         guard !isRunning, !isLoading else { return }
         isRunning = true
         errorMessage = nil
-        lastReport = nil
+        clearExports()
         stopFlag.reset()
         defer { isRunning = false }
         do {
@@ -308,19 +368,18 @@ final class AppModel: ObservableObject {
                         ).metrics
                     }
                 }.value
-            lastReport = report(
+            publishReport(makeReport(
                 mode: .sustained,
                 promptName: BundledPrompt.decodeEssay.rawValue,
                 promptTokenCount:
                     result.generations.first?.promptTokenCount ?? 0,
-                batteryNote: batteryNote, coldWarmNote: coldWarmNote,
                 residency: engine.residency,
                 weightsFormat: engine.weightsFormat,
                 kernelPath: engine.gpuModel.kernelPath,
                 prefillPath: engine.gpuModel.prefillPath,
                 prefillChunkSize: engine.gpuModel.prefillChunkSize,
                 prefillAttention: engine.gpuModel.prefillAttention,
-                sustained: result)
+                sustained: result))
             statusLine = "sustained loop complete"
         } catch is CancellationError {
             statusLine = "sustained loop aborted by Stop — no report"
@@ -355,7 +414,7 @@ final class AppModel: ObservableObject {
         guard !isRunning, !isLoading else { return }
         isRunning = true
         errorMessage = nil
-        lastReport = nil
+        clearExports()
         defer { isRunning = false }
         do {
             let residency = self.residency
@@ -431,7 +490,7 @@ final class AppModel: ObservableObject {
         guard !isRunning, !isLoading else { return }
         isRunning = true
         errorMessage = nil
-        lastReport = nil
+        clearExports()
         stopFlag.reset()
         defer { isRunning = false }
         do {
@@ -508,7 +567,7 @@ final class AppModel: ObservableObject {
         guard !isRunning, !isLoading else { return }
         isRunning = true
         errorMessage = nil
-        lastReport = nil
+        clearExports()
         stopFlag.reset()
         defer { isRunning = false }
         do {
@@ -548,7 +607,7 @@ final class AppModel: ObservableObject {
 
     /// Loads (off the main thread) if there is no engine for the selected
     /// residency yet. Errors propagate to the caller's `show(_:)`.
-    private func loadEngineIfNeeded() async throws -> LoadedEngine {
+    func loadEngineIfNeeded() async throws -> LoadedEngine {
         if let engine, engine.residency == residency,
            engine.weightsFormat == weightsFormat,
            weightsFormat == .bf16
@@ -654,14 +713,14 @@ final class AppModel: ObservableObject {
         throw AppError.noModelDirectory(searched: documents.path)
     }
 
-    nonisolated private func postProgress(_ step: Int) {
+    nonisolated func postProgress(_ step: Int) {
         guard step.isMultiple(of: 16) else { return }
         Task { @MainActor in
             self.statusLine = "generating… token \(step + 1)"
         }
     }
 
-    private func show(_ error: Error) {
+    func show(_ error: Error) {
         errorMessage = String(describing: error)
         statusLine = ""
     }
@@ -681,22 +740,27 @@ final class AppModel: ObservableObject {
         return line
     }
 
-    private func report(
+    /// Assembles the row export value (engine-side formatting; the app only
+    /// supplies operator context — read live from `operatorFields` — and
+    /// the readings it can take).
+    func makeReport(
         mode: BenchmarkReport.Mode, promptName: String, promptTokenCount: Int,
-        batteryNote: String, coldWarmNote: String,
         residency: WeightsResidency, weightsFormat: WeightsFormat,
         kernelPath: GPUModel.KernelPath,
         prefillPath: GPUModel.PrefillPath,
         prefillChunkSize: Int,
         prefillAttention: GPUModel.PrefillAttention,
         burst: GenerationMetrics? = nil,
-        sustained: SustainedLoopResult? = nil
-    ) -> String {
+        sustained: SustainedLoopResult? = nil,
+        energy: EnergyLoopResult? = nil,
+        batteryStateOfCharge: BatteryStateOfCharge? = nil
+    ) -> BenchmarkReport {
         BenchmarkReport(
             dateStamp: Self.dateStamp(),
             deviceLabel: Self.deviceModelIdentifier(),
             osVersion: Self.osVersionString(),
-            batteryHealthNote: batteryNote, coldOrWarmNote: coldWarmNote,
+            batteryHealthNote: operatorFields.batteryHealth,
+            coldOrWarmNote: operatorFields.coldWarm,
             residency: residency, weightsFormat: weightsFormat,
             kernelPath: kernelPath,
             prefillPath: prefillPath,
@@ -704,12 +768,13 @@ final class AppModel: ObservableObject {
             prefillAttention: prefillPath == .tiled ? prefillAttention : nil,
             promptName: promptName,
             promptTokenCount: promptTokenCount, mode: mode,
-            burst: burst, sustained: sustained,
-            physFootprintBytes: MemoryFootprint.currentPhysFootprintBytes()
-        ).exportText()
+            burst: burst, sustained: sustained, energy: energy,
+            physFootprintBytes: MemoryFootprint.currentPhysFootprintBytes(),
+            batteryStateOfCharge: batteryStateOfCharge,
+            round: operatorFields.round)
     }
 
-    nonisolated private static func dateStamp() -> String {
+    nonisolated static func dateStamp() -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withFullDate]
         return formatter.string(from: Date())

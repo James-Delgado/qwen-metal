@@ -151,7 +151,7 @@ final class BenchmarkReportTests: XCTestCase {
                 burst: syntheticMetrics(tokens: 64)).exportText()
         }
         let tiled = q4Text(.fused, prefill: .tiled, chunk: 512)
-        XCTAssertTrue(tiled.contains("Phase 5 row export"))
+        XCTAssertTrue(tiled.contains("Phase 6 row export"))
         XCTAssertTrue(tiled.contains("weights q4g64"))
         XCTAssertTrue(tiled.contains("q4g64 fused-dequant GPU"))
         XCTAssertTrue(tiled.contains("residency mmap"))
@@ -169,7 +169,7 @@ final class BenchmarkReportTests: XCTestCase {
 
         // The sequential A/B arm is still a Phase 5 row, labeled by prefill.
         let sequential = q4Text(.fused, prefill: .sequential)
-        XCTAssertTrue(sequential.contains("Phase 5 row export"))
+        XCTAssertTrue(sequential.contains("Phase 6 row export"))
         XCTAssertTrue(sequential.contains("kernels fused"))
         XCTAssertTrue(sequential.contains("prefill sequential"), sequential)
         XCTAssertFalse(sequential.contains("C="),
@@ -180,7 +180,7 @@ final class BenchmarkReportTests: XCTestCase {
 
         // The naive kernel arm (sequential-only) stays labeled by kernels.
         let naive = q4Text(.naive, prefill: .sequential)
-        XCTAssertTrue(naive.contains("Phase 5 row export"))
+        XCTAssertTrue(naive.contains("Phase 6 row export"))
         XCTAssertTrue(naive.contains("kernels naive"))
         XCTAssertTrue(naive.contains("prefill sequential"))
     }
