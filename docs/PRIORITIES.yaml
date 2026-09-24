@@ -2345,7 +2345,8 @@ tasks:
   - id: P6-1
     rank: 22.1
     title: "Engine/app harness for the Phase 6 round: energy-mode loop (operator stop + report), battery health + SoC as separate fields, per-generation timeline JSON export, round marker"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-24T04:11:47Z
     depends_on: [SPEC-P6]
     blocks: [P6-3]
     deliverable:
