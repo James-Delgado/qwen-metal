@@ -84,10 +84,11 @@ campaign levers (PIPE-1, P5-2C, GE-1 — behind SPEC-P7); any new
 quantization format, sampler, or model; energy for burst runs (undefined
 by protocol); a Core ML comparison column (optional per PLAN, not taken);
 simulator anything. BW-1 (read-only bandwidth variant) and LD-1
-(long-depth fp16 report) are NOT Phase 6 tasks by rank; the writeup cites
-them as measured if they have landed by P6-6, otherwise as open caveats
-(D8) — pulling them ahead is James's re-rank call (flagged in the gates
-entry).
+(long-depth fp16 report) were pulled ahead of the writeup by James on
+2026-09-24 (veto item 8): BW-1 lands before the `phase6-build` tag and
+its iPhone row rides the speed session; LD-1 runs on the Mac alongside
+the device sessions and feeds the limitations section as a measurement.
+Neither gates anything.
 
 ## Design decisions
 
@@ -320,8 +321,8 @@ constants anywhere:**
      a table of Phase 0 vs Phase 6 values per engine with the causes
      named (OS 26.5.2 → current, validation ON → OFF, overall → window
      rate, template feeding, harness patches); the 2R+1W triad
-     denominator's read-only caveat (BW-1 — measured or open);
-     fp16 activation evidence depth (LD-1 — measured or open); no
+     denominator's read-only bound (BW-1, measured);
+     fp16 activation evidence at depth (LD-1, measured); no
      instrumented temperature; per-engine tokenizer counts; the
      phys_footprint accounting asymmetry (file-backed pages) and the
      Phase 0 MLX activeMemory mislabel; the decode-essay generation

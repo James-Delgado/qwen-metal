@@ -5171,3 +5171,22 @@ tighten.
   judgment-derived / convention-setting items are flagged in the gates
   entry above and reported item-by-item in the session report per
   AGENT_OPERATION.md step 11.
+
+## 2026-09-24 — Decision (James, in-conversation): BW-1 and LD-1 pulled ahead of the Phase 6 writeup (SPEC-P6 veto item 8)
+
+James resolved item 8 of the Phase 6 gates entry's veto list: both
+filler tasks that feed the writeup's limitations section become Phase 6
+inputs instead of open caveats. BW-1 (read-only streaming bandwidth
+microbench — bounds how far the 2R+1W triad understates the roofline
+denominator for read-dominated decode traffic, est. 5–10%) moves rank
+24 → 22.25 and blocks P6-3, so the kernel + Mac row land before the
+`phase6-build` tag and its iPhone row (owner james) rides the P6-4
+speed session on the same build. LD-1 (long-depth GPU free-run report,
+fp16 activations at ~3900-token cache depth; report-not-gate) moves
+rank 24.3 → 22.35 and blocks P6-6; it is Mac-only and runs while James
+does the device sessions. docs/phases/phase-6.md Scope + D8 §7 updated
+to cite both as measured. Nothing gates on either; BW-1's correctness
+gate is still pre-committed before its kernel exists (P0B-4 pattern).
+Veto items 1–7 remain open (James asked clarifying questions on items
+4 and 6 this session; answers given in-conversation, no change to the
+flagged text).

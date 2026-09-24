@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-09-23
+last_updated: 2026-09-24
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -2397,7 +2397,7 @@ tasks:
     rank: 22.3
     title: "Phase 6 runbook + row templates + tools/phase6_analyze.py (exports -> tables + figures) with tests; tag phase6-build; full correctness evidence re-run on the tag"
     status: blocked
-    depends_on: [P6-1, P6-2]
+    depends_on: [P6-1, P6-2, BW-1]
     blocks: [P6-4]
     deliverable:
       file: "benchmarks/phase6-runbook.md + tools/phase6_analyze.py (+ tools tests) + benchmarks/phase6/README.md (archive layout) + DECISIONS.md tag-evidence entry"
@@ -2434,7 +2434,9 @@ tasks:
       order (ours, MLX, llama.cpp) x3; prefill x3 per engine likewise;
       one 5-min loop per engine with rests >= preceding run; footprint
       launches (attached, footprint-only) after the timed rows; our
-      warm-burst bookend closes. Attribution exports (decode + prefill,
+      warm-burst bookend closes. BW-1's iPhone row (read-only bandwidth,
+      same protocol shape as the triad) rides this session on the same
+      build — decided by James 2026-09-24. Attribution exports (decode + prefill,
       DIAGNOSTIC) on the same build/session feed writeup section 6.
       The MLX window rate from this session is the denominator of the
       success-metric verdict (P6-EXEC).
@@ -2467,7 +2469,7 @@ tasks:
     rank: 22.6
     title: "The writeup: docs/writeup.md + docs/writeup/ figures regenerated from benchmarks/phase6/ — headline table, verdict input, thermal chart, energy with both error bars, roofline from measured denominators, per-component headroom, measurement limitations, honest gaps, reproducibility"
     status: blocked
-    depends_on: [P6-5]
+    depends_on: [P6-5, LD-1]
     blocks: [P6-EXEC]
     deliverable:
       file: "docs/writeup.md + docs/writeup/*.png (+ optional PDF render) + DECISIONS.md entry"
@@ -2691,11 +2693,11 @@ tasks:
 
   # ---------- Follow-ups (seeded from measurements) ----------
   - id: LD-1
-    rank: 24.3
+    rank: 22.35
     title: "Long-depth GPU free-run report: fp16-activation behavior at multi-thousand-token cache depth"
     status: ready
     depends_on: [P4-4]
-    blocks: []
+    blocks: [P6-6]
     deliverable:
       file: "tests (free-run/report harness extension) + DECISIONS.md report entry"
       tests: "report-not-gate (2026-08-23 rationale): divergence step + non-finite-logit count at depth ~3900; harness depth configurable; wall-time-viable oracle strategy chosen and recorded"
@@ -2721,6 +2723,12 @@ tasks:
       why) is part of the task. Blocked on P4-4 only so the measured
       path is the shipping default (fused); filler otherwise — never
       blocks the phase chain.
+      2026-09-24 (decided by James, SPEC-P6 veto item 8): pulled ahead of
+      the Phase 6 writeup — rank 24.3 -> 22.35, blocks P6-6. Mac-only,
+      agent-runnable, so it slots after P6-3 while James runs the
+      device sessions (P6-4/P6-5); its report becomes writeup section
+      7's fp16-depth item (measured, not an open caveat). Report-only
+      stays: nothing here gates.
 
   - id: DEV-1
     rank: 25
@@ -2956,11 +2964,11 @@ tasks:
       keep it as a diagnostic. Filler: never blocks the phase chain.
 
   - id: BW-1
-    rank: 24
+    rank: 22.25
     title: "Read-only streaming bandwidth microbench variant (complements triad)"
     status: ready
     depends_on: []
-    blocks: []
+    blocks: [P6-3]
     deliverable:
       file: "engine package (bandwidth kernel variant) + results rows (Mac + iPhone)"
       tests: "correctness gate pre-committed before implementation; same protocol shape as P0B-4"
@@ -2973,3 +2981,11 @@ tasks:
       checksum-reduce) variant bounds the true roofline denominator for
       decode-shaped traffic. iPhone run is owner-james when it lands.
       Deliberately ranked last: filler task, never blocks the phase chain.
+      2026-09-24 (decided by James, SPEC-P6 veto item 8): pulled ahead of
+      the Phase 6 writeup — rank 24 -> 22.25, blocks P6-3 so the kernel
+      + Mac row land BEFORE the phase6-build tag and the iPhone row
+      (owner james) rides the P6-4 speed session on the same build.
+      Feeds writeup section 5 (roofline denominator for read-dominated
+      decode traffic) and section 7 (measured, not an open caveat).
+      Correctness gate still pre-committed in DECISIONS.md before the
+      kernel exists (the P0B-4 pattern).
