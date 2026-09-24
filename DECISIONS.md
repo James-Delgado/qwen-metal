@@ -5190,3 +5190,38 @@ gate is still pre-committed before its kernel exists (P0B-4 pattern).
 Veto items 1–7 remain open (James asked clarifying questions on items
 4 and 6 this session; answers given in-conversation, no change to the
 flagged text).
+
+## 2026-09-24 — Phase 6 veto window CLOSED: items 1–7 approved as committed (decided by James)
+
+James reviewed the eight flagged items from the 2026-09-23 "Phase 6
+gates pre-committed" entry item by item in conversation (what each
+decides, why it exists, alternatives, risks in both directions, and a
+recommendation for each; clarifications given on the LLMEval
+rendered-input mechanism and on the meaning of "harness cost" for the
+llama.cpp energy drop clause) and closed the window by decision — the
+Phase 3/4/5 precedent:
+
+- **Items 1–7 approved as committed, unamended:** (1) idle baseline
+  ≥ 4% SoC drop, once per iOS build; (2) rest ≥ the preceding loaded
+  run's duration with charging counted as load, and the Latin-square
+  energy-cycle order; (3) the first-token prefill-span definition
+  applied to every engine, with P6-2 verifying rather than assuming
+  what MLX's first streamed token comes from; (4) rendered-prompt
+  feeding on MLX via a tokenizer-direct `LMInput`, exact prompt-token
+  count match with ours (852 / 84) as the pass condition, one-day
+  timebox and the Phase 0 mode as fallback; (5) the success-metric
+  verdict computed by the PLAN formula on the same-session rows,
+  recorded MET or NOT MET with anatomy, never blocking exit, the 29.4
+  constant reported alongside; (6) llama.cpp energy KEPT at n=3, with
+  the pre-declared cut rule (its cycles dropped first, partial rounds
+  labeled and never averaged in) — this is the OV#8 decision the PLAN
+  required in DECISIONS.md; (7) writeup at docs/writeup.md + figures,
+  raw exports under benchmarks/phase6/, tools/phase6_analyze.py
+  regenerating every number.
+- **Item 8** was decided separately on 2026-09-24 (previous entry):
+  BW-1 and LD-1 pulled ahead of the writeup.
+
+Hard rule 6 now binds: the reused tripwires (decode ≥ 24.0, prefill
+≥ 135 on the tagged build) never loosen; the validity criteria can only
+tighten. No Phase 6 code, harness patch, or device row existed when the
+window closed. P6-1 may proceed with no open questions on the gates.

@@ -247,7 +247,7 @@ measure whatever drift survives this rule; a bookend delta larger than
 the smallest cross-engine effect the writeup claims demotes that claim
 to "unresolved (drift-dominated)".
 
-### D7. Gates (pre-committed; binding record in DECISIONS.md)
+### D7. Gates (pre-committed; binding record in DECISIONS.md; veto window closed 2026-09-24, all items approved unamended)
 
 Phase 6 builds no kernels; its gates are run-VALIDITY criteria plus the
 existing constants reused as regression tripwires. **No new performance

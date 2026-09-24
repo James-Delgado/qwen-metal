@@ -2336,6 +2336,10 @@ tasks:
       re-pointed at P6-6. NOTE for James: eight judgment-derived /
       convention-setting items are flagged in the gates entry — veto
       window is before P6-1 work starts.
+      2026-09-24 (veto window CLOSED, James): items 1-7 approved as
+      committed, unamended; item 8 decided separately (BW-1 + LD-1
+      pulled ahead of the writeup). Binding record: DECISIONS.md
+      2026-09-24 "Phase 6 veto window CLOSED".
 
   # ---------- Phase 6 build tasks (seeded 2026-09-23 by SPEC-P6; spec: docs/phases/phase-6.md) ----------
   - id: P6-1
