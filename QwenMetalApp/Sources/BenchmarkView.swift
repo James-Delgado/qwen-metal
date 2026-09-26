@@ -172,6 +172,20 @@ struct BenchmarkView: View {
                                 + "detached (D8); GB/s + GFLOPS at every M "
                                 + "are reported, never gated.")
                                 .font(.caption)
+                        case .triad:
+                            Text("P0B-4 STREAM triad (2R+1W), pinned protocol: "
+                                + "3 × 384 MiB, 2 + 10 iterations, sustained = "
+                                + "median. Weights-free (1.125 GiB transient). "
+                                + "Run ×3 rested, record the median run; pair "
+                                + "with read-only in the same session (BW-1).")
+                                .font(.caption)
+                        case .readOnly:
+                            Text("BW-1 read-only streaming reduce over the same "
+                                + "three buffers (reads only; 192 KiB of "
+                                + "partials excluded). Same protocol; the "
+                                + "read-only ÷ triad ratio from the SAME session "
+                                + "is the writeup's number. Never gated.")
+                                .font(.caption)
                         }
                     case .attribution:
                         Picker("Breakdown", selection: $attributionMode) {

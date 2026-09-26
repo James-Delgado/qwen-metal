@@ -2417,9 +2417,23 @@ tasks:
   - id: P6-3
     rank: 22.3
     title: "Phase 6 runbook + row templates + tools/phase6_analyze.py (exports -> tables + figures) with tests; tag phase6-build; full correctness evidence re-run on the tag"
-    status: blocked
+    status: ready
     depends_on: [P6-1, P6-2, BW-1]
     blocks: [P6-4]
+    bw_1_handoff: |
+      BW-1 landed 2026-09-26 (DECISIONS.md). The speed-session runbook
+      gets a bandwidth pair step on the phase6-build: app Benchmark ->
+      microbench -> `read-only` then `triad`, x3 rested each (weights-
+      free, 1.125 GiB transient, no model load needed), record the
+      median run of each + the paired read-only / triad ratio; the
+      Mac finding is read-only ~= 0.97 x triad (hypothesis NOT
+      supported there) so the device pair is the number of record for
+      writeup section 5/7. The analyzer parses the two bandwidth export
+      headers (`qwen-metal bandwidth microbench — STREAM triad (P0B-4)`
+      / `… read-only streaming reduce (BW-1)`; lines `sustained
+      (median): N GB/s`, `spread: min A / max B GB/s`, `correctness:`)
+      and REFUSES any export carrying the `DIAGNOSTIC — non-pinned
+      geometry` line.
     p6_2_handoff: |
       The analyzer parses THREE export formats: ours (BenchmarkReport text +
       TimelineExport JSON, schema qwen-metal-timeline/1) and the two external
@@ -3026,8 +3040,9 @@ tasks:
   - id: BW-1
     rank: 22.25
     title: "Read-only streaming bandwidth microbench variant (complements triad)"
-    status: in_progress
+    status: done
     started_at: 2026-09-26 15:39:51+00:00
+    completed_at: 2026-09-26 15:51:29+00:00
     depends_on: []
     blocks: [P6-3]
     deliverable:
@@ -3050,3 +3065,11 @@ tasks:
       decode traffic) and section 7 (measured, not an open caveat).
       Correctness gate still pre-committed in DECISIONS.md before the
       kernel exists (the P0B-4 pattern).
+      2026-09-26: landed as Metal/ReadOnlyBandwidthKernel.swift +
+      Bench/BandwidthMicrobench.swift (shared CLI/app harness with the
+      refuse-to-report gate) + `bandwidth --kernel triad|read-only` +
+      app microbench picker (triad, read-only); 25 new tests green. Mac
+      rows: read-only 183.75 GB/s vs same-session triad 189.85 —
+      read-only ≈ 0.97 × triad; the 5-10% "triad understates" hypothesis
+      is NOT supported on the M2 Pro (depth sweep rules out the kernel
+      geometry). Device pair = P6-4 (owner james), the number of record.

@@ -10,7 +10,7 @@ switch arguments.first {
 case nil:
     print("\(EngineInfo.name) v\(EngineInfo.version) — subcommands: bandwidth, generate, pack, microbench, attribute")
 case "bandwidth":
-    exit(runBandwidthCommand())
+    exit(runBandwidthCommand(Array(arguments.dropFirst())))
 case "generate":
     exit(await runGenerateCommand(Array(arguments.dropFirst())))
 case "pack":

@@ -1,62 +1,68 @@
 import Foundation
 import QwenMetalEngine
 
-/// `qwen-metal-cli bandwidth` — runs the P0B-4 triad microbench at the pinned
-/// official protocol (DECISIONS.md 2026-08-21: 1.125 GiB streamed/iteration,
-/// 2 warmup + 10 measured, sustained = median) and prints everything a
-/// benchmarks/results.md row needs. Refuses to report a number if the sampled
-/// outputs fail the pre-committed correctness gate.
-func runBandwidthCommand() -> Int32 {
-    /// Pre-committed correctness gate — DECISIONS.md 2026-08-21 (P0B-4 entry).
-    let tolerance: Float = 1e-6
+/// `qwen-metal-cli bandwidth [--kernel triad|read-only]` — runs the pinned
+/// streaming-bandwidth protocol (DECISIONS.md 2026-08-21 P0B-4; 2026-09-26
+/// BW-1: 1.125 GiB per iteration, 2 warmup + 10 measured, sustained = median)
+/// and prints everything a benchmarks/results.md row needs. Thin: the gate
+/// (refuse-to-report on a failed sample) and the formatting live in the
+/// engine's BandwidthMicrobench, shared with the app.
+private let bandwidthUsage = """
+usage: qwen-metal-cli bandwidth [--kernel triad|read-only] [--float4s-per-thread N]
+  --kernel              triad (default; P0B-4, 2R+1W) or read-only (BW-1, reads only)
+  --float4s-per-thread  read-only only, DIAGNOSTIC: per-thread depth in 1...64
+                        (pin = 64; any other value is labeled and never a row)
+"""
+
+func runBandwidthCommand(_ arguments: [String]) -> Int32 {
+    var kernel = BandwidthKernel.triad
+    var float4sPerThread = ReadOnlyBandwidthKernel.float4sPerThreadPerBuffer
+    var index = 0
+    while index < arguments.count {
+        let flag = arguments[index]
+        guard index + 1 < arguments.count else {
+            FileHandle.standardError.write(Data("error: flag '\(flag)' needs a value\n\(bandwidthUsage)\n".utf8))
+            return 2
+        }
+        let value = arguments[index + 1]
+        switch flag {
+        case "--kernel":
+            guard let parsed = BandwidthKernel(rawValue: value) else {
+                FileHandle.standardError.write(Data(
+                    "error: --kernel must be 'triad' or 'read-only'\n\(bandwidthUsage)\n".utf8))
+                return 2
+            }
+            kernel = parsed
+        case "--float4s-per-thread":
+            guard let parsed = Int(value),
+                  ReadOnlyBandwidthKernel.allowedFloat4sPerThread.contains(parsed) else {
+                FileHandle.standardError.write(Data(
+                    "error: --float4s-per-thread must be an integer in 1...64\n\(bandwidthUsage)\n".utf8))
+                return 2
+            }
+            float4sPerThread = parsed
+        default:
+            FileHandle.standardError.write(Data("error: unknown flag '\(flag)'\n\(bandwidthUsage)\n".utf8))
+            return 2
+        }
+        index += 2
+    }
+    if kernel == .triad, float4sPerThread != ReadOnlyBandwidthKernel.float4sPerThreadPerBuffer {
+        FileHandle.standardError.write(Data(
+            "error: --float4s-per-thread applies to --kernel read-only only\n".utf8))
+        return 2
+    }
 
     do {
         let context = try MetalContext()
-        let kernel = try TriadBandwidthKernel(context: context)
-
-        let n = TriadBandwidthKernel.benchmarkElementCount
-        let sampleIndices = [0, n / 2, n - 1]
-        let os = ProcessInfo.processInfo.operatingSystemVersionString
-
-        print("triad bandwidth microbench (P0B-4, pinned protocol)")
-        print("device: \(context.device.name)")
-        print("os: \(os)")
-        print("buffers: 3 x \(n) fp32 (\(String(format: "%.3f", Double(3 * n * 4) / Double(1 << 30))) GiB streamed/iteration)")
-        print("iterations: \(TriadBandwidthKernel.benchmarkWarmupIterations) warmup (discarded) + \(TriadBandwidthKernel.benchmarkMeasuredIterations) measured")
-
-        let result = try kernel.run(
-            elementCount: n,
-            warmupIterations: TriadBandwidthKernel.benchmarkWarmupIterations,
-            measuredIterations: TriadBandwidthKernel.benchmarkMeasuredIterations,
-            sampleIndices: sampleIndices
-        )
-
-        for index in sampleIndices {
-            guard let gpu = result.outputSamples[index] else {
-                FileHandle.standardError.write(Data("missing output sample at index \(index)\n".utf8))
-                return 1
-            }
-            let reference = TriadBandwidthKernel.bValue(at: index)
-                + TriadBandwidthKernel.scalar * TriadBandwidthKernel.cValue(at: index)
-            guard abs(gpu - reference) <= tolerance else {
-                FileHandle.standardError.write(Data(
-                    "correctness gate FAILED at index \(index): gpu \(gpu) vs cpu \(reference) — bandwidth figure withheld\n".utf8
-                ))
-                return 1
-            }
-        }
-        print("correctness: \(sampleIndices.count) sampled elements within pre-committed gate (max |Δ| <= 1e-6)")
-
-        print("per-iteration GB/s (GPU time; wall recorded alongside):")
-        for (i, timing) in result.measuredTimings.enumerated() {
-            let gbps = result.measuredGBps[i]
-            print(String(
-                format: "  iter %2d: %7.2f GB/s  (gpu %.4fs, wall %.4fs, overhead %.4fs)",
-                i + 1, gbps, timing.gpuDuration, timing.wallDuration, timing.dispatchOverhead
-            ))
-        }
-        print(String(format: "sustained (median): %.2f GB/s", result.sustainedGBps))
-        print(String(format: "spread: min %.2f / max %.2f GB/s", result.minGBps, result.maxGBps))
+        let bench = BandwidthMicrobench(context: context)
+        let report = try bench.run(kernel: kernel, float4sPerThread: float4sPerThread)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate]
+        print(report.exportText(
+            dateStamp: formatter.string(from: Date()),
+            deviceLabel: context.device.name,
+            osVersion: ProcessInfo.processInfo.operatingSystemVersionString))
         return 0
     } catch {
         FileHandle.standardError.write(Data("bandwidth bench failed: \(error)\n".utf8))

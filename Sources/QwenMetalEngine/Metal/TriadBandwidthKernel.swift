@@ -74,11 +74,17 @@ public final class TriadBandwidthKernel {
     private static let patternPeriod = 4096
 
     public static func bValue(at index: Int) -> Float {
-        Float(index % patternPeriod) * (1.0 / 2048.0) - 1.0
+        patternValue(at: index, indexOffset: 0)
     }
 
     public static func cValue(at index: Int) -> Float {
-        Float((index &+ 1234) % patternPeriod) * (1.0 / 2048.0) - 1.0
+        patternValue(at: index, indexOffset: 1234)
+    }
+
+    /// The pattern at `index` for an arbitrary offset — shared with the BW-1
+    /// read-only kernel, whose three buffers reuse this exact pattern family.
+    public static func patternValue(at index: Int, indexOffset: Int) -> Float {
+        Float((index &+ indexOffset) % patternPeriod) * (1.0 / 2048.0) - 1.0
     }
 
     private let context: MetalContext
@@ -169,13 +175,14 @@ public final class TriadBandwidthKernel {
         )
     }
 
-    /// Fills a buffer with the period-4096 pattern: one period written
+    /// Fills a buffer with the period-4096 pattern (package-internal: the BW-1
+    /// read-only kernel fills its buffers with it too): one period written
     /// directly, then doubled with memcpy so gigabyte fills run at memory
     /// speed instead of one bounds-checked store per element. Every copy's
     /// destination offset is a multiple of the period (the fill grows
     /// period → 2·period → 4·period …), so `pointer[i] == pattern(i)` holds
     /// for the whole buffer including a ragged final copy.
-    private static func fillPattern(_ buffer: MTLBuffer, count: Int, indexOffset: Int) {
+    static func fillPattern(_ buffer: MTLBuffer, count: Int, indexOffset: Int) {
         let pointer = buffer.contents().bindMemory(to: Float.self, capacity: count)
         let period = min(patternPeriod, count)
         for i in 0..<period {

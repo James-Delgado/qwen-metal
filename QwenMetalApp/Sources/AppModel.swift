@@ -397,7 +397,21 @@ final class AppModel: ObservableObject {
     enum MicrobenchKernel: String, CaseIterable, Identifiable {
         case matvec
         case gemm
+        /// BW-1: the two streaming-bandwidth kernels (P0B-4 triad, read-only
+        /// reduce) — weights-free, 1.125 GiB transient. Both ride the P6-4
+        /// speed session on the same build so the read-only ÷ triad ratio is
+        /// same-session (DECISIONS.md 2026-09-26).
+        case triad
+        case readOnly = "read-only"
         var id: String { rawValue }
+
+        var bandwidthKernel: BandwidthKernel? {
+            switch self {
+            case .triad: return .triad
+            case .readOnly: return .readOnly
+            case .matvec, .gemm: return nil
+            }
+        }
     }
 
     /// P3-6 (spec D7) / P5-2 (phase-5.md D7): the standalone dequant
@@ -418,6 +432,26 @@ final class AppModel: ObservableObject {
         defer { isRunning = false }
         do {
             let residency = self.residency
+            if let bandwidthKernel = kernel.bandwidthKernel {
+                // BW-1: no weights, no model directory — the pinned
+                // 1.125 GiB/iteration protocol over transient buffers; the
+                // engine harness withholds the figure on a gate failure.
+                statusLine = "bandwidth microbench (\(bandwidthKernel.rawValue), "
+                    + "1.125 GiB/iter, 2 + 10 iterations)…"
+                lastReport = try await Task.detached(priority: .userInitiated) {
+                    let context = try MetalContext()
+                    let report = try BandwidthMicrobench(context: context)
+                        .run(kernel: bandwidthKernel)
+                    return report.exportText(
+                        dateStamp: Self.dateStamp(),
+                        deviceLabel: Self.deviceModelIdentifier(),
+                        osVersion: "iOS \(Self.osVersionString())",
+                        batteryHealthNote: batteryNote,
+                        coldOrWarmNote: coldWarmNote)
+                }.value
+                statusLine = "bandwidth microbench complete"
+                return
+            }
             statusLine = kernel == .matvec
                 ? "microbench (197 packed matvecs, residency "
                     + "\(residency.rawValue))…"
@@ -445,6 +479,8 @@ final class AppModel: ObservableObject {
                             batteryHealthNote: batteryNote,
                             coldOrWarmNote: coldWarmNote,
                             residency: residency)
+                    case .triad, .readOnly:
+                        preconditionFailure("bandwidth kernels return above")
                     case .gemm:
                         let bench = try QuantGemmMicrobench(
                             packed: packed, config: config,

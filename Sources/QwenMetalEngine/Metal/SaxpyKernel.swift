@@ -12,6 +12,8 @@ public enum KernelInputError: Error, CustomStringConvertible, Equatable {
     case elementCountNotMultiple(of: Int, count: Int)
     case invalidIterations(warmup: Int, measured: Int)
     case sampleIndexOutOfRange(index: Int, count: Int)
+    /// BW-1 diagnostic geometry outside the range the exactness argument covers.
+    case float4sPerThreadOutOfRange(value: Int, allowed: ClosedRange<Int>)
 
     public var description: String {
         switch self {
@@ -31,6 +33,8 @@ public enum KernelInputError: Error, CustomStringConvertible, Equatable {
             return "Iteration counts invalid: warmup \(warmup) must be >= 0, measured \(measured) must be >= 1"
         case .sampleIndexOutOfRange(let index, let count):
             return "Sample index \(index) out of range for \(count) elements"
+        case .float4sPerThreadOutOfRange(let value, let allowed):
+            return "float4s per thread must be in \(allowed.lowerBound)...\(allowed.upperBound), got \(value)"
         }
     }
 }

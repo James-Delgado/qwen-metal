@@ -5557,3 +5557,94 @@ Nothing gates on it; the committed targets derived from the triad
   was iOS 26.5.2; a cross-OS ratio would be confounded).
 - **Scope of rows:** the Mac row this lands is dev-loop sanity,
   PROVISIONAL, never a denominator. The device row is owner-james (P6-4).
+
+## 2026-09-26 — BW-1 landed: read-only streaming bandwidth microbench; Mac finding — read-only ≈ 0.97 × triad (hypothesis NOT supported on the M2 Pro)
+
+Spec: docs/phases/phase-6.md Scope (veto item 8) + D8 §5/§7; gate and
+protocol pre-committed in the previous entry (commit 9ec6685) before any
+test or kernel code existed. Correctness diff landed before any
+performance look (hard rule 3). No pin moved, no gate touched.
+
+**What landed (engine package + surfaces):**
+
+- `Metal/ReadOnlyBandwidthKernel.swift` (new): the pinned read-only
+  reduce (three buffers, float4 grid-stride, 64 float4/thread/buffer,
+  `simd_sum`, one float4 partial per simdgroup, uniform 256-thread
+  groups; N must be a positive multiple of 256 — explicit error). CPU
+  oracle `cpuPartial` is a pure function of the index pattern; the
+  triad's pattern helpers became `patternValue(at:indexOffset:)` +
+  package-internal `fillPattern` so both kernels share one pattern
+  family (buffers 0/1 are the triad's b/c bit-for-bit, buffer 2 is
+  offset 2468).
+- `Bench/BandwidthMicrobench.swift` (new): the shared harness behind the
+  CLI and the app — runs either kernel at the pinned protocol, enforces
+  the 1e-6 gate on sampled outputs (first/middle/last element for the
+  triad; first/middle/last partial for read-only) BEFORE any figure
+  exists and throws `gateFailed` (figure WITHHELD) on any component,
+  NaN, or count mismatch; formats the row export. The former CLI-side
+  gate code moved here (thin CLI rule).
+- `qwen-metal-cli bandwidth [--kernel triad|read-only]` (default triad —
+  the documented reproduce command is unchanged) and the app's
+  microbench picker gains `triad` + `read-only` (weights-free; no model
+  directory needed; the operator battery-health / cold-warm fields ride
+  the export). The P6-4 session takes BOTH on the same build for a
+  same-session ratio. `benchmarks/device-shell/` (the P0A-1 scratch
+  shell) is superseded by the app for future bandwidth runs (README
+  note added; files kept as the P0A-1 record).
+- Tests (+25, all green on the Mac): `ReadOnlyBandwidthKernelTests`
+  (15) — every-partial diff vs a hand-rolled oracle on a ragged 16-partial
+  grid (tail simdgroups exactly zero), engine oracle vs hand-rolled
+  oracle, exactness-bound sanity, SLC-defeat + write-fraction < 0.1%,
+  full-working-set machinery run with dual timing, median arithmetic,
+  the enumerated input errors, pattern determinism/range/distinctness;
+  `BandwidthMicrobenchTests` (14) — gate pass/refuse (mismatch, NaN,
+  count), CLI vocabulary, both kernels' byte accounting, pinned
+  defaults, export fields. `TriadBandwidthKernelTests` (10) unchanged
+  and green.
+
+**Diagnostic parameter (decided, agent — reversible, labeled):**
+`float4sPerThread` (CLI `--float4s-per-thread`, read-only only) sweeps
+the per-thread depth in 1...64 — the range the exactness argument
+covers (≤ 6144 terms per component). Any non-pinned value is stamped
+`DIAGNOSTIC — non-pinned geometry … NEVER a row` in the export and
+`isDiagnosticGeometry` on the report; the app never sets it. Added
+because the first Mac numbers contradicted the hypothesis and CLAUDE.md
+forbids guessing at bottlenecks: the question "is the pinned kernel
+depth-limited?" had to be measured, not argued. The pin (64) did NOT
+move after seeing results.
+
+**Measured (Mac, M2 Pro, macOS 26.5.1 25F80, Xcode 26.6 17F113, release,
+PROVISIONAL, dev-loop sanity — rows in benchmarks/results.md):**
+
+- Read-only, pinned protocol, 3 interleaved triad/read-only pairs: run
+  medians 183.78 / 183.75 / 183.69 GB/s (spread across runs
+  179.53–184.77); row = 183.75. Same-session triad: 190.61 / 179.78 /
+  189.85 (row = 189.85; spread 172.99–191.12). Paired ratios 0.964 /
+  1.022 / 0.968 ⇒ **read-only ≈ 0.97 × triad**. Gate: max |Δ| = 0 on
+  every sampled partial and element, all runs.
+- Depth sweep (DIAGNOSTIC): 4 / 8 / 16 / 32 / 64 → 182.30 / 166.81 /
+  166.86 / 172.00 / 166.52, triad bookends 181.35 → 182.95; the pinned
+  depth alone read 177.38, 181.60, 166.52, 168.53 and then 183.7 ×3
+  across the session (load average ~3.5, shared dev machine). No
+  monotonic geometry effect outside that noise ⇒ the kernel is not
+  depth-limited; the ordering is the memory system's.
+- **Finding:** on the M2 Pro the read-only stream does NOT exceed the
+  2R+1W triad; it lands ~3% below it (best-of-3 0.964, median pair
+  0.968, one pair 1.022). The 2026-08-22 caveat — "triad understates
+  read-mostly achievable bandwidth by ~5–10%" — is NOT supported on the
+  Mac. Read and write streams appear to cost the same on this fabric,
+  and the triad's 25M-thread grid may even get marginally better page
+  locality than the 393K-thread reduce. Consequence for the writeup
+  (§5/§7): the roofline denominator for decode-shaped traffic is
+  bounded ABOVE by ~the triad figure on the Mac — the ~96–102%-of-triad
+  fractions the ecosystem engines hit are genuinely near the ceiling,
+  not artifacts of a conservative denominator. The DEVICE verdict is
+  pending: the A17 Pro's LPDDR5 path may treat reads and writes
+  differently, which is exactly why the same-session pair is the
+  number of record (P6-4, James). Nothing gates on either.
+
+**Follow-ups:** none new. P6-3 unblocked (BW-1 was its last
+dependency) with a `bw_1_handoff` note: the runbook's speed session
+includes the bandwidth pair (read-only then triad, ×3 rested, median
+run + paired ratio) and the analyzer parses the two bandwidth export
+headers. The device row stays on P6-4's list (owner james).

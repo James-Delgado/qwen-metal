@@ -17,6 +17,31 @@ time base, wall recorded alongside; GB = 10^9 bytes). Reproduce with:
 | 2026-08-21 | Apple M2 Pro (Mac, dev machine) | macOS 26.5.1 (25F80) | Xcode 26.6 (17F113), release | 178.19 | 172.47–179.85 | ~0.2 ms | PROVISIONAL, dev-loop sanity only — NOT the roofline denominator. ~89% of M2 Pro's rated 200 GB/s, confirming the working set defeats the SLC. |
 | 2026-08-22 | Apple iPhone 15 Pro (A17 Pro, pinned device) | iOS 26.5.2 | Xcode 26.6 (17F113), Release, scratch device shell (benchmarks/device-shell/) | 43.84 | 42.19–44.45 | ~0.6–1.1 ms | PROVISIONAL. **THE roofline denominator** (PLAN.md invariant 1); recorded in DECISIONS.md 2026-08-22. Battery health 85%, >50% charge, rested-to-ambient (procedural check — unplugged + idle; no instrumented readout). ~85.6% of A17 Pro's rated 51.2 GB/s (cf. Mac row's ~89% of rated — same fraction ballpark ⇒ DRAM, not cache). Repeatability: three prior Debug-config runs, medians 43.28 / 43.67 / 43.89 (spread 42.43–44.36, overhead ~0.5–0.7 ms) — GB/s basis is GPU timestamps, unaffected by host build config. |
 
+## Bandwidth microbench (read-only streaming reduce, BW-1)
+
+Kernel: read-only reduce over the triad's three fp32 buffers (3 × 384 MiB =
+1.125 GiB READ/iteration, no write stream — 192 KiB of simdgroup partials,
+0.016% of the reads, excluded from the numerator). Pinned protocol
+(DECISIONS.md 2026-09-26, pre-committed): 64 float4 per thread per buffer,
+256-thread threadgroups, one float4 partial per simdgroup; 2 warmup discarded
++ 10 measured, sustained = median (GPU-timestamp basis, wall alongside;
+GB = 10^9 bytes); gate 1e-6 on sampled partials, figure withheld on failure.
+Purpose: bound how far the 2R+1W triad understates read-dominated
+(decode-shaped) traffic. Cited ALONGSIDE the triad, never instead of it.
+Reproduce with `swift run -c release qwen-metal-cli bandwidth --kernel read-only`
+(and `--kernel triad` back to back for the same-session ratio). The number
+the writeup cites is the read-only ÷ triad ratio from the SAME session.
+
+| Date | Device | OS | Toolchain | Kernel | Sustained GB/s | Min–max GB/s | Mean dispatch overhead | Notes |
+|---|---|---|---|---|---|---|---|---|
+| 2026-09-26 | Apple M2 Pro (Mac, dev machine) | macOS 26.5.1 (25F80) | Xcode 26.6 (17F113), release | read-only (BW-1) | 183.75 | 179.53–184.77 | ~0.2 ms | PROVISIONAL, dev-loop sanity only — NOT a denominator. Median run of 3 interleaved triad/read-only pairs (run medians 183.78 / 183.75 / 183.69; spread across all three runs). Gate: max \|Δ\| = 0 on sampled partials. ~92% of M2 Pro's rated 200 GB/s. **≈ 0.97 × the same-session triad** (pair ratios 0.964 / 1.022 / 0.968) — the read-only variant does NOT exceed the triad on this machine; the 5–10% "triad understates read-mostly bandwidth" hypothesis is NOT supported on the M2 Pro. Load average ~3.5 during the runs (shared dev machine). |
+| 2026-09-26 | Apple M2 Pro (Mac, dev machine) | macOS 26.5.1 (25F80) | Xcode 26.6 (17F113), release | triad (P0B-4, same session) | 189.85 | 172.99–191.12 | ~0.3 ms | PROVISIONAL, dev-loop sanity only. Same-session re-measure for the ratio above: median run of the 3 pairs (run medians 190.61 / 179.78 / 189.85). Consistent with the 2026-08-21 row (178.19) within the machine's run-to-run noise; not a replacement for it. |
+| 2026-09-26 | Apple M2 Pro (Mac, dev machine) | macOS 26.5.1 (25F80) | Xcode 26.6 (17F113), release | read-only, DIAGNOSTIC depth sweep | 182.30 / 166.81 / 166.86 / 172.00 / 166.52 | — | — | DIAGNOSTIC, NEVER a row (`--float4s-per-thread` 4 / 8 / 16 / 32 / 64, one run each, triad bookends 181.35 → 182.95). No monotonic geometry effect outside the ±5% run-to-run noise of that sequence (the pinned depth read 177.38 / 181.60 / 166.52 / 168.53 / 183.7×3 across the session) ⇒ the pinned kernel is not depth-limited; the read-only ≤ triad result is the memory system, not the geometry. |
+
+iPhone 15 Pro row: owner james — rides the P6-4 speed session on the
+`phase6-build` (app Benchmark → microbench → `read-only`, then `triad`,
+×3 rested each, record the median run of each and the paired ratio).
+
 ## Phase 0a baselines — MLX (PROVISIONAL)
 
 ### 2026-08-22 — MLX LLMEval, iPhone 15 Pro

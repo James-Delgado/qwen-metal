@@ -1,5 +1,12 @@
 # Disposable device shell — iPhone triad run (P0A-1, decision 1A)
 
+> **Superseded for future bandwidth runs (2026-09-26, BW-1):** the
+> QwenMetalApp Benchmark screen's microbench picker now runs both
+> bandwidth kernels (`triad`, `read-only`) at the pinned protocol with the
+> shared engine harness (gate + export). Use the app on the `phase6-build`
+> for the P6-4 pair; this directory stays as the record of how the
+> 2026-08-22 roofline denominator (43.84 GB/s) was taken.
+
 Gets `TriadRunnerView.swift` onto the phone without creating a committed iOS
 target (the real app scaffold arrives with Phase 2, seeded by SPEC-P2). The
 scratch Xcode project lives OUTSIDE this repo and is thrown away afterwards;
