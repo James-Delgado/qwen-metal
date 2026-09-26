@@ -1,0 +1,1070 @@
+From 2efa8a43735882539d3574ddd7da4c63493da687 Mon Sep 17 00:00:00 2001
+From: James-Delgado <jado650@berkeley.edu>
+Date: Sat, 26 Sep 2026 11:21:41 -0400
+Subject: [PATCH] qwen-metal P6-2: Phase 6 parity bench for LLMEval (window
+ rate, first-token prefill span, loop timeline, SoC fields, rendered-input
+ mode, validation OFF)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Stacked on the P0A-1 parity pins (47c36a0, 992118b); base 378f2449;
+mlx-swift-lm 3.31.3 (1c05248b) / mlx-swift 0.31.6 as resolved;
+checkpoint mlx-community/Qwen3-1.7B-4bit @ 3b1b1768 unchanged.
+See qwen-metal docs/phases/phase-6.md D1/D2/D4/D9 and DECISIONS.md
+2026-09-26 (P6-2).
+
+New: Applications/LLMEval/ViewModels/QwenMetalBench.swift (bench model +
+export rendering), Views/QwenMetalBenchView.swift (panel), bundled
+copies of qwen-metal benchmarks/prompts/rendered/{decode-essay,
+prefill-summarize}.rendered.txt (byte-exact; sha256 6b3c757c… /
+60f50f10…). LLMEvaluator wires the bench to the same load path;
+ContentView shows the panel inline (no NavigationStack).
+
+Metric definitions = qwen-metal's:
+- decode tok/s of record = 384 / (t512 - t128), t_k = host monotonic
+  time at which generated token k is available. Taken in the didGenerate
+  callback of the synchronous generate(input:parameters:context:
+  didGenerate:) loop (one call per token, on the generation thread); the
+  AsyncStream path emits detokenized chunks that are not 1:1 with tokens
+  and adds a task hop, so it is not used for timing. Overall rate =
+  (n-1)/(t_n - t_1), the qwen-metal convention.
+- prefill span = TokenIterator init (prompt-processing start) -> first
+  token available. VERIFIED in Libraries/MLXLMCommon/Evaluate.swift
+  (3.31.3): TokenIterator.prepare runs model.prepare over the prompt
+  windows + step(previous:) over the remainder and samples the first
+  token from THOSE logits; next() enqueues the second forward with
+  asyncEval before materializing that token with item(). The first
+  streamed token therefore comes from the prompt forward itself; the
+  span contains no decode forward's GPU time (at most the second
+  step's sub-ms host graph build). The Phase 0 entry's assumed ~26 ms
+  second step is not inside the bracket. The library's own
+  GenerateCompletionInfo.promptTime is exported as a cross-check;
+  host tokenization is excluded and listed separately.
+- loop: same prompt, cap = 4096 - prompt tokens (reset on EOS or 4K
+  context fill, the pinned regenerate policy; Phase 0 used the 2048
+  default), until the operator Stop, which ends the in-flight generation
+  at its next token boundary and still reports; per-generation lines
+  (overall, window, tokens, wall, stop reason, elapsed); refuses to spin
+  on an empty generation. Burst cap 640 new tokens (= qwen-metal).
+- battery health (operator-typed, maximum capacity %) and state of
+  charge (operator-read Settings value = value of record; programmatic
+  UIDevice.batteryLevel at loop start/end as the cross-check) as
+  SEPARATE fields; round marker (blank => PROVISIONAL).
+- rendered-input mode (spec D2, check 7): the bundled rendered string is
+  tokenized DIRECTLY (context.tokenizer.encode; the HF tokenizer splits
+  on added tokens first, so <|im_start|>/<think> map to special ids)
+  and handed to generate as LMInput(tokens:) — no chat template. The
+  export prints the prompt token count against the parity target and
+  says MATCH or MISMATCH; MISMATCH invalidates the mode for that row
+  (fallback: template mode = raw text + LLMEval's template with its
+  default system message, the Phase 0 mode, count recorded).
+  Check 7 Mac evidence (swift-transformers b38443e, the resolved
+  revision, tokenizer files of the pinned checkpoint — tokenizer.json
+  identical to Qwen/Qwen3-1.7B@70d244cc, sha256 aeb13307…):
+  decode-essay 84 tokens, prefill-summarize 852 tokens, with
+  addSpecialTokens true and false alike; first ids 151644 872 198 …
+  (= <|im_start|> user \n). Device confirmation happens on the first
+  P6-4 row (the export line).
+- Metal API validation OFF: LLMEval.xcscheme now carries
+  enableGPUValidationMode="1" (= Disabled; the Phase 0 rows ran with
+  it Enabled). Detached launches carry no validation layer regardless.
+- exports: text (of record) + JSON timeline (schema
+  qwen-metal-timeline/1-external, engine mlx-llmeval), copied via the
+  panel; memory lines are labeled cross-checks (the Phase 0 activeMemory
+  mislabel cannot repeat).
+
+Build-verified: xcodebuild -scheme LLMEval -destination platform=macOS
+-configuration Release CODE_SIGNING_ALLOWED=NO -> BUILD SUCCEEDED (one
+warning: the deliberate use of the deprecated synchronous generate).
+Never run for numbers by agents.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ .../LLMEval/Models/decode-essay.rendered.txt  |   7 +
+ .../Models/prefill-summarize.rendered.txt     |  19 +
+ .../LLMEval/ViewModels/LLMEvaluator.swift     |  17 +
+ .../LLMEval/ViewModels/QwenMetalBench.swift   | 726 ++++++++++++++++++
+ Applications/LLMEval/Views/ContentView.swift  |   5 +
+ .../LLMEval/Views/QwenMetalBenchView.swift    |  72 ++
+ mlx-swift-examples.xcodeproj/project.pbxproj  |  10 +-
+ .../xcshareddata/xcschemes/LLMEval.xcscheme   |   1 +
+ 8 files changed, 855 insertions(+), 2 deletions(-)
+ create mode 100644 Applications/LLMEval/Models/decode-essay.rendered.txt
+ create mode 100644 Applications/LLMEval/Models/prefill-summarize.rendered.txt
+ create mode 100644 Applications/LLMEval/ViewModels/QwenMetalBench.swift
+ create mode 100644 Applications/LLMEval/Views/QwenMetalBenchView.swift
+
+diff --git a/Applications/LLMEval/Models/decode-essay.rendered.txt b/Applications/LLMEval/Models/decode-essay.rendered.txt
+new file mode 100644
+index 0000000..82ce13f
+--- /dev/null
++++ b/Applications/LLMEval/Models/decode-essay.rendered.txt
+@@ -0,0 +1,7 @@
++<|im_start|>user
++Write a detailed history of computing for a general audience. Cover at least ten major milestones in chronological order, from mechanical calculators to modern smartphones. For each milestone, give the approximate date, name the key people or organizations involved, describe what changed technically, and explain why it mattered for what came after. Do not stop until you have covered all ten milestones.<|im_end|>
++<|im_start|>assistant
++<think>
++
++</think>
++
+diff --git a/Applications/LLMEval/Models/prefill-summarize.rendered.txt b/Applications/LLMEval/Models/prefill-summarize.rendered.txt
+new file mode 100644
+index 0000000..d42581d
+--- /dev/null
++++ b/Applications/LLMEval/Models/prefill-summarize.rendered.txt
+@@ -0,0 +1,19 @@
++<|im_start|>user
++Read the following passage carefully, then follow the instructions at the end.
++
++Before the middle of the twentieth century, moving goods across an ocean was a slow, expensive, and labor-intensive affair. Cargo arrived at the docks in an assortment of barrels, sacks, crates, and bales, each of which had to be handled individually. Gangs of longshoremen carried or winched every item out of trucks and railcars, into the hold of a ship, and stowed it piece by piece so the load would not shift at sea. A single freighter could spend a week or more in port, and the cost of loading and unloading often exceeded the cost of the entire ocean crossing. Theft and damage were endemic, insurance was priced accordingly, and any factory that depended on imported parts had to hold months of inventory as a buffer against the unpredictable schedule of break-bulk shipping.
++
++The person most responsible for changing this was not a shipowner but a trucking entrepreneur from North Carolina named Malcom McLean. His insight was that the shipping industry's product was not the voyage but the movement of goods from origin to destination, and that the handling of individual items at every transfer point was the true bottleneck. In 1956 he sent a converted wartime tanker, the Ideal X, from Newark to Houston carrying fifty-eight truck trailer bodies detached from their chassis. The economics were startling: loading the ship cost cents per ton where conventional loading cost dollars per ton. The essential idea of containerization was that a standardized sealed box could be lifted by crane from a truck to a ship to a train without its contents ever being touched.
++
++Standardization was the hard part, and it took a decade of committee warfare. Railroads, truckers, shipowners, and the military all had incompatible preferences for box dimensions and corner fittings. Through the 1960s, negotiations under the International Organization for Standardization eventually settled on the twenty-foot and forty-foot boxes with standardized corner castings that remain the world's units of account for trade today. The corner casting, a small steel block with oblong holes, is arguably the most consequential piece of industrial design of the century: it allowed any crane, chassis, or cell guide anywhere on earth to grip any container, which is what made the box a universal interface rather than one company's equipment.
++
++The consequences arrived in waves. First, the docks themselves transformed. Container cranes and terminals required enormous capital but little labor, so employment for longshoremen collapsed even as tonnage soared, and old urban ports like Manhattan's and central London's gave way to vast greenfield terminals with rail connections and deep water. Second, ship sizes exploded, because once loading time no longer scaled with cargo volume, the economies of scale of a larger hull became decisive. Third, and most profoundly, reliable and cheap ocean transport rewired manufacturing itself. When a box could move from a factory gate in Asia to a warehouse in Europe on a predictable schedule for a trivial cost per item, firms could split production across continents, source components wherever they were cheapest, and run assembly lines on just-in-time deliveries instead of deep inventories. The global supply chain as we know it is, in a real sense, an emergent property of the box.
++
++The system's weaknesses are the mirror image of its strengths. Because the whole network optimizes for the frictionless flow of standardized units, it has little slack, and disruptions propagate globally: a grounded ship in a canal, a closed terminal, or a shortage of empty boxes in the wrong hemisphere can idle factories thousands of miles away. Because the box is sealed and anonymous, customs and security inspection can only ever sample a small fraction of the flow. And because the economics reward scale so heavily, the industry has consolidated into a handful of alliances operating ships so large that only a short list of ports can receive them, concentrating risk at a few choke points.
++
++Instructions: First, summarize the passage above in three detailed paragraphs in your own words. Then list the five most important specific facts the passage contains, as a numbered list. Finally, explain in one paragraph which single claim in the passage you consider most debatable and why.<|im_end|>
++<|im_start|>assistant
++<think>
++
++</think>
++
+diff --git a/Applications/LLMEval/ViewModels/LLMEvaluator.swift b/Applications/LLMEval/ViewModels/LLMEvaluator.swift
+index bcffd2e..5be865b 100644
+--- a/Applications/LLMEval/ViewModels/LLMEvaluator.swift
++++ b/Applications/LLMEval/ViewModels/LLMEvaluator.swift
+@@ -72,6 +72,21 @@ class LLMEvaluator {
+ 
+     var loadState = LoadState.idle
+ 
++    // qwen-metal P6-2: the Phase 6 parity bench rides the SAME load path
++    // (same container, same pinned checkpoint) — see QwenMetalBench.swift.
++    let p6 = QwenMetalBench()
++
++    init() {
++        p6.loadContainer = { [weak self] in
++            guard let self else {
++                throw NSError(
++                    domain: "QwenMetalP6", code: 3,
++                    userInfo: [NSLocalizedDescriptionKey: "evaluator released"])
++            }
++            return try await self.load()
++        }
++    }
++
+     var isLoading: Bool {
+         if case .loading = loadState {
+             return true
+@@ -392,6 +407,8 @@ class LLMEvaluator {
+         generationTimer = nil
+         running = false
+         looping = false
++        // qwen-metal P6-2: the bench loop stops at its next token boundary and reports.
++        p6.requestStop()
+     }
+ 
+     // qwen-metal P0A-1 energy protocol: sustained regenerate loop — repeats
+diff --git a/Applications/LLMEval/ViewModels/QwenMetalBench.swift b/Applications/LLMEval/ViewModels/QwenMetalBench.swift
+new file mode 100644
+index 0000000..bf5b796
+--- /dev/null
++++ b/Applications/LLMEval/ViewModels/QwenMetalBench.swift
+@@ -0,0 +1,726 @@
++// qwen-metal P6-2: parity instrumentation for the Phase 6 head-to-head
++// (qwen-metal docs/phases/phase-6.md D1/D2/D4/D9). Everything here is
++// harness-side measurement; the model, sampler, and library generation
++// path are the pinned P0A-1 ones. Definitions mirror the qwen-metal
++// engine's exactly so the three engines report the SAME metrics:
++//
++//  - decode tok/s of record = 384 / (t512 - t128), t_k = host wall time at
++//    which generated token k is available (per-token timestamps);
++//  - prefill span = prompt-processing start -> FIRST generated token id
++//    available. VERIFIED against mlx-swift-lm 3.31.3 (1c05248b),
++//    Libraries/MLXLMCommon/Evaluate.swift: `TokenIterator.prepare` runs
++//    the prompt forward (`model.prepare` over the prompt windows, then
++//    `step(previous:)` over the remainder) and samples `y` from ITS
++//    logits — the first token comes from the prompt forward itself, not
++//    from a second forward. `next()` then enqueues the second forward
++//    asynchronously (`asyncEval`) BEFORE materializing that first token
++//    (`previousY.tokens.item()`), so only the second step's host-side
++//    graph build (sub-ms) can sit inside the span; its GPU time cannot.
++//    The Phase 0 "~26 ms second step" assumption is therefore wrong in
++//    the safe direction: the bracket below contains no decode forward;
++//  - per-generation loop timeline (window tok/s, overall tok/s, tokens,
++//    wall, stop reason) in the qwen-metal TimelineEntry vocabulary;
++//  - battery health (operator-typed) and state of charge (operator-read
++//    at the band marks = value of record; UIDevice.batteryLevel as the
++//    cross-check) as SEPARATE fields;
++//  - rendered-input feeding: the pinned rendered prompt string is
++//    tokenized DIRECTLY (added/special tokens parsed by the HF tokenizer,
++//    NO chat template) and handed to `generate` as an LMInput; the parity
++//    signature is an EXACT prompt-token-count match with qwen-metal
++//    (852 / 84). A mismatch is flagged in the export and invalidates the
++//    mode (fallback: raw text + LLMEval's template, count recorded).
++
++import Foundation
++import MLX
++import MLXLMCommon
++import Tokenizers
++
++#if os(iOS)
++    import UIKit
++#endif
++
++// MARK: - Pins (mirrors of the qwen-metal engine's constants)
++
++enum QwenMetalP6 {
++    /// Canonical decode window (PLAN.md benchmark protocol): generated
++    /// tokens 128–512, rate = 384 / (t512 − t128).
++    static let windowFirstToken = 128
++    static let windowLastToken = 512
++    static var windowTokenSpan: Int { windowLastToken - windowFirstToken }
++    /// Burst generation cap — qwen-metal `BenchDefaults.burstMaxNewTokens`.
++    static let burstMaxNewTokens = 640
++    /// Context cap — qwen-metal `AppModel.contextCap`; loop generations
++    /// reset on EOS or context fill (pinned regenerate policy).
++    static let contextCap = 4096
++    /// Harness provenance for the export header (spec D9 pins).
++    static let harnessLine =
++        "mlx-swift-examples 378f2449 + qwen-metal-p0a1 (47c36a0, 992118b) + P6-2 patch; "
++        + "mlx-swift-lm / mlx-swift versions: RECORD FROM Package.resolved AS BUILT"
++    static let checkpointLine = "mlx-community/Qwen3-1.7B-4bit @ 3b1b1768"
++    static let validationLine =
++        "Metal API validation: OFF (LLMEval scheme pins enableGPUValidationMode=1 = Disabled; "
++        + "detached home-screen launches carry no validation layer at all)"
++
++    enum Prompt: String, CaseIterable, Identifiable {
++        case decodeEssay = "decode-essay"
++        case prefillSummarize = "prefill-summarize"
++        var id: String { rawValue }
++        /// The pinned HF token count of the rendered form (qwen-metal
++        /// benchmarks/prompts/README.md) — the parity target.
++        var expectedRenderedTokenCount: Int {
++            switch self {
++            case .decodeEssay: 84
++            case .prefillSummarize: 852
++            }
++        }
++        /// Bundled copy of qwen-metal benchmarks/prompts/rendered/<name>.rendered.txt
++        /// (byte-exact, incl. decode-essay's trailing "\n\n").
++        func renderedText() throws -> String {
++            guard let url = Bundle.main.url(forResource: rawValue + ".rendered", withExtension: "txt")
++            else {
++                throw NSError(
++                    domain: "QwenMetalP6", code: 1,
++                    userInfo: [NSLocalizedDescriptionKey: "bundled prompt \(rawValue).rendered.txt not found"])
++            }
++            return try String(contentsOf: url, encoding: .utf8)
++        }
++        /// The raw user text (the Phase 0 template mode): the rendered form
++        /// minus the chat-template scaffolding.
++        func rawUserText() throws -> String {
++            let rendered = try renderedText()
++            guard let start = rendered.range(of: "<|im_start|>user\n"),
++                let end = rendered.range(of: "<|im_end|>", range: start.upperBound ..< rendered.endIndex)
++            else { return rendered }
++            return String(rendered[start.upperBound ..< end.lowerBound])
++        }
++    }
++
++    enum FeedingMode: String, CaseIterable, Identifiable {
++        /// Tokenizer-direct: the rendered string, special tokens parsed, no template (Phase 6 pin).
++        case rendered
++        /// Phase 0 fallback: raw text + LLMEval's own template (system message + enable_thinking=false).
++        case template
++        var id: String { rawValue }
++    }
++
++    enum RunMode: String {
++        case burst
++        case energyLoop = "energy-loop"
++    }
++}
++
++// MARK: - Per-token timeline math (qwen-metal DecodeTimingCollector semantics)
++
++struct QwenMetalTokenTimeline: Sendable {
++    /// Monotonic seconds at which generated token k (1-based) became available.
++    let tokenAvailableSeconds: [Double]
++
++    /// 384 / (t512 − t128); nil below 512 generated tokens or on a non-positive span.
++    var canonicalWindowTokensPerSecond: Double? {
++        guard tokenAvailableSeconds.count >= QwenMetalP6.windowLastToken else { return nil }
++        let elapsed = tokenAvailableSeconds[QwenMetalP6.windowLastToken - 1]
++            - tokenAvailableSeconds[QwenMetalP6.windowFirstToken - 1]
++        guard elapsed > 0 else { return nil }
++        return Double(QwenMetalP6.windowTokenSpan) / elapsed
++    }
++
++    /// (n − 1) / (t_n − t_1): the first token's availability is the span's
++    /// start marker, not a counted token (its forward is the prefill).
++    var overallTokensPerSecond: Double? {
++        guard tokenAvailableSeconds.count >= 2,
++            let first = tokenAvailableSeconds.first, let last = tokenAvailableSeconds.last
++        else { return nil }
++        let elapsed = last - first
++        guard elapsed > 0 else { return nil }
++        return Double(tokenAvailableSeconds.count - 1) / elapsed
++    }
++}
++
++/// One generation's record (the export's per-generation line + JSON entry).
++struct QwenMetalGenerationRecord: Sendable, Codable {
++    let index: Int
++    let promptTokenCount: Int
++    let generatedTokens: Int
++    /// Prompt-processing start → first generated token available (wall, s).
++    let prefillSpanSeconds: Double?
++    /// mlx-swift-lm's own first-token span (`GenerateCompletionInfo.promptTime`) — cross-check only.
++    let libraryPromptSeconds: Double
++    /// Host tokenization time, EXCLUDED from the span (recorded for transparency).
++    let tokenizeSeconds: Double
++    /// Whole-generation wall (prefill + decode), seconds.
++    let wallSeconds: Double
++    /// Elapsed loop-clock seconds at this generation's end (0 for burst rows).
++    let elapsedAtEndSeconds: Double
++    let overallTokensPerSecond: Double?
++    let canonicalWindowTokensPerSecond: Double?
++    /// qwen-metal `GenerationStopReason` vocabulary: eos | contextFull | maxNewTokens | stopRequested.
++    let stopReason: String
++    /// True only for a final loop generation cut at a token boundary by the operator stop.
++    let truncated: Bool
++
++    var prefillTokensPerSecond: Double? {
++        guard let s = prefillSpanSeconds, s > 0 else { return nil }
++        return Double(promptTokenCount) / s
++    }
++
++    /// The qwen-metal `TimelineEntry.textLine` form, plus the elapsed mark.
++    var textLine: String {
++        let overall = overallTokensPerSecond.map { String(format: "%.2f tok/s", $0) } ?? "n/a"
++        let windowed = canonicalWindowTokensPerSecond.map { String(format: ", window %.2f tok/s", $0) } ?? ""
++        return String(
++            format: "  gen %d: overall %@%@ — %d tokens in %.1f s (stop: %@) [elapsed %.1f s]%@",
++            index, overall, windowed, generatedTokens, wallSeconds, stopReason,
++            elapsedAtEndSeconds, truncated ? " [truncated by operator stop]" : "")
++    }
++}
++
++/// What one generation returns out of the model container (Sendable by construction).
++struct QwenMetalGenerationOutcome: Sendable {
++    let promptTokenCount: Int
++    let tokenIds: [Int]
++    let tokenAvailableSeconds: [Double]
++    let prefillSpanSeconds: Double?
++    let libraryPromptSeconds: Double
++    let tokenizeSeconds: Double
++    let wallSeconds: Double
++    let stoppedByCap: Bool
++    let stoppedByRequest: Bool
++    let output: String
++}
++
++/// Thread-safe operator-stop flag (read from inside the container's isolation).
++final class QwenMetalStopFlag: @unchecked Sendable {
++    private let lock = NSLock()
++    private var flag = false
++    var isSet: Bool {
++        lock.lock()
++        defer { lock.unlock() }
++        return flag
++    }
++    func set() {
++        lock.lock()
++        flag = true
++        lock.unlock()
++    }
++    func reset() {
++        lock.lock()
++        flag = false
++        lock.unlock()
++    }
++}
++
++// MARK: - The bench model
++
++@Observable
++@MainActor
++final class QwenMetalBench {
++    /// Supplied by LLMEvaluator (the pinned load path — same container, same weights).
++    var loadContainer: (() async throws -> ModelContainer)?
++
++    var prompt = QwenMetalP6.Prompt.decodeEssay
++    var feedingMode = QwenMetalP6.FeedingMode.rendered
++    var running = false
++    var looping = false
++    var status = ""
++    var output = ""
++    /// The last run's text export and JSON timeline (Copy buttons).
++    var exportText = ""
++    var timelineJSON = ""
++
++    // Operator fields (spec D4): typed by the operator, re-rendered on edit.
++    var batteryHealth = ""
++    var socStart = ""
++    var socEnd = ""
++    var coldOrWarm = ""
++    var round = ""
++
++    private let stopFlag = QwenMetalStopFlag()
++    private var lastRecords: [QwenMetalGenerationRecord] = []
++    private var lastRunMode = QwenMetalP6.RunMode.burst
++    private var lastPromptTokenCount = 0
++    private var lastFeedingMode = QwenMetalP6.FeedingMode.rendered
++    private var lastEndedByOperatorStop = false
++    private var lastCycleWallSeconds = 0.0
++    private var lastSoCProgrammatic: (start: Double?, end: Double?) = (nil, nil)
++    private var lastMemoryLine = ""
++
++    // MARK: Controls
++
++    /// Burst row: one generation, cap 640 new tokens (= qwen-metal's burst cap).
++    func runBurst() {
++        guard !running, !looping else { return }
++        running = true
++        stopFlag.reset()
++        Task {
++            defer { running = false }
++            do {
++                let record = try await generateOnce(
++                    index: 0, loopClockStart: nil, inLoop: false)
++                lastRunMode = .burst
++                lastRecords = [record]
++                lastEndedByOperatorStop = false
++                lastCycleWallSeconds = record.wallSeconds
++                lastSoCProgrammatic = (nil, nil)
++                renderExports()
++                status = String(
++                    format: "burst done — %d tokens, window %@, prefill %@",
++                    record.generatedTokens,
++                    record.canonicalWindowTokensPerSecond.map { String(format: "%.2f tok/s", $0) }
++                        ?? "n/a (<512 tokens)",
++                    record.prefillTokensPerSecond.map { String(format: "%.2f tok/s", $0) } ?? "n/a")
++            } catch {
++                status = "burst failed: \(error)"
++            }
++        }
++    }
++
++    /// Energy / sustained loop: regenerate the SAME prompt (reset on EOS or
++    /// context fill) until the operator presses Stop; the in-flight
++    /// generation ends at its next token boundary and the loop ALWAYS
++    /// reports (spec D4, edge test 1 semantics carried to this harness).
++    func startLoop() {
++        guard !running, !looping else { return }
++        running = true
++        looping = true
++        stopFlag.reset()
++        Task {
++            defer {
++                running = false
++                looping = false
++            }
++            var records: [QwenMetalGenerationRecord] = []
++            let socStartProgrammatic = Self.programmaticStateOfChargePercent()
++            let loopStart = Self.now()
++            var index = 0
++            var endedByStop = false
++            while true {
++                if stopFlag.isSet {
++                    endedByStop = true
++                    break
++                }
++                do {
++                    let record = try await generateOnce(
++                        index: index, loopClockStart: loopStart, inLoop: true)
++                    records.append(record)
++                    index += 1
++                    status = String(
++                        format: "LOOP gen %d: %d tokens, window %@ — %d gens, %d tokens, %.0f s",
++                        record.index, record.generatedTokens,
++                        record.canonicalWindowTokensPerSecond.map { String(format: "%.2f", $0) } ?? "n/a",
++                        records.count, records.reduce(0) { $0 + $1.generatedTokens },
++                        Self.now() - loopStart)
++                    if record.truncated {
++                        endedByStop = true
++                        break
++                    }
++                    // Refuse to spin on empty generations (the qwen-metal SustainedLoop rule).
++                    if record.generatedTokens == 0 {
++                        status = "loop halted: empty generation (refusing to spin)"
++                        break
++                    }
++                } catch {
++                    status = "loop failed: \(error)"
++                    break
++                }
++            }
++            let cycleWall = Self.now() - loopStart
++            let socEndProgrammatic = Self.programmaticStateOfChargePercent()
++            lastRunMode = .energyLoop
++            lastRecords = records
++            lastEndedByOperatorStop = endedByStop
++            lastCycleWallSeconds = cycleWall
++            lastSoCProgrammatic = (socStartProgrammatic, socEndProgrammatic)
++            renderExports()
++            status = String(
++                format: "loop stopped — %d generations, %d tokens, cycle wall %.0f s; type SoC at stop + battery health, then Copy export",
++                records.count, records.reduce(0) { $0 + $1.generatedTokens }, cycleWall)
++        }
++    }
++
++    func requestStop() {
++        stopFlag.set()
++    }
++
++    /// Operator fields edited after a run re-render the export (the stop-mark SoC is only known after Stop).
++    func operatorFieldsChanged() {
++        guard !lastRecords.isEmpty else { return }
++        renderExports()
++    }
++
++    // MARK: One generation (inside the container's isolation)
++
++    /// Burst: cap 640 new tokens. Loop: cap = contextCap − prompt tokens
++    /// (reset on EOS or context fill), derived INSIDE the container once
++    /// the prompt count is known — never from a stale count.
++    private func generateOnce(
++        index: Int, loopClockStart: Double?, inLoop: Bool
++    ) async throws -> QwenMetalGenerationRecord {
++        guard let loadContainer else {
++            throw NSError(domain: "QwenMetalP6", code: 2, userInfo: [NSLocalizedDescriptionKey: "no loader"])
++        }
++        let container = try await loadContainer()
++        let prompt = self.prompt
++        let mode = self.feedingMode
++        let renderedText = try prompt.renderedText()
++        let rawText = try prompt.rawUserText()
++        let stopFlag = self.stopFlag
++        // Progress posts every 32 tokens (never per token — the P0A-1 llama.swiftui lesson).
++        let progress: @Sendable (Int) -> Void = { count in
++            Task { @MainActor [weak self] in
++                self?.status = "gen \(index): \(count) tokens…"
++            }
++        }
++
++        let outcome: QwenMetalGenerationOutcome = try await container.perform { context in
++            let tTokenize0 = QwenMetalBench.now()
++            let input: LMInput
++            switch mode {
++            case .rendered:
++                // Tokenizer-direct: the HF tokenizer splits on added tokens
++                // (<|im_start|>, <think>, …) before BPE, so the rendered
++                // template markers map to their special ids. addSpecialTokens
++                // is a no-op for Qwen3 (no BOS; ByteLevel post-processor) —
++                // verified 852/84 either way on the Mac (P6-2 check 7).
++                let ids = context.tokenizer.encode(text: renderedText, addSpecialTokens: true)
++                input = LMInput(tokens: MLXArray(ids))
++            case .template:
++                let userInput = UserInput(
++                    chat: [.system("You are a helpful assistant"), .user(rawText)],
++                    additionalContext: ["enable_thinking": false])
++                input = try await context.processor.prepare(input: userInput)
++            }
++            let promptTokenCount = input.text.tokens.size
++            let tokenizeSeconds = QwenMetalBench.now() - tTokenize0
++            let maxNewTokens = inLoop
++                ? max(1, QwenMetalP6.contextCap - promptTokenCount)
++                : QwenMetalP6.burstMaxNewTokens
++            let parameters = GenerateParameters(maxTokens: maxNewTokens, temperature: 0.0)
++
++            var tokenIds: [Int] = []
++            var stamps: [Double] = []
++            let tStart = QwenMetalBench.now()  // prompt-processing start (TokenIterator init = prefill)
++            // The synchronous loop: didGenerate fires once per token, in
++            // the generation thread, the instant the token id is
++            // materialized — the per-token timestamp of record. (The
++            // AsyncStream path emits detokenized CHUNKS, which are not 1:1
++            // with tokens and add a task hop; unusable for t_k.)
++            let info = try MLXLMCommon.generate(
++                input: input, parameters: parameters, context: context
++            ) { (token: Int) -> GenerateDisposition in
++                stamps.append(QwenMetalBench.now())
++                tokenIds.append(token)
++                if tokenIds.count % 32 == 0 { progress(tokenIds.count) }
++                return stopFlag.isSet ? .stop : .more
++            }
++            let tEnd = QwenMetalBench.now()
++            let output = context.tokenizer.decode(tokenIds: tokenIds)
++            return QwenMetalGenerationOutcome(
++                promptTokenCount: promptTokenCount,
++                tokenIds: tokenIds,
++                tokenAvailableSeconds: stamps,
++                prefillSpanSeconds: stamps.first.map { $0 - tStart },
++                libraryPromptSeconds: info.promptTime,
++                tokenizeSeconds: tokenizeSeconds,
++                wallSeconds: tEnd - tStart,
++                stoppedByCap: info.stopReason == .length,
++                stoppedByRequest: info.stopReason == .cancelled,
++                output: output)
++        }
++
++        lastPromptTokenCount = outcome.promptTokenCount
++        lastFeedingMode = mode
++        output = outcome.output
++        lastMemoryLine = Self.memoryLine()
++
++        let timeline = QwenMetalTokenTimeline(tokenAvailableSeconds: outcome.tokenAvailableSeconds)
++        let stopReason: String
++        if outcome.stoppedByRequest {
++            stopReason = "stopRequested"
++        } else if outcome.stoppedByCap {
++            stopReason = inLoop ? "contextFull" : "maxNewTokens"
++        } else {
++            stopReason = "eos"
++        }
++        let elapsedAtEnd = loopClockStart.map { Self.now() - $0 } ?? 0
++        return QwenMetalGenerationRecord(
++            index: index,
++            promptTokenCount: outcome.promptTokenCount,
++            generatedTokens: outcome.tokenIds.count,
++            prefillSpanSeconds: outcome.prefillSpanSeconds,
++            libraryPromptSeconds: outcome.libraryPromptSeconds,
++            tokenizeSeconds: outcome.tokenizeSeconds,
++            wallSeconds: outcome.wallSeconds,
++            elapsedAtEndSeconds: elapsedAtEnd,
++            overallTokensPerSecond: timeline.overallTokensPerSecond,
++            canonicalWindowTokensPerSecond: timeline.canonicalWindowTokensPerSecond,
++            stopReason: stopReason,
++            truncated: outcome.stoppedByRequest)
++    }
++
++    // MARK: Exports
++
++    private func renderExports() {
++        exportText = QwenMetalExport.text(
++            runMode: lastRunMode, prompt: prompt, feedingMode: lastFeedingMode,
++            promptTokenCount: lastPromptTokenCount, records: lastRecords,
++            endedByOperatorStop: lastEndedByOperatorStop, cycleWallSeconds: lastCycleWallSeconds,
++            batteryHealth: batteryHealth, socStart: socStart, socEnd: socEnd,
++            socProgrammatic: lastSoCProgrammatic, coldOrWarm: coldOrWarm, round: round,
++            memoryLine: lastMemoryLine)
++        timelineJSON = QwenMetalExport.json(
++            runMode: lastRunMode, prompt: prompt, feedingMode: lastFeedingMode,
++            promptTokenCount: lastPromptTokenCount, records: lastRecords,
++            endedByOperatorStop: lastEndedByOperatorStop, cycleWallSeconds: lastCycleWallSeconds,
++            batteryHealth: batteryHealth, socStart: socStart, socEnd: socEnd,
++            socProgrammatic: lastSoCProgrammatic, round: round)
++    }
++
++    // MARK: Platform readings
++
++    /// Monotonic seconds (mach uptime) — never wall-clock adjustable.
++    nonisolated static func now() -> Double {
++        Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
++    }
++
++    /// `UIDevice.batteryLevel` in percent; nil where unavailable (Mac, -1).
++    /// Cross-check only — Settings → Battery is the value of record.
++    nonisolated static func programmaticStateOfChargePercent() -> Double? {
++        #if os(iOS)
++            let device = UIDevice.current
++            device.isBatteryMonitoringEnabled = true
++            let level = device.batteryLevel
++            guard level >= 0 else { return nil }
++            return Double(level) * 100
++        #else
++            return nil
++        #endif
++    }
++
++    /// MLX's own meters + the task's phys_footprint — cross-checks only;
++    /// the Xcode memory gauge on an attached footprint-only launch is the
++    /// value of record (spec D3). Phase 0 mislabeled MLX activeMemory as
++    /// phys_footprint; the label here prevents a repeat.
++    nonisolated static func memoryLine() -> String {
++        let snapshot = Memory.snapshot()
++        func mb(_ bytes: Int) -> String { String(format: "%.0f MB", Double(bytes) / 1_048_576) }
++        let footprint = physFootprintBytes().map { String(format: "%.0f MB", Double($0) / 1_048_576) } ?? "n/a"
++        return "memory (cross-checks only — Xcode gauge phys_footprint is the value of record): "
++            + "MLX activeMemory \(mb(snapshot.activeMemory)), peakMemory \(mb(snapshot.peakMemory)), "
++            + "cacheMemory \(mb(snapshot.cacheMemory)); task_info phys_footprint \(footprint)"
++    }
++
++    nonisolated static func physFootprintBytes() -> UInt64? {
++        var info = task_vm_info_data_t()
++        var count = mach_msg_type_number_t(
++            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
++        let kr = withUnsafeMutablePointer(to: &info) {
++            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
++                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
++            }
++        }
++        guard kr == KERN_SUCCESS else { return nil }
++        return UInt64(info.phys_footprint)
++    }
++}
++
++// MARK: - Export rendering (text of record + JSON timeline)
++
++enum QwenMetalExport {
++    static func percentOrPlaceholder(_ note: String) -> String {
++        var trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
++        if trimmed.hasSuffix("%") { trimmed.removeLast() }
++        return trimmed.isEmpty ? "(record manually)" : trimmed + "%"
++    }
++
++    static func programmatic(_ value: Double?) -> String {
++        value.map { String(format: "%.1f%%", $0) } ?? "n/a (unavailable)"
++    }
++
++    static func feedingLine(
++        prompt: QwenMetalP6.Prompt, mode: QwenMetalP6.FeedingMode, promptTokenCount: Int
++    ) -> String {
++        switch mode {
++        case .rendered:
++            let expected = prompt.expectedRenderedTokenCount
++            let verdict = promptTokenCount == expected
++                ? "MATCH — parity signature holds"
++                : "MISMATCH — rendered mode INVALID for this row (fallback: template mode, delta named in limitations)"
++            return "prompt: \(prompt.rawValue) (\(promptTokenCount) tokens; feeding: RENDERED tokenizer-direct, "
++                + "special tokens parsed, no template; parity target \(expected): \(verdict))"
++        case .template:
++            return "prompt: \(prompt.rawValue) (\(promptTokenCount) tokens; feeding: raw text + LLMEval template "
++                + "with its default system message, enable_thinking=false — the Phase 0 mode; "
++                + "qwen-metal rendered count is \(prompt.expectedRenderedTokenCount), delta to be named in limitations)"
++        }
++    }
++
++    static func text(
++        runMode: QwenMetalP6.RunMode, prompt: QwenMetalP6.Prompt, feedingMode: QwenMetalP6.FeedingMode,
++        promptTokenCount: Int, records: [QwenMetalGenerationRecord],
++        endedByOperatorStop: Bool, cycleWallSeconds: Double,
++        batteryHealth: String, socStart: String, socEnd: String,
++        socProgrammatic: (start: Double?, end: Double?), coldOrWarm: String, round: String,
++        memoryLine: String
++    ) -> String {
++        let roundTrimmed = round.trimmingCharacters(in: .whitespacesAndNewlines)
++        var lines: [String] = []
++        lines.append(
++            roundTrimmed.isEmpty
++                ? "qwen-metal Phase 6 row export (PROVISIONAL) — engine: mlx-llmeval"
++                : "qwen-metal Phase 6 row export (round: \(roundTrimmed)) — engine: mlx-llmeval")
++        lines.append("round: " + (roundTrimmed.isEmpty ? "(none — PROVISIONAL)" : roundTrimmed))
++        lines.append("harness: " + QwenMetalP6.harnessLine)
++        lines.append("checkpoint: " + QwenMetalP6.checkpointLine)
++        lines.append("mode: " + runMode.rawValue)
++        lines.append(feedingLine(prompt: prompt, mode: feedingMode, promptTokenCount: promptTokenCount))
++        lines.append("sampling: greedy (temperature 0); thinking: off; burst cap \(QwenMetalP6.burstMaxNewTokens) new tokens; loop cap = \(QwenMetalP6.contextCap) − prompt (reset on EOS or context fill)")
++        lines.append(QwenMetalP6.validationLine)
++        lines.append("cold/warm: " + (coldOrWarm.isEmpty ? "(record manually)" : coldOrWarm))
++        lines.append(
++            "battery health: \(percentOrPlaceholder(batteryHealth)) (maximum capacity %, Settings → Battery → "
++                + "Battery Health, operator-typed — NOT state of charge)")
++        if runMode == .energyLoop {
++            lines.append(
++                "state of charge (Settings → Battery, operator-read at the band marks — value of record): "
++                    + "start \(percentOrPlaceholder(socStart)), end \(percentOrPlaceholder(socEnd))")
++            lines.append(
++                "state of charge (programmatic UIDevice.batteryLevel — cross-check only, never the value of record): "
++                    + "start \(programmatic(socProgrammatic.start)), end \(programmatic(socProgrammatic.end))")
++        }
++        lines.append(memoryLine)
++        lines.append(
++            "definitions: decode tok/s = 384 / (t512 − t128), t_k = host monotonic time at which generated token k "
++                + "is available (didGenerate callback, one call per token); prefill span = TokenIterator init "
++                + "(prompt-processing start) → first token available; the first token is sampled from the prompt "
++                + "forward (mlx-swift-lm 3.31.3 TokenIterator.prepare), no decode forward inside the span; "
++                + "tokenization excluded and listed separately")
++
++        switch runMode {
++        case .burst:
++            if let r = records.first {
++                lines.append(contentsOf: generationLines(r))
++            }
++        case .energyLoop:
++            let totalTokens = records.reduce(0) { $0 + $1.generatedTokens }
++            let sumWall = records.reduce(0.0) { $0 + $1.wallSeconds }
++            let truncated = records.last?.truncated ?? false
++            lines.append(String(
++                format: "energy cycle: %d generations — ended by %@%@",
++                records.count, endedByOperatorStop ? "operator stop" : "loop halt",
++                truncated ? " (final generation truncated at a token boundary)" : ""))
++            lines.append(String(
++                format: "cumulative: %d generated tokens; Σ generation wall %.1f s; cycle wall %.1f s",
++                totalTokens, sumWall, cycleWallSeconds))
++            lines.append("energy J/token is derived by tools/phase6_analyze.py from these raw fields (never in-harness)")
++            lines.append(contentsOf: records.map(\.textLine))
++            if let last = records.last {
++                lines.append("last generation:")
++                lines.append(contentsOf: generationLines(last))
++            }
++        }
++        return lines.joined(separator: "\n") + "\n"
++    }
++
++    static func generationLines(_ r: QwenMetalGenerationRecord) -> [String] {
++        var lines: [String] = []
++        lines.append(String(
++            format: "generated: %d tokens in %.1f s (stop: %@)", r.generatedTokens, r.wallSeconds, r.stopReason))
++        if let span = r.prefillSpanSeconds, let tps = r.prefillTokensPerSecond {
++            lines.append(String(
++                format: "prefill span: %d tokens in %.3f s = %.2f tok/s (of record — wall, prompt-processing start "
++                    + "to first generated token available; library promptTime cross-check %.3f s; tokenize %.1f ms excluded)",
++                r.promptTokenCount, span, tps, r.libraryPromptSeconds, r.tokenizeSeconds * 1000))
++        } else {
++            lines.append("prefill span: n/a (no token generated)")
++        }
++        let overall = r.overallTokensPerSecond.map { String(format: "%.2f tok/s", $0) } ?? "n/a"
++        let windowed = r.canonicalWindowTokensPerSecond.map { String(format: "%.2f tok/s", $0) }
++            ?? String(format: "n/a (needs >= %d generated tokens, got %d)", QwenMetalP6.windowLastToken, r.generatedTokens)
++        lines.append(
++            "decode rate: overall \(overall), canonical window (tokens \(QwenMetalP6.windowFirstToken)-"
++                + "\(QwenMetalP6.windowLastToken)) \(windowed)")
++        return lines
++    }
++
++    struct TimelineJSON: Codable {
++        struct Battery: Codable {
++            let healthNote: String?
++            let operatorSoCStart: String?
++            let operatorSoCEnd: String?
++            let programmaticSoCStartPercent: Double?
++            let programmaticSoCEndPercent: Double?
++        }
++        struct CycleTotals: Codable {
++            let generations: Int
++            let totalGeneratedTokens: Int
++            let sumGenerationWallSeconds: Double
++            let cycleWallSeconds: Double
++            let endedBy: String
++            let lastGenerationTruncated: Bool
++        }
++        let schema: String
++        let engine: String
++        let phase: String
++        let round: String?
++        let mode: String
++        let promptName: String
++        let promptTokenCount: Int
++        let feedingMode: String
++        let feedingParity: String
++        let elapsedBasis: String
++        let battery: Battery
++        let cycleTotals: CycleTotals
++        let entries: [QwenMetalGenerationRecord]
++    }
++
++    static func json(
++        runMode: QwenMetalP6.RunMode, prompt: QwenMetalP6.Prompt, feedingMode: QwenMetalP6.FeedingMode,
++        promptTokenCount: Int, records: [QwenMetalGenerationRecord],
++        endedByOperatorStop: Bool, cycleWallSeconds: Double,
++        batteryHealth: String, socStart: String, socEnd: String,
++        socProgrammatic: (start: Double?, end: Double?), round: String
++    ) -> String {
++        func nonEmpty(_ s: String) -> String? {
++            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
++            return t.isEmpty ? nil : t
++        }
++        let parity: String
++        switch feedingMode {
++        case .rendered:
++            parity = promptTokenCount == prompt.expectedRenderedTokenCount ? "match" : "MISMATCH"
++        case .template:
++            parity = "template-mode (Phase 0 fallback)"
++        }
++        let doc = TimelineJSON(
++            schema: "qwen-metal-timeline/1-external",
++            engine: "mlx-llmeval",
++            phase: "6",
++            round: nonEmpty(round),
++            mode: runMode.rawValue,
++            promptName: prompt.rawValue,
++            promptTokenCount: promptTokenCount,
++            feedingMode: feedingMode.rawValue,
++            feedingParity: parity,
++            elapsedBasis: "loopClock",
++            battery: .init(
++                healthNote: nonEmpty(batteryHealth),
++                operatorSoCStart: runMode == .energyLoop ? nonEmpty(socStart) : nil,
++                operatorSoCEnd: runMode == .energyLoop ? nonEmpty(socEnd) : nil,
++                programmaticSoCStartPercent: socProgrammatic.start,
++                programmaticSoCEndPercent: socProgrammatic.end),
++            cycleTotals: .init(
++                generations: records.count,
++                totalGeneratedTokens: records.reduce(0) { $0 + $1.generatedTokens },
++                sumGenerationWallSeconds: records.reduce(0.0) { $0 + $1.wallSeconds },
++                cycleWallSeconds: cycleWallSeconds,
++                endedBy: runMode == .burst ? "burst" : (endedByOperatorStop ? "operatorStop" : "loopHalt"),
++                lastGenerationTruncated: records.last?.truncated ?? false),
++            entries: records)
++        let encoder = JSONEncoder()
++        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
++        guard let data = try? encoder.encode(doc), let text = String(data: data, encoding: .utf8) else {
++            return "{}"
++        }
++        return text + "\n"
++    }
++}
+diff --git a/Applications/LLMEval/Views/ContentView.swift b/Applications/LLMEval/Views/ContentView.swift
+index b0978e6..8fa6000 100644
+--- a/Applications/LLMEval/Views/ContentView.swift
++++ b/Applications/LLMEval/Views/ContentView.swift
+@@ -83,6 +83,11 @@ struct ContentView: View {
+                 }
+             }
+             .padding(.top, 4)
++
++            // qwen-metal P6-2: Phase 6 parity bench (window rate, first-token
++            // prefill span, per-generation loop timeline, SoC fields,
++            // rendered-input mode with the token-count parity signature).
++            QwenMetalBenchView(bench: llm.p6)
+         }
+         #if os(visionOS)
+             .padding(40)
+diff --git a/Applications/LLMEval/Views/QwenMetalBenchView.swift b/Applications/LLMEval/Views/QwenMetalBenchView.swift
+new file mode 100644
+index 0000000..46f671d
+--- /dev/null
++++ b/Applications/LLMEval/Views/QwenMetalBenchView.swift
+@@ -0,0 +1,72 @@
++// qwen-metal P6-2: the Phase 6 bench panel (phase-6.md D1/D2/D4). Inline,
++// not a toolbar item — this view has no NavigationStack (P0A-1 lesson).
++
++import SwiftUI
++
++struct QwenMetalBenchView: View {
++    @Bindable var bench: QwenMetalBench
++
++    var body: some View {
++        DisclosureGroup("qwen-metal Phase 6 bench") {
++            VStack(alignment: .leading, spacing: 8) {
++                HStack {
++                    Picker("Prompt", selection: $bench.prompt) {
++                        ForEach(QwenMetalP6.Prompt.allCases) { Text($0.rawValue).tag($0) }
++                    }
++                    Picker("Feeding", selection: $bench.feedingMode) {
++                        ForEach(QwenMetalP6.FeedingMode.allCases) { Text($0.rawValue).tag($0) }
++                    }
++                }
++                .pickerStyle(.menu)
++                .disabled(bench.running)
++
++                HStack {
++                    Button("Burst") { bench.runBurst() }
++                        .disabled(bench.running)
++                    Button(bench.looping ? "Stop (report)" : "Loop") {
++                        if bench.looping { bench.requestStop() } else { bench.startLoop() }
++                    }
++                    .disabled(bench.running && !bench.looping)
++                    Button("Copy export") { copyToClipboard(bench.exportText) }
++                        .disabled(bench.exportText.isEmpty)
++                    Button("Copy JSON") { copyToClipboard(bench.timelineJSON) }
++                        .disabled(bench.timelineJSON.isEmpty)
++                    Button("Copy output") { copyToClipboard(bench.output) }
++                        .disabled(bench.output.isEmpty)
++                }
++                .buttonStyle(.bordered)
++
++                // Operator fields (spec D4): health ≠ SoC; SoC at stop is
++                // typed AFTER Stop and re-renders the export.
++                HStack {
++                    TextField("battery health %", text: $bench.batteryHealth)
++                    TextField("SoC start %", text: $bench.socStart)
++                    TextField("SoC end %", text: $bench.socEnd)
++                    TextField("cold/warm", text: $bench.coldOrWarm)
++                    TextField("round", text: $bench.round)
++                }
++                .textFieldStyle(.roundedBorder)
++                .onChange(of: [bench.batteryHealth, bench.socStart, bench.socEnd, bench.coldOrWarm, bench.round]) {
++                    bench.operatorFieldsChanged()
++                }
++
++                if !bench.status.isEmpty {
++                    Text(bench.status)
++                        .font(.footnote.monospaced())
++                        .textSelection(.enabled)
++                }
++            }
++            .padding(.top, 4)
++        }
++        .padding(.top, 4)
++    }
++
++    private func copyToClipboard(_ string: String) {
++        #if os(macOS)
++            NSPasteboard.general.clearContents()
++            NSPasteboard.general.setString(string, forType: .string)
++        #else
++            UIPasteboard.general.string = string
++        #endif
++    }
++}
+diff --git a/mlx-swift-examples.xcodeproj/project.pbxproj b/mlx-swift-examples.xcodeproj/project.pbxproj
+index 87ab36c..c3b677e 100644
+--- a/mlx-swift-examples.xcodeproj/project.pbxproj
++++ b/mlx-swift-examples.xcodeproj/project.pbxproj
+@@ -301,13 +301,16 @@
+ 				LLMEval/AssetCatalog.xcassets,
+ 				LLMEval/LLMEvalApp.swift,
+ 				LLMEval/Models/CarKeysStory.md,
++				LLMEval/Models/decode-essay.rendered.txt,
+ 				LLMEval/Models/LongPrompt.md,
++				LLMEval/Models/prefill-summarize.rendered.txt,
+ 				LLMEval/Models/PresetPrompts.swift,
+ 				LLMEval/Models/ToolDefinitions.swift,
+ 				LLMEval/Services/FormatUtilities.swift,
+ 				LLMEval/Services/ToolExecutor.swift,
+ 				LLMEval/ViewModels/DeviceStat.swift,
+ 				LLMEval/ViewModels/LLMEvaluator.swift,
++				LLMEval/ViewModels/QwenMetalBench.swift,
+ 				LLMEval/Views/ContentView.swift,
+ 				LLMEval/Views/HeaderView.swift,
+ 				LLMEval/Views/LoadingOverlayView.swift,
+@@ -316,6 +319,7 @@
+ 				LLMEval/Views/OutputView.swift,
+ 				LLMEval/Views/PresetPromptsSheet.swift,
+ 				LLMEval/Views/PromptInputView.swift,
++				LLMEval/Views/QwenMetalBenchView.swift,
+ 			);
+ 			target = C3A8B3DB2B92A29D0002EFB8 /* LLMEval */;
+ 		};
+@@ -3166,12 +3170,13 @@
+ 				CLANG_WARN_UNREACHABLE_CODE = YES;
+ 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+ 				CODE_SIGN_ENTITLEMENTS = Applications/LLMEval/LLMEval.entitlements;
++				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+ 				CODE_SIGN_STYLE = Automatic;
+ 				COPY_PHASE_STRIP = NO;
+ 				CURRENT_PROJECT_VERSION = 1;
+ 				DEAD_CODE_STRIPPING = YES;
+ 				DEBUG_INFORMATION_FORMAT = dwarf;
+-				DEVELOPMENT_TEAM = "";
++				DEVELOPMENT_TEAM = C6U857449W;
+ 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+ 				ENABLE_PREVIEWS = YES;
+ 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+@@ -3259,12 +3264,13 @@
+ 				CLANG_WARN_UNREACHABLE_CODE = YES;
+ 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+ 				CODE_SIGN_ENTITLEMENTS = Applications/LLMEval/LLMEval.entitlements;
++				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+ 				CODE_SIGN_STYLE = Automatic;
+ 				COPY_PHASE_STRIP = NO;
+ 				CURRENT_PROJECT_VERSION = 1;
+ 				DEAD_CODE_STRIPPING = YES;
+ 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+-				DEVELOPMENT_TEAM = "";
++				DEVELOPMENT_TEAM = C6U857449W;
+ 				ENABLE_NS_ASSERTIONS = NO;
+ 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+ 				ENABLE_PREVIEWS = YES;
+diff --git a/mlx-swift-examples.xcodeproj/xcshareddata/xcschemes/LLMEval.xcscheme b/mlx-swift-examples.xcodeproj/xcshareddata/xcschemes/LLMEval.xcscheme
+index 4898e4b..b1c2634 100644
+--- a/mlx-swift-examples.xcodeproj/xcshareddata/xcschemes/LLMEval.xcscheme
++++ b/mlx-swift-examples.xcodeproj/xcshareddata/xcschemes/LLMEval.xcscheme
+@@ -38,6 +38,7 @@
+       ignoresPersistentStateOnLaunch = "NO"
+       debugDocumentVersioning = "YES"
+       debugServiceExtension = "internal"
++      enableGPUValidationMode = "1"
+       allowLocationSimulation = "YES">
+       <BuildableProductRunnable
+          runnableDebuggingMode = "0">
+-- 
+2.50.1 (Apple Git-155)
+

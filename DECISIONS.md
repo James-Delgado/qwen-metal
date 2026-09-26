@@ -5342,3 +5342,158 @@ JSON encoder failure — now surfaced in the app's error line. LOW notes
 empty-generation pattern; the pre-existing detached-task `self`
 capture) left as-is, recorded here. App rebuilt after the fixes: BUILD
 SUCCEEDED.
+
+## 2026-09-26 — P6-2: external-harness parity patches (MLX LLMEval + llama.swiftui) archived as `*-p6.patch`; MLX first-token origin VERIFIED; check 7 evidence on the Mac
+
+Spec: docs/phases/phase-6.md D1/D2/D9 + check 7. Harness-side
+instrumentation only — no engine change, no gate change, no pin moved
+(model revisions, checkpoints, upstream harness revisions all as at
+P0A-1). Nothing here is a benchmark row; agents never ran either
+harness for numbers.
+
+**Shipped (two local-clone commits + archives):**
+
+- `benchmarks/patches/mlx-swift-examples-p6.patch` (mlx-swift-examples
+  branch qwen-metal-p0a1, commit 2efa8a4 on 992118b): new
+  `Applications/LLMEval/ViewModels/QwenMetalBench.swift` +
+  `Views/QwenMetalBenchView.swift`, bundled byte-exact copies of the two
+  rendered prompts (sha256 6b3c757c… / 60f50f10…, project membership
+  added), LLMEvaluator/ContentView wiring, and the LLMEval scheme pinned
+  to `enableGPUValidationMode="1"` (= Metal API validation Disabled —
+  the same value our own QwenMetalApp scheme carries; the Phase 0 MLX
+  rows ran Enabled).
+- `benchmarks/patches/llama-swiftui-p6.patch` (llama.cpp branch
+  qwen-metal-p0a1, commit 1d7bf4e on bceddff): LibLlama.swift
+  (actor instrumentation), LlamaState.swift (bench + exports),
+  ContentView.swift (panel).
+- `benchmarks/patches/README.md` (new): provenance table, how to apply,
+  operator notes for the panels.
+
+**Definitions the external harnesses now produce (= ours, spec D1):**
+
+- Decode tok/s of record = 384 / (t₅₁₂ − t₁₂₈) from per-token host
+  timestamps. MLX: taken in the `didGenerate` callback of the
+  synchronous `generate(input:parameters:context:didGenerate:)` loop
+  (one call per token on the generation thread, the instant
+  `iterator.next()` materializes the id); the AsyncStream path emits
+  detokenized CHUNKS, not 1:1 with tokens, plus a task hop — unusable
+  for tₖ, so the app's stream is not the measurement path. llama.cpp:
+  taken right after `llama_sampler_sample` returns token k — that call
+  reads logits through `llama_get_logits_ith`, which calls
+  `ctx->synchronize()` first (src/llama-context.cpp @ 47c78692), so the
+  stamp is a backend-completion mark, not an enqueue. Overall rate =
+  (n−1)/(tₙ − t₁) on both, our convention.
+- **Prefill span — MLX first-token origin VERIFIED (the spec's open
+  question):** in mlx-swift-lm 3.31.3 (1c05248b),
+  `TokenIterator.prepare` runs `model.prepare` over the prompt windows
+  and `step(previous:)` over the remainder and samples `y` from THOSE
+  logits; `next()` then enqueues the second forward (`asyncEval`)
+  BEFORE materializing that first token (`previousY.tokens.item()`).
+  So the first streamed token comes from the prompt forward itself; the
+  Phase 0 assumption of a ~26 ms second step inside TTFT was wrong in
+  the safe direction — the bracket (TokenIterator init → first token
+  available) contains no decode forward's GPU time, at most the second
+  step's sub-ms host graph build. Recorded as such; the library's own
+  `GenerateCompletionInfo.promptTime` rides the export as a cross-check;
+  host tokenization is excluded and listed. llama.cpp: bracket =
+  `completion_init` start (before tokenize) → first sample returned =
+  tokenize + one `llama_decode` over the prompt batch + first sample,
+  exactly D1; the prompt `llama_decode` return is an async enqueue on
+  Metal (the P0A-1 finding) and is listed separately, never as prefill.
+- Sustained/energy loop: same prompt, reset on EOS or **4K context
+  fill**, per-generation lines (`gen N: overall …, window … — tokens,
+  wall, stop reason, elapsed`), operator Stop ends the in-flight
+  generation at its next token boundary and STILL reports (cumulative
+  tokens, Σ generation wall, cycle wall, end reason, truncated flag);
+  refuses to spin on an empty generation. Battery health
+  (operator-typed) and state of charge (operator-read Settings value =
+  value of record; programmatic `UIDevice.batteryLevel` at start/end =
+  labeled cross-check) are SEPARATE fields; round marker (blank ⇒
+  PROVISIONAL). Exports: text of record + JSON timeline (schema
+  `qwen-metal-timeline/1-external`, engine `mlx-llmeval` |
+  `llama-swiftui`; field names mirror `TimelineEntry`). Memory lines
+  are labeled cross-checks (Xcode gauge stays the value of record; the
+  Phase 0 MLX activeMemory mislabel cannot recur).
+- **Rendered-input mode on MLX (D2, check 7):** the bundled rendered
+  string is tokenized directly (`context.tokenizer.encode`; the HF
+  tokenizer splits on added tokens before BPE, so `<|im_start|>` /
+  `<think>` map to their special ids) and handed to `generate` as
+  `LMInput(tokens:)` — no template. The export prints the prompt token
+  count against the parity target and says MATCH or MISMATCH; a
+  MISMATCH invalidates the mode for that row (fallback = template mode,
+  the Phase 0 feeding, count recorded). **Check 7 Mac evidence** (a
+  scratch executable against swift-transformers b38443e — the resolved
+  revision LLMEval links — loading the tokenizer files of the pinned
+  checkpoint; its tokenizer.json is byte-identical to
+  Qwen/Qwen3-1.7B@70d244cc's, sha256 aeb13307…; only chat_template and
+  an empty extra_special_tokens differ in tokenizer_config.json):
+  decode-essay **84**, prefill-summarize **852**, with addSpecialTokens
+  true and false alike (Qwen3 adds no BOS; ByteLevel post-processor);
+  first ids 151644 872 198 (= `<|im_start|>` `user` `\n`); the pinned
+  Python tokenizer gives 84 / 852 on both tokenizer folders too. The
+  device confirmation is the export line on the first P6-4 MLX row
+  (check 7 as written: documented, not XCTest).
+- llama.cpp feeding is unchanged (rendered, `parse_special=true`); its
+  own counts are recorded against the counts on record (92 / 852 vs HF
+  84 / 852 — a tokenizer difference, reported as pinned).
+
+**Decisions taken here (agent, reversible, flagged for veto):**
+
+1. **llama.swiftui `n_ctx` 2048 → 4096** and the burst cap redefined
+   from 640 TOTAL to **640 NEW tokens** (= our `burstMaxNewTokens`).
+   Rationale: the pinned regenerate policy resets at the 4K context
+   fill on every engine (PLAN; our `contextCap` = 4096; the MLX loop
+   cap = 4096 − prompt); Phase 0's llama loop reset every 548 tokens
+   and its MLX loop every 2048, so the Phase 0 sustained/energy rows
+   were not reset-matched. Cost: llama.cpp's KV allocation grows (its
+   Phase 6 phys_footprint row will differ from Phase 0's 307 MB for
+   this reason as well as the mmap asymmetry — P6-6 note added).
+   Decode speed is unaffected by allocation size (attention cost
+   follows the used positions).
+2. **MLX loop cap = 4096 − prompt tokens**, derived from the actual
+   count inside the container (Phase 0: the app's 2048 default).
+3. Timestamps use the monotonic mach uptime clock on both harnesses
+   (`DispatchTime.now().uptimeNanoseconds`); wall = monotonic here
+   (no GPU timestamps exist in either harness — METHODOLOGY 6's dual
+   timing is ours alone, stated in the writeup's limitations).
+4. Metal API validation OFF is scheme-pinned in both apps; recorded on
+   every export with the note that detached launches carry no
+   validation layer regardless.
+
+**Verification (quoted):**
+
+- LLMEval, macOS destination, Release, signing disabled:
+  `** BUILD SUCCEEDED **`, 0 errors, 1 warning in the new code
+  (`QwenMetalBench.swift:407: 'generate(input:parameters:context:didGenerate:)' is deprecated`
+  — the deliberate synchronous path, reason in the source). The build
+  log shows both `*.rendered.txt` copied into the app bundle
+  (`CpResource … LLMEval.app/Contents/Resources/…rendered.txt`).
+- llama.swiftui, `generic/platform=iOS`, Release, signing disabled:
+  `** BUILD SUCCEEDED **`, 0 errors, 0 warnings in the patched files
+  (an intermediate build had 4 main-actor isolation warnings in the new
+  code; fixed and rebuilt before the commit was finalized).
+- Mac check 7 evidence: as quoted above (8 MATCH lines, 0 MISMATCH).
+- Backlog drift test: `5 passed`.
+
+**Post-task review / deviations:** (a) I truncated the MLX clone's
+`project.pbxproj` for a moment (a write-before-read slip in an edit
+script); it was rebuilt byte-for-byte from HEAD plus James's two
+uncommitted signing hunks captured earlier in the session (verified
+against the pre-slip diff: 4 insertions, 2 deletions, both LLMEval
+configurations), then the membership lines were added. The P6 commit
+therefore includes those signing lines (`DEVELOPMENT_TEAM =
+C6U857449W`, macOS `CODE_SIGN_IDENTITY`) — the llama P0A-1 patch set
+the same precedent. James's other local edit (embedder-tool scheme
+Debug → Release) stays uncommitted. (b) The MLX harness uses a
+deprecated-but-present synchronous API on purpose; if a future
+mlx-swift-lm removes it the patch must move to `TokenIterator`
+directly (same compute path) — irrelevant while the revision is pinned.
+(c) No XCTest exists in either upstream app; the harness code is
+build-verified and its arithmetic mirrors the engine's tested
+`DecodeTimingCollector` line for line — the first device rows are the
+functional check (P6-4's tripwire walk covers ours; the external
+exports' self-consistency is visible in their own lines).
+(d) Follow-ups: none seeded as tasks; two handoff notes appended (P6-3:
+the three export formats the analyzer must parse + the parity line in
+the runbook checklist; P6-6: the provisional-vs-final causes incl. the
+n_ctx change). P6-3 stays blocked on BW-1.

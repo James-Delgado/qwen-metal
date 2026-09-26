@@ -1,0 +1,751 @@
+From 1d7bf4ec712ed520adb8aabec72c921658b95aca Mon Sep 17 00:00:00 2001
+From: James-Delgado <jado650@berkeley.edu>
+Date: Sat, 26 Sep 2026 11:22:04 -0400
+Subject: [PATCH] qwen-metal P6-2: Phase 6 parity bench for llama.swiftui
+ (post-sample per-token timestamps, completion_init prefill bracket,
+ generated-token caps + n_ctx 4096, loop timeline, SoC fields, exports)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Stacked on the P0A-1 patches (97e552a, bceddff); base b9999/47c78692;
+checkpoint (locally converted Q4_K_M GGUF) unchanged. See qwen-metal
+docs/phases/phase-6.md D1/D2/D4/D9 and DECISIONS.md 2026-09-26 (P6-2).
+
+LibLlama.swift (LlamaContext):
+- token_available_ns: monotonic host time taken right after
+  llama_sampler_sample returns token k. The sampler reads logits via
+  llama_get_logits_ith, which calls ctx->synchronize() first
+  (src/llama-context.cpp), so the stamp is a backend-completion mark;
+  decode tok/s of record = 384 / (t512 - t128); the EOG token gets no
+  stamp (not a generated token).
+- prefill span = completion_init start (before tokenize) -> first sample
+  returned = tokenize + one llama_decode over the prompt batch + first
+  sample (spec D1). llama_decode's return is an async enqueue on Metal
+  (the P0A-1 finding): the enqueue mark is recorded and labeled, never
+  reported as prefill.
+- caps: n_gen_max caps GENERATED tokens — burst 640 new tokens
+  (= qwen-metal burstMaxNewTokens; Phase 0 capped 640 TOTAL), loop =
+  n_ctx - n_prompt derived at completion_init so a generation resets
+  exactly at the context fill; n_len derived from it; a defensive guard
+  stops at n_ctx (a failed decode can no longer spin). Stop reasons in
+  the qwen-metal vocabulary: eos | contextFull | maxNewTokens |
+  stopRequested. Operator stop is honored at the token boundary after
+  token k is available and before its decode is enqueued; the flag is
+  per completion (cleared in clear()).
+- n_ctx 2048 -> 4096: the pinned regenerate policy resets on the 4K
+  context fill (PLAN); qwen-metal contextCap and the MLX loop cap are
+  4096. KV allocation grows accordingly — the Phase 6 phys_footprint row
+  for llama.cpp will differ from Phase 0's 307 MB for this reason too
+  (stated, not hidden).
+
+LlamaState.swift / ContentView.swift:
+- P6 panel: prompt picker (bundled rendered prompts, parse_special=true
+  — the P0A-1 pin), P6 Burst, P6 Loop / Stop (report), operator fields
+  (battery health, SoC start, SoC end, cold/warm, round), Copy export /
+  Copy JSON / Copy output. The token loop runs detached (no main-actor
+  hop per token; no per-token UI — the P0A-1 lesson).
+- exports: text of record (harness/checkpoint/validation lines,
+  health and SoC as SEPARATE fields, programmatic UIDevice.batteryLevel
+  as the labeled cross-check, task_info phys_footprint as a labeled
+  cross-check, prefill span, decode rate overall + window, per-
+  generation `gen N:` lines, cumulative tokens / sum wall / cycle wall)
+  and the JSON timeline (schema qwen-metal-timeline/1-external, engine
+  llama-swiftui). llama.cpp's own prompt counts are recorded against
+  the counts on record (92 / 852; HF 84 / 852) — a tokenizer
+  difference, reported as pinned.
+- Metal API validation OFF: the shared scheme already carries
+  enableGPUValidationMode="1" (= Disabled) from upstream; recorded in
+  the export.
+
+Build-verified: xcodebuild -scheme llama.swiftui -destination
+generic/platform=iOS -configuration Release CODE_SIGNING_ALLOWED=NO
+CODE_SIGN_IDENTITY="" -> BUILD SUCCEEDED. Never run for numbers by
+agents.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ .../llama.cpp.swift/LibLlama.swift            | 110 ++++-
+ .../llama.swiftui/Models/LlamaState.swift     | 430 ++++++++++++++++++
+ .../llama.swiftui/UI/ContentView.swift        |  41 ++
+ 3 files changed, 575 insertions(+), 6 deletions(-)
+
+diff --git a/examples/llama.swiftui/llama.cpp.swift/LibLlama.swift b/examples/llama.swiftui/llama.cpp.swift/LibLlama.swift
+index e9ab814..84c293e 100644
+--- a/examples/llama.swiftui/llama.cpp.swift/LibLlama.swift
++++ b/examples/llama.swiftui/llama.cpp.swift/LibLlama.swift
+@@ -46,6 +46,54 @@ actor LlamaContext {
+ 
+     var n_decode: Int32 = 0
+ 
++    // qwen-metal P6-2 (phase-6.md D1): parity instrumentation.
++    // - n_gen_max caps GENERATED tokens (qwen-metal burstMaxNewTokens = 640
++    //   new tokens; the loop sets it to n_ctx - n_prompt so a generation
++    //   resets on EOS or context fill, the pinned regenerate policy). n_len
++    //   is derived from it per completion (n_prompt + n_gen_max).
++    // - token_available_ns[k-1] = monotonic host time at which generated
++    //   token k's id is available: taken right after llama_sampler_sample
++    //   returns. That call reads logits via llama_get_logits_ith, which
++    //   synchronizes the backend first (src/llama-context.cpp, b9999
++    //   47c78692), so the timestamp is a real GPU-completion mark, not an
++    //   enqueue time. Decode tok/s of record = 384 / (t512 - t128).
++    // - prefill span = completion_init start (before tokenize) -> first
++    //   sample returned = tokenize + one llama_decode over the prompt batch
++    //   + first sample, exactly the spec D1 bracket. llama_decode itself
++    //   returns after an ASYNC enqueue on the Metal backend (the P0A-1
++    //   finding), so the enqueue sub-span is recorded but is not prefill.
++    var n_gen_max: Int32 = 640
++    /// Burst cap (new tokens); the loop derives n_gen_max = n_ctx - n_prompt at completion_init instead.
++    var burst_gen_cap: Int32 = 640
++    var t_init_start_ns: UInt64 = 0
++    var t_tokenize_done_ns: UInt64 = 0
++    var t_prompt_enqueued_ns: UInt64 = 0
++    var token_available_ns: [UInt64] = []
++    var stop_requested = false
++    /// qwen-metal GenerationStopReason vocabulary: eos | contextFull | maxNewTokens | stopRequested
++    var stop_reason = ""
++    var cap_is_context_fill = false
++
++    /// Burst: cap = `newTokens` generated tokens. Context-fill (loop): the
++    /// cap is derived per completion as n_ctx - n_prompt (the prompt count
++    /// is only known after tokenize), so a generation resets exactly at
++    /// the context fill — never beyond it.
++    func p6_set_generation_cap(newTokens: Int32, isContextFill: Bool) {
++        burst_gen_cap = newTokens
++        cap_is_context_fill = isContextFill
++    }
++
++    func p6_request_stop() {
++        stop_requested = true
++    }
++
++    func p6_timeline_ns() -> [UInt64] { token_available_ns }
++    func p6_init_start_ns() -> UInt64 { t_init_start_ns }
++    func p6_tokenize_done_ns() -> UInt64 { t_tokenize_done_ns }
++    func p6_prompt_enqueued_ns() -> UInt64 { t_prompt_enqueued_ns }
++    func p6_stop_reason() -> String { stop_reason }
++    func p6_n_ctx() -> Int32 { Int32(llama_n_ctx(context)) }
++
+     init(model: OpaquePointer, context: OpaquePointer) {
+         self.model = model
+         self.context = context
+@@ -86,7 +134,13 @@ actor LlamaContext {
+         print("Using \(n_threads) threads")
+ 
+         var ctx_params = llama_context_default_params()
+-        ctx_params.n_ctx = 2048
++        // qwen-metal P6-2: 4096 = the pinned regenerate policy's context
++        // (PLAN "reset when the 4K context fills"; qwen-metal contextCap
++        // 4096, MLX loop cap 4096 - prompt). Phase 0 rows ran at the
++        // upstream 2048 with a 640-total cap; the Phase 6 loops reset at
++        // the same point on every engine. KV allocation grows accordingly
++        // (reported honestly in the phys_footprint row).
++        ctx_params.n_ctx = 4096
+         ctx_params.n_threads       = Int32(n_threads)
+         ctx_params.n_threads_batch = Int32(n_threads)
+ 
+@@ -124,10 +178,22 @@ actor LlamaContext {
+     }
+ 
+     func completion_init(text: String) {
+-        print("attempting to complete \"\(text)\"")
++        // qwen-metal P6-2: prefill span starts here (spec D1 bracket).
++        t_init_start_ns = DispatchTime.now().uptimeNanoseconds
++        token_available_ns = []
++        stop_reason = ""
++        // (stop_requested is NOT reset here — a Stop pressed between two
++        // loop generations must still end the next one at its first token
++        // boundary; clear() resets it after each completion.)
+ 
+         tokens_list = tokenize(text: text, add_bos: true)
+         n_prompt = Int32(tokens_list.count)
++        t_tokenize_done_ns = DispatchTime.now().uptimeNanoseconds
++        // qwen-metal P6-2: generated-token cap (burst) or context fill (loop);
++        // the total-length cap n_len is derived from it and never exceeds n_ctx.
++        let n_ctx_now = Int32(llama_n_ctx(context))
++        n_gen_max = cap_is_context_fill ? max(1, n_ctx_now - n_prompt) : min(burst_gen_cap, max(1, n_ctx_now - n_prompt))
++        n_len = n_prompt + n_gen_max
+         temporary_invalid_cchars = []
+         // qwen-metal P0A-1: reset per-completion state — upstream clear()
+         // never resets these, so every generation after the first in an app
+@@ -162,6 +228,8 @@ actor LlamaContext {
+         if llama_decode(context, batch) != 0 {
+             print("llama_decode() failed")
+         }
++        // qwen-metal P6-2: async enqueue mark (NOT prefill — see above).
++        t_prompt_enqueued_ns = DispatchTime.now().uptimeNanoseconds
+ 
+         n_cur = batch.n_tokens
+     }
+@@ -170,14 +238,20 @@ actor LlamaContext {
+         var new_token_id: llama_token = 0
+ 
+         new_token_id = llama_sampler_sample(sampling, context, batch.n_tokens - 1)
+-
+-        if llama_vocab_is_eog(vocab, new_token_id) || n_cur == n_len {
+-            print("\n")
++        // qwen-metal P6-2: the sampler synchronized on the logits — token
++        // k (= n_decode + 1) is host-available NOW.
++        let t_available_ns = DispatchTime.now().uptimeNanoseconds
++
++        if llama_vocab_is_eog(vocab, new_token_id) {
++            // The EOG token is not a generated token (qwen-metal counts
++            // n_decode the same way): no timestamp, stop reason eos.
++            stop_reason = "eos"
+             is_done = true
+             let new_token_str = String(cString: temporary_invalid_cchars + [0])
+             temporary_invalid_cchars.removeAll()
+             return new_token_str
+         }
++        token_available_ns.append(t_available_ns)
+ 
+         let new_token_cchars = token_to_piece(token: new_token_id)
+         temporary_invalid_cchars.append(contentsOf: new_token_cchars)
+@@ -196,10 +270,32 @@ actor LlamaContext {
+         // qwen-metal P0A-1: per-token print removed (timing distortion)
+         // tokens_list.append(new_token_id)
+ 
++        n_decode += 1
++
++        // qwen-metal P6-2: stop at the token boundary AFTER token k is
++        // available, BEFORE its decode is enqueued: generated-token cap
++        // (burst maxNewTokens / loop contextFull) or the operator stop.
++        if n_decode >= n_gen_max {
++            stop_reason = cap_is_context_fill ? "contextFull" : "maxNewTokens"
++            is_done = true
++            return new_token_str
++        }
++        // Defensive: never enqueue a position at or past n_ctx (a failed
++        // llama_decode would otherwise spin without ever setting is_done).
++        if n_cur + 1 >= Int32(llama_n_ctx(context)) {
++            stop_reason = "contextFull"
++            is_done = true
++            return new_token_str
++        }
++        if stop_requested {
++            stop_reason = "stopRequested"
++            is_done = true
++            return new_token_str
++        }
++
+         llama_batch_clear(&batch)
+         llama_batch_add(&batch, new_token_id, n_cur, [0], true)
+ 
+-        n_decode += 1
+         n_cur    += 1
+ 
+         if llama_decode(context, batch) != 0 {
+@@ -311,6 +407,8 @@ actor LlamaContext {
+         tokens_list.removeAll()
+         temporary_invalid_cchars.removeAll()
+         llama_memory_clear(llama_get_memory(context), true)
++        // qwen-metal P6-2: the operator stop is per completion.
++        stop_requested = false
+     }
+ 
+     private func tokenize(text: String, add_bos: Bool) -> [llama_token] {
+diff --git a/examples/llama.swiftui/llama.swiftui/Models/LlamaState.swift b/examples/llama.swiftui/llama.swiftui/Models/LlamaState.swift
+index 9a2685f..af23ed7 100644
+--- a/examples/llama.swiftui/llama.swiftui/Models/LlamaState.swift
++++ b/examples/llama.swiftui/llama.swiftui/Models/LlamaState.swift
+@@ -1,4 +1,7 @@
+ import Foundation
++#if canImport(UIKit)
++import UIKit
++#endif
+ 
+ struct Model: Identifiable {
+     var id = UUID()
+@@ -225,6 +228,212 @@ class LlamaState: ObservableObject {
+         looping = false
+     }
+ 
++    // MARK: - qwen-metal P6-2 (phase-6.md D1/D2/D4): Phase 6 parity bench
++    //
++    // Same definitions as the qwen-metal engine and the MLX LLMEval patch:
++    // decode tok/s of record = 384 / (t512 - t128) from per-token
++    // availability timestamps taken in LlamaContext (right after the
++    // sampler returns — it synchronized on the logits); prefill span =
++    // completion_init start -> first sample returned (tokenize + one
++    // prompt llama_decode + first sample); per-generation loop timeline;
++    // health and SoC as separate fields; operator Stop that still reports.
++    // Feeding: the bundled pinned RENDERED prompt (parse_special=true, the
++    // P0A-1 pin). llama.cpp's own prompt token counts are recorded per row
++    // (92 / 852 on record vs HF 84 / 852) — a tokenizer difference,
++    // reported as pinned, not a parity failure.
++
++    @Published var p6Status = ""
++    @Published var p6ExportText = ""
++    @Published var p6TimelineJSON = ""
++    @Published var p6Output = ""
++    @Published var p6Running = false
++    @Published var p6Looping = false
++    @Published var p6Prompt = "decode-essay"
++    @Published var p6BatteryHealth = "" { didSet { p6RenderExports() } }
++    @Published var p6SoCStart = "" { didSet { p6RenderExports() } }
++    @Published var p6SoCEnd = "" { didSet { p6RenderExports() } }
++    @Published var p6ColdOrWarm = "" { didSet { p6RenderExports() } }
++    @Published var p6Round = "" { didSet { p6RenderExports() } }
++
++    private var p6Records: [QwenMetalP6Record] = []
++    private var p6RunMode = "burst"
++    private var p6EndedByOperatorStop = false
++    private var p6CycleWallSeconds = 0.0
++    private var p6SoCProgrammatic: (start: Double?, end: Double?) = (nil, nil)
++    private var p6MemoryLine = ""
++    private var p6PromptTokenCount = 0
++    private var p6NCtx = 0
++    private var p6StopRequested = false
++
++    /// qwen-metal burst cap (BenchDefaults.burstMaxNewTokens): 640 NEW tokens.
++    nonisolated static let p6BurstMaxNewTokens: Int32 = QwenMetalP6Record.burstMaxNewTokens
++
++    func p6BundledPrompt(_ name: String) -> String? {
++        guard let url = Bundle.main.url(forResource: name + ".rendered", withExtension: "txt", subdirectory: "models"),
++              let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
++        return text
++    }
++
++    /// Burst row: one generation, 640 new tokens max (= qwen-metal), no per-token UI.
++    func p6Burst() {
++        guard !p6Running, !p6Looping, llamaContext != nil else { return }
++        guard let text = p6BundledPrompt(p6Prompt) else { p6Status = "ERROR: bundled prompt \(p6Prompt) not found"; return }
++        p6Running = true
++        p6StopRequested = false
++        Task {
++            defer { p6Running = false }
++            let record = await p6GenerateOnce(text: text, index: 0, newTokenCap: Self.p6BurstMaxNewTokens,
++                                              isContextFill: false, loopClockStartNs: nil)
++            p6RunMode = "burst"
++            p6Records = [record]
++            p6EndedByOperatorStop = false
++            p6CycleWallSeconds = record.wallSeconds
++            p6SoCProgrammatic = (nil, nil)
++            p6RenderExports()
++            p6Status = String(format: "burst done — %d tokens, window %@, prefill %@",
++                              record.generatedTokens,
++                              record.canonicalWindowTokensPerSecond.map { String(format: "%.2f tok/s", $0) } ?? "n/a (<512 tokens)",
++                              record.prefillTokensPerSecond.map { String(format: "%.2f tok/s", $0) } ?? "n/a")
++        }
++    }
++
++    /// Energy / sustained loop: regenerate the SAME prompt, reset on EOS or
++    /// context fill (cap = n_ctx - prompt), until the operator presses
++    /// Stop; the in-flight generation ends at its next token boundary and
++    /// the loop ALWAYS reports.
++    func p6StartLoop() {
++        guard !p6Running, !p6Looping, llamaContext != nil else { return }
++        guard let text = p6BundledPrompt(p6Prompt) else { p6Status = "ERROR: bundled prompt \(p6Prompt) not found"; return }
++        p6Running = true
++        p6Looping = true
++        p6StopRequested = false
++        Task {
++            defer { p6Running = false; p6Looping = false }
++            var records: [QwenMetalP6Record] = []
++            let socStart = Self.p6ProgrammaticStateOfChargePercent()
++            let loopStartNs = DispatchTime.now().uptimeNanoseconds
++            var index = 0
++            var endedByStop = false
++            while true {
++                if p6StopRequested { endedByStop = true; break }
++                // Cap = context fill: the actor derives n_gen_max = n_ctx -
++                // n_prompt at completion_init (the count is known there).
++                let record = await p6GenerateOnce(text: text, index: index,
++                                                  newTokenCap: Self.p6BurstMaxNewTokens,
++                                                  isContextFill: true, loopClockStartNs: loopStartNs)
++                records.append(record)
++                index += 1
++                p6Status = String(format: "LOOP gen %d: %d tokens, window %@ — %d gens, %d tokens, %.0f s",
++                                  record.index, record.generatedTokens,
++                                  record.canonicalWindowTokensPerSecond.map { String(format: "%.2f", $0) } ?? "n/a",
++                                  records.count, records.reduce(0) { $0 + $1.generatedTokens },
++                                  Double(DispatchTime.now().uptimeNanoseconds - loopStartNs) / NS_PER_S)
++                if record.truncated { endedByStop = true; break }
++                if record.generatedTokens == 0 { p6Status = "loop halted: empty generation (refusing to spin)"; break }
++            }
++            let cycleWall = Double(DispatchTime.now().uptimeNanoseconds - loopStartNs) / NS_PER_S
++            let socEnd = Self.p6ProgrammaticStateOfChargePercent()
++            p6RunMode = "energy-loop"
++            p6Records = records
++            p6EndedByOperatorStop = endedByStop
++            p6CycleWallSeconds = cycleWall
++            p6SoCProgrammatic = (socStart, socEnd)
++            p6RenderExports()
++            p6Status = String(format: "loop stopped — %d generations, %d tokens, cycle wall %.0f s; type SoC at stop + battery health, then Copy export",
++                              records.count, records.reduce(0) { $0 + $1.generatedTokens }, cycleWall)
++        }
++    }
++
++    func p6RequestStop() {
++        p6StopRequested = true
++        Task { await llamaContext?.p6_request_stop() }
++    }
++
++    private func p6GenerateOnce(text: String, index: Int, newTokenCap: Int32, isContextFill: Bool,
++                                loopClockStartNs: UInt64?) async -> QwenMetalP6Record {
++        guard let llamaContext else {
++            return QwenMetalP6Record.empty(index: index)
++        }
++        await llamaContext.p6_set_generation_cap(newTokens: newTokenCap, isContextFill: isContextFill)
++        // The token loop runs detached (no main-actor hop per token — the
++        // P0A-1 measurement lesson); nothing touches the UI until the end.
++        let outcome: (text: String, tEndNs: UInt64) = await Task.detached(priority: .userInitiated) {
++            await llamaContext.completion_init(text: text)
++            var generated = ""
++            while await !llamaContext.is_done {
++                generated += await llamaContext.completion_loop()
++            }
++            return (generated, DispatchTime.now().uptimeNanoseconds)
++        }.value
++        let stamps = await llamaContext.p6_timeline_ns()
++        let tInit = await llamaContext.p6_init_start_ns()
++        let tTok = await llamaContext.p6_tokenize_done_ns()
++        let tEnq = await llamaContext.p6_prompt_enqueued_ns()
++        let stopReason = await llamaContext.p6_stop_reason()
++        let promptCount = Int(await llamaContext.n_prompt)
++        let generated = Int(await llamaContext.n_decode)
++        p6NCtx = Int(await llamaContext.p6_n_ctx())
++        await llamaContext.clear()
++        p6PromptTokenCount = promptCount
++        p6Output = outcome.text
++        p6MemoryLine = Self.p6MemoryLine()
++
++        let seconds = { (ns: UInt64) in Double(ns) / self.NS_PER_S }
++        let timeline = stamps.map(seconds)
++        return QwenMetalP6Record(
++            index: index,
++            promptTokenCount: promptCount,
++            generatedTokens: generated,
++            prefillSpanSeconds: stamps.first.map { seconds($0 - tInit) },
++            tokenizeSeconds: seconds(tTok - tInit),
++            promptEnqueueSeconds: seconds(tEnq - tTok),
++            wallSeconds: seconds(outcome.tEndNs - tInit),
++            elapsedAtEndSeconds: loopClockStartNs.map { seconds(outcome.tEndNs - $0) } ?? 0,
++            overallTokensPerSecond: QwenMetalP6Record.overall(timeline),
++            canonicalWindowTokensPerSecond: QwenMetalP6Record.window(timeline),
++            stopReason: stopReason.isEmpty ? "unknown" : stopReason,
++            truncated: stopReason == "stopRequested")
++    }
++
++    private func p6RenderExports() {
++        guard !p6Records.isEmpty else { return }
++        let ctx = QwenMetalP6ExportContext(
++            runMode: p6RunMode, promptName: p6Prompt, promptTokenCount: p6PromptTokenCount, nCtx: p6NCtx,
++            records: p6Records, endedByOperatorStop: p6EndedByOperatorStop, cycleWallSeconds: p6CycleWallSeconds,
++            batteryHealth: p6BatteryHealth, socStart: p6SoCStart, socEnd: p6SoCEnd,
++            socProgrammaticStart: p6SoCProgrammatic.start, socProgrammaticEnd: p6SoCProgrammatic.end,
++            coldOrWarm: p6ColdOrWarm, round: p6Round, memoryLine: p6MemoryLine)
++        p6ExportText = ctx.text()
++        p6TimelineJSON = ctx.json()
++    }
++
++    /// `UIDevice.batteryLevel` in percent; nil when unavailable (-1). Cross-check only.
++    static func p6ProgrammaticStateOfChargePercent() -> Double? {
++        #if canImport(UIKit) && !os(visionOS)
++        let device = UIDevice.current
++        device.isBatteryMonitoringEnabled = true
++        let level = device.batteryLevel
++        guard level >= 0 else { return nil }
++        return Double(level) * 100
++        #else
++        return nil
++        #endif
++    }
++
++    /// task_info phys_footprint — cross-check only; the Xcode gauge on an
++    /// attached footprint-only launch is the value of record (spec D3).
++    nonisolated static func p6MemoryLine() -> String {
++        var info = task_vm_info_data_t()
++        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
++        let kr = withUnsafeMutablePointer(to: &info) {
++            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
++                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
++            }
++        }
++        let footprint = kr == KERN_SUCCESS ? String(format: "%.0f MB", Double(info.phys_footprint) / 1_048_576) : "n/a"
++        return "memory (cross-check only — Xcode gauge phys_footprint is the value of record; mmap'd GGUF pages are file-backed and excluded, the invariant-3 accounting asymmetry): task_info phys_footprint \(footprint)"
++    }
++
+     func bench() async {
+         guard let llamaContext else {
+             return
+@@ -263,3 +472,224 @@ class LlamaState: ObservableObject {
+         messageLog = ""
+     }
+ }
++
++// MARK: - qwen-metal P6-2: per-generation record + export rendering
++
++struct QwenMetalP6Record: Codable {
++    let index: Int
++    let promptTokenCount: Int
++    let generatedTokens: Int
++    /// completion_init start (before tokenize) -> first sampled token available (wall, s).
++    let prefillSpanSeconds: Double?
++    /// Host tokenization, INSIDE the span (the spec D1 llama.cpp bracket), listed for transparency.
++    let tokenizeSeconds: Double
++    /// llama_decode(prompt batch) enqueue wall — ASYNC on Metal, not prefill; listed for transparency.
++    let promptEnqueueSeconds: Double
++    let wallSeconds: Double
++    let elapsedAtEndSeconds: Double
++    let overallTokensPerSecond: Double?
++    let canonicalWindowTokensPerSecond: Double?
++    /// qwen-metal GenerationStopReason vocabulary.
++    let stopReason: String
++    let truncated: Bool
++
++    static let windowFirstToken = 128
++    static let windowLastToken = 512
++    /// qwen-metal BenchDefaults.burstMaxNewTokens.
++    static let burstMaxNewTokens: Int32 = 640
++
++    var prefillTokensPerSecond: Double? {
++        guard let s = prefillSpanSeconds, s > 0 else { return nil }
++        return Double(promptTokenCount) / s
++    }
++
++    /// 384 / (t512 - t128); nil below 512 generated tokens.
++    static func window(_ t: [Double]) -> Double? {
++        guard t.count >= windowLastToken else { return nil }
++        let elapsed = t[windowLastToken - 1] - t[windowFirstToken - 1]
++        guard elapsed > 0 else { return nil }
++        return Double(windowLastToken - windowFirstToken) / elapsed
++    }
++
++    /// (n - 1) / (t_n - t_1): the first token's availability is the span's start marker.
++    static func overall(_ t: [Double]) -> Double? {
++        guard t.count >= 2, let first = t.first, let last = t.last, last > first else { return nil }
++        return Double(t.count - 1) / (last - first)
++    }
++
++    static func empty(index: Int) -> QwenMetalP6Record {
++        QwenMetalP6Record(index: index, promptTokenCount: 0, generatedTokens: 0, prefillSpanSeconds: nil,
++                          tokenizeSeconds: 0, promptEnqueueSeconds: 0, wallSeconds: 0, elapsedAtEndSeconds: 0,
++                          overallTokensPerSecond: nil, canonicalWindowTokensPerSecond: nil,
++                          stopReason: "noContext", truncated: false)
++    }
++
++    var textLine: String {
++        let overall = overallTokensPerSecond.map { String(format: "%.2f tok/s", $0) } ?? "n/a"
++        let windowed = canonicalWindowTokensPerSecond.map { String(format: ", window %.2f tok/s", $0) } ?? ""
++        return String(format: "  gen %d: overall %@%@ — %d tokens in %.1f s (stop: %@) [elapsed %.1f s]%@",
++                      index, overall, windowed, generatedTokens, wallSeconds, stopReason, elapsedAtEndSeconds,
++                      truncated ? " [truncated by operator stop]" : "")
++    }
++}
++
++struct QwenMetalP6ExportContext {
++    let runMode: String
++    let promptName: String
++    let promptTokenCount: Int
++    let nCtx: Int
++    let records: [QwenMetalP6Record]
++    let endedByOperatorStop: Bool
++    let cycleWallSeconds: Double
++    let batteryHealth: String
++    let socStart: String
++    let socEnd: String
++    let socProgrammaticStart: Double?
++    let socProgrammaticEnd: Double?
++    let coldOrWarm: String
++    let round: String
++    let memoryLine: String
++
++    /// Counts on record (DECISIONS.md 2026-08-22): llama.cpp's tokenizer vs HF.
++    static let recordedCounts: [String: (llama: Int, hf: Int)] = [
++        "decode-essay": (92, 84), "prefill-summarize": (852, 852),
++    ]
++    static let harnessLine = "llama.cpp b9999 47c78692 llama.swiftui + qwen-metal-p0a1 (97e552a, bceddff) + P6-2 patch"
++    static let checkpointLine = "locally converted Q4_K_M GGUF (qwen3-1.7b-70d244cc-Q4_K_M.gguf, sha256 in qwen-metal DECISIONS.md), from Qwen/Qwen3-1.7B @ 70d244cc"
++    static let validationLine = "Metal API validation: OFF (llama.swiftui scheme carries enableGPUValidationMode=1 = Disabled upstream; detached home-screen launches carry no validation layer at all)"
++
++    static func percentOrPlaceholder(_ note: String) -> String {
++        var t = note.trimmingCharacters(in: .whitespacesAndNewlines)
++        if t.hasSuffix("%") { t.removeLast() }
++        return t.isEmpty ? "(record manually)" : t + "%"
++    }
++    static func programmatic(_ v: Double?) -> String { v.map { String(format: "%.1f%%", $0) } ?? "n/a (unavailable)" }
++
++    func text() -> String {
++        let roundTrimmed = round.trimmingCharacters(in: .whitespacesAndNewlines)
++        var lines: [String] = []
++        lines.append(roundTrimmed.isEmpty
++                     ? "qwen-metal Phase 6 row export (PROVISIONAL) — engine: llama-swiftui"
++                     : "qwen-metal Phase 6 row export (round: \(roundTrimmed)) — engine: llama-swiftui")
++        lines.append("round: " + (roundTrimmed.isEmpty ? "(none — PROVISIONAL)" : roundTrimmed))
++        lines.append("harness: " + Self.harnessLine)
++        lines.append("checkpoint: " + Self.checkpointLine)
++        lines.append("mode: " + runMode)
++        let rec = Self.recordedCounts[promptName]
++        let countNote: String
++        if let rec {
++            countNote = promptTokenCount == rec.llama
++                ? "matches the llama.cpp count on record (\(rec.llama)); HF/qwen-metal count \(rec.hf) — tokenizer difference, reported as pinned"
++                : "DIFFERS from the llama.cpp count on record (\(rec.llama)) — investigate before using the row; HF/qwen-metal count \(rec.hf)"
++        } else {
++            countNote = "no count on record for this prompt"
++        }
++        lines.append("prompt: \(promptName) (\(promptTokenCount) tokens, llama.cpp tokenizer, parse_special=true; feeding: RENDERED bundled string; \(countNote))")
++        lines.append("sampling: greedy (llama_sampler_init_greedy); burst cap \(QwenMetalP6Record.burstMaxNewTokens) new tokens; loop cap = n_ctx − prompt (reset on EOS or context fill); n_ctx \(nCtx)")
++        lines.append(Self.validationLine)
++        lines.append("cold/warm: " + (coldOrWarm.isEmpty ? "(record manually)" : coldOrWarm))
++        lines.append("battery health: \(Self.percentOrPlaceholder(batteryHealth)) (maximum capacity %, Settings → Battery → Battery Health, operator-typed — NOT state of charge)")
++        if runMode == "energy-loop" {
++            lines.append("state of charge (Settings → Battery, operator-read at the band marks — value of record): start \(Self.percentOrPlaceholder(socStart)), end \(Self.percentOrPlaceholder(socEnd))")
++            lines.append("state of charge (programmatic UIDevice.batteryLevel — cross-check only, never the value of record): start \(Self.programmatic(socProgrammaticStart)), end \(Self.programmatic(socProgrammaticEnd))")
++        }
++        lines.append(memoryLine)
++        lines.append("definitions: decode tok/s = 384 / (t512 − t128), t_k = host monotonic time right after llama_sampler_sample returns token k (llama_get_logits_ith synchronizes the backend first); prefill span = completion_init start → first sampled token available = tokenize + one llama_decode over the prompt batch + first sample (spec D1); the prompt llama_decode enqueue is async and listed separately")
++        if runMode == "burst" {
++            if let r = records.first { lines.append(contentsOf: Self.generationLines(r)) }
++        } else {
++            let total = records.reduce(0) { $0 + $1.generatedTokens }
++            let sumWall = records.reduce(0.0) { $0 + $1.wallSeconds }
++            let truncated = records.last?.truncated ?? false
++            lines.append(String(format: "energy cycle: %d generations — ended by %@%@", records.count,
++                                endedByOperatorStop ? "operator stop" : "loop halt",
++                                truncated ? " (final generation truncated at a token boundary)" : ""))
++            lines.append(String(format: "cumulative: %d generated tokens; Σ generation wall %.1f s; cycle wall %.1f s", total, sumWall, cycleWallSeconds))
++            lines.append("energy J/token is derived by tools/phase6_analyze.py from these raw fields (never in-harness)")
++            lines.append(contentsOf: records.map(\.textLine))
++            if let last = records.last {
++                lines.append("last generation:")
++                lines.append(contentsOf: Self.generationLines(last))
++            }
++        }
++        return lines.joined(separator: "\n") + "\n"
++    }
++
++    static func generationLines(_ r: QwenMetalP6Record) -> [String] {
++        var lines: [String] = []
++        lines.append(String(format: "generated: %d tokens in %.1f s (stop: %@)", r.generatedTokens, r.wallSeconds, r.stopReason))
++        if let span = r.prefillSpanSeconds, let tps = r.prefillTokensPerSecond {
++            lines.append(String(format: "prefill span: %d tokens in %.3f s = %.2f tok/s (of record — wall, completion_init start to first sampled token available; tokenize %.1f ms inside the span; prompt llama_decode enqueue %.1f ms, async)",
++                                r.promptTokenCount, span, tps, r.tokenizeSeconds * 1000, r.promptEnqueueSeconds * 1000))
++        } else {
++            lines.append("prefill span: n/a (no token generated)")
++        }
++        let overall = r.overallTokensPerSecond.map { String(format: "%.2f tok/s", $0) } ?? "n/a"
++        let windowed = r.canonicalWindowTokensPerSecond.map { String(format: "%.2f tok/s", $0) }
++            ?? String(format: "n/a (needs >= %d generated tokens, got %d)", QwenMetalP6Record.windowLastToken, r.generatedTokens)
++        lines.append("decode rate: overall \(overall), canonical window (tokens \(QwenMetalP6Record.windowFirstToken)-\(QwenMetalP6Record.windowLastToken)) \(windowed)")
++        return lines
++    }
++
++    struct TimelineJSON: Codable {
++        struct Battery: Codable {
++            let healthNote: String?
++            let operatorSoCStart: String?
++            let operatorSoCEnd: String?
++            let programmaticSoCStartPercent: Double?
++            let programmaticSoCEndPercent: Double?
++        }
++        struct CycleTotals: Codable {
++            let generations: Int
++            let totalGeneratedTokens: Int
++            let sumGenerationWallSeconds: Double
++            let cycleWallSeconds: Double
++            let endedBy: String
++            let lastGenerationTruncated: Bool
++        }
++        let schema: String
++        let engine: String
++        let phase: String
++        let round: String?
++        let mode: String
++        let promptName: String
++        let promptTokenCount: Int
++        let feedingMode: String
++        let feedingParity: String
++        let nCtx: Int
++        let elapsedBasis: String
++        let battery: Battery
++        let cycleTotals: CycleTotals
++        let entries: [QwenMetalP6Record]
++    }
++
++    func json() -> String {
++        func nonEmpty(_ s: String) -> String? {
++            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
++            return t.isEmpty ? nil : t
++        }
++        let rec = Self.recordedCounts[promptName]
++        let parity = rec.map { promptTokenCount == $0.llama ? "matches-llama-count-on-record" : "DIFFERS-from-llama-count-on-record" } ?? "no-count-on-record"
++        let isLoop = runMode == "energy-loop"
++        let doc = TimelineJSON(
++            schema: "qwen-metal-timeline/1-external", engine: "llama-swiftui", phase: "6",
++            round: nonEmpty(round), mode: runMode, promptName: promptName, promptTokenCount: promptTokenCount,
++            feedingMode: "rendered", feedingParity: parity, nCtx: nCtx, elapsedBasis: "loopClock",
++            battery: .init(healthNote: nonEmpty(batteryHealth),
++                           operatorSoCStart: isLoop ? nonEmpty(socStart) : nil,
++                           operatorSoCEnd: isLoop ? nonEmpty(socEnd) : nil,
++                           programmaticSoCStartPercent: socProgrammaticStart,
++                           programmaticSoCEndPercent: socProgrammaticEnd),
++            cycleTotals: .init(generations: records.count,
++                               totalGeneratedTokens: records.reduce(0) { $0 + $1.generatedTokens },
++                               sumGenerationWallSeconds: records.reduce(0.0) { $0 + $1.wallSeconds },
++                               cycleWallSeconds: cycleWallSeconds,
++                               endedBy: isLoop ? (endedByOperatorStop ? "operatorStop" : "loopHalt") : "burst",
++                               lastGenerationTruncated: records.last?.truncated ?? false),
++            entries: records)
++        let encoder = JSONEncoder()
++        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
++        guard let data = try? encoder.encode(doc), let text = String(data: data, encoding: .utf8) else { return "{}" }
++        return text + "\n"
++    }
++}
+diff --git a/examples/llama.swiftui/llama.swiftui/UI/ContentView.swift b/examples/llama.swiftui/llama.swiftui/UI/ContentView.swift
+index 03a9347..633ec82 100644
+--- a/examples/llama.swiftui/llama.swiftui/UI/ContentView.swift
++++ b/examples/llama.swiftui/llama.swiftui/UI/ContentView.swift
+@@ -70,6 +70,47 @@ struct ContentView: View {
+                         .font(.footnote.monospaced())
+                 }
+ 
++                // qwen-metal P6-2: Phase 6 parity bench (window rate,
++                // first-token prefill span, per-generation loop timeline,
++                // SoC fields, operator Stop that reports, copyable export).
++                VStack(alignment: .leading, spacing: 6) {
++                    HStack {
++                        Picker("Prompt", selection: $llamaState.p6Prompt) {
++                            Text("decode-essay").tag("decode-essay")
++                            Text("prefill-summarize").tag("prefill-summarize")
++                        }
++                        .pickerStyle(.menu)
++                        .disabled(llamaState.p6Running)
++                        Button("P6 Burst") { llamaState.p6Burst() }
++                            .disabled(llamaState.p6Running)
++                        Button(llamaState.p6Looping ? "P6 Stop (report)" : "P6 Loop") {
++                            if llamaState.p6Looping { llamaState.p6RequestStop() } else { llamaState.p6StartLoop() }
++                        }
++                        .disabled(llamaState.p6Running && !llamaState.p6Looping)
++                    }
++                    HStack {
++                        Button("Copy export") { UIPasteboard.general.string = llamaState.p6ExportText }
++                            .disabled(llamaState.p6ExportText.isEmpty)
++                        Button("Copy JSON") { UIPasteboard.general.string = llamaState.p6TimelineJSON }
++                            .disabled(llamaState.p6TimelineJSON.isEmpty)
++                        Button("Copy output") { UIPasteboard.general.string = llamaState.p6Output }
++                            .disabled(llamaState.p6Output.isEmpty)
++                    }
++                    HStack {
++                        TextField("health %", text: $llamaState.p6BatteryHealth)
++                        TextField("SoC start", text: $llamaState.p6SoCStart)
++                        TextField("SoC end", text: $llamaState.p6SoCEnd)
++                        TextField("cold/warm", text: $llamaState.p6ColdOrWarm)
++                        TextField("round", text: $llamaState.p6Round)
++                    }
++                    .textFieldStyle(.roundedBorder)
++                    if !llamaState.p6Status.isEmpty {
++                        Text(llamaState.p6Status)
++                            .font(.footnote.monospaced())
++                    }
++                }
++                .buttonStyle(.bordered)
++
+                 NavigationLink(destination: DrawerView(llamaState: llamaState)) {
+                     Text("View Models")
+                 }
+-- 
+2.50.1 (Apple Git-155)
+
