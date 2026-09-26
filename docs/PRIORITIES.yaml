@@ -2383,7 +2383,8 @@ tasks:
   - id: P6-2
     rank: 22.2
     title: "External-harness parity patches (MLX LLMEval + llama.swiftui): canonical-window decode rate, first-token prefill span, per-generation loop log, SoC fields, MLX rendered-input mode with the exact token-count signature, validation OFF pins — archived as *-p6.patch"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-26T15:06:59Z
     depends_on: [SPEC-P6]
     blocks: [P6-3]
     deliverable:
