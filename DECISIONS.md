@@ -5497,3 +5497,63 @@ exports' self-consistency is visible in their own lines).
 the three export formats the analyzer must parse + the parity line in
 the runbook checklist; P6-6: the provisional-vs-final causes incl. the
 n_ctx change). P6-3 stays blocked on BW-1.
+
+## 2026-09-26 — BW-1 gate + measurement protocol pre-committed: read-only streaming bandwidth microbench
+
+Written and committed BEFORE any test or kernel code for BW-1 exists
+(METHODOLOGY rule 2; the P0B-4 pattern). Purpose: bound how far the
+2R+1W triad (43.84 GB/s on the device, P0A-1) understates read-mostly
+achievable DRAM bandwidth for decode-shaped traffic — the caveat carried
+since the 2026-08-22 baseline analysis (est. 5–10%). Feeds writeup §5
+(roofline denominator for read-dominated traffic, cited ALONGSIDE the
+triad, never instead of it) and §7 (measured, not an open caveat).
+Nothing gates on it; the committed targets derived from the triad
+(29.4 tok/s decode, the P3/P4/P5 bandwidth-fraction gates) do not move
+(hard rule 6).
+
+- **Kernel (pinned before it exists):** read-only streaming reduce over
+  THREE fp32 buffers of N elements each — the triad's exact three-buffer
+  shape and byte count, so bytes read per iteration = 3 × N × 4 with no
+  write stream. Thread t of T = N / (4 × 64) threads reads, for k in
+  0..<64, float4 index t + k·T from each buffer (coalesced grid-stride
+  across adjacent lanes), accumulates a float4 partial; the 32-lane
+  simdgroup reduces it (`simd_sum`) and lane 0 writes ONE float4 per
+  simdgroup. Threadgroup = 256 threads, uniform dispatch; lanes with
+  t ≥ T contribute zeros. Per-iteration writes = (threadgroups × 8) × 16 B
+  — at the pinned N: T = 393,216, 12,288 partials, 192 KiB, 0.017% of the
+  bytes read. Write traffic is REPORTED and EXCLUDED from the numerator:
+  GB/s = bytes READ ÷ GPU time (GB = 10^9 bytes).
+- **Working set:** N = 96 × 2^20 elements per buffer (384 MiB each) —
+  identical to P0B-4 — 1.125 GiB read per iteration (≥ 1 GiB floor;
+  defeats the SLC). N must be a positive multiple of 256 (float4 × 64
+  per thread); anything else is an explicit error, not a crash.
+- **Iterations / statistic:** 2 warmup (discarded) + 10 measured;
+  sustained = MEDIAN of the measured iterations, min/max spread
+  alongside; GPU timestamps define the rate, wall recorded on every
+  iteration (hard rule 7). Same protocol shape as P0B-4 by construction.
+- **Inputs:** the triad's period-4096 pattern — value = k × 2^-11 − 1
+  with k = (index + offset) mod 4096, offsets 0 / 1234 / 2468 for the
+  three buffers; values in [-1, 1).
+- **Correctness gate (never loosens):** every simdgroup partial, per
+  float4 component, vs a hand-rolled CPU oracle computed from the pure
+  index pattern (no copy of the buffers): max |Δ| ≤ 1e-6. Rationale:
+  a partial sums 32 lanes × 64 float4 × 3 buffers = 6144 terms per
+  component, each a multiple of 2^-11 with |term| < 1, so every
+  intermediate is a multiple of 2^-11 with magnitude ≤ 6144 < 2^13 —
+  exactly representable in fp32 (24-bit significand). Expected Δ = 0
+  regardless of summation order (no fma, no reassociation hazard). A
+  single dropped or duplicated element shifts a partial by a multiple of
+  2^-11 (≥ 4.88e-4 unless that term is the pattern's one zero per
+  period), ~3 orders above the gate; a stride/indexing bug shifts it by
+  O(1–10^3). Small run: EVERY partial checked. Benchmark run: sampled
+  partials (first, middle, last) checked before any figure is printed;
+  failure ⇒ the figure is WITHHELD (P0B-4 refuse-to-report precedent).
+- **Surfaces:** `qwen-metal-cli bandwidth --kernel triad|read-only`
+  (default triad — the documented reproduce command is unchanged) and
+  the app's microbench picker gains BOTH bandwidth kernels, so the P6-4
+  speed session can take the read-only figure and a same-build triad on
+  the phone. The number the writeup cites is the read-only ÷ triad ratio
+  measured in the SAME session on the same build (the Phase 0 triad row
+  was iOS 26.5.2; a cross-OS ratio would be confounded).
+- **Scope of rows:** the Mac row this lands is dev-loop sanity,
+  PROVISIONAL, never a denominator. The device row is owner-james (P6-4).
