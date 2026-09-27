@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-09-24
+last_updated: 2026-09-27
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -2417,7 +2417,8 @@ tasks:
   - id: P6-3
     rank: 22.3
     title: "Phase 6 runbook + row templates + tools/phase6_analyze.py (exports -> tables + figures) with tests; tag phase6-build; full correctness evidence re-run on the tag"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-27 16:14:16+00:00
     depends_on: [P6-1, P6-2, BW-1]
     blocks: [P6-4]
     bw_1_handoff: |
