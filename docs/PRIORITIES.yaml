@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-09-27
+last_updated: 2026-09-28
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -2480,7 +2480,8 @@ tasks:
   - id: P6-4
     rank: 22.4
     title: "Phase 6 speed session (James, detached): all three engines, one session, one iOS build, rotating order + our bookends — burst cold/warm, prefill, 5-min sustained loops, phys_footprint (ours mmap + wired); tripwires walked; exports archived"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-28 00:25:35+00:00
     owner: james
     depends_on: [P6-3]
     blocks: [P6-5]
