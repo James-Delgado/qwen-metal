@@ -1,0 +1,15 @@
+qwen-metal Phase 6 row export (PROVISIONAL) — engine: mlx-llmeval
+round: (none — PROVISIONAL)
+harness: mlx-swift-examples 378f2449 + qwen-metal-p0a1 (47c36a0, 992118b) + P6-2 patch; mlx-swift-lm / mlx-swift versions: RECORD FROM Package.resolved AS BUILT
+checkpoint: mlx-community/Qwen3-1.7B-4bit @ 3b1b1768
+mode: burst
+prompt: decode-essay (84 tokens; feeding: RENDERED tokenizer-direct, special tokens parsed, no template; parity target 84: MATCH — parity signature holds)
+sampling: greedy (temperature 0); thinking: off; burst cap 640 new tokens; loop cap = 4096 − prompt (reset on EOS or context fill)
+Metal API validation: OFF (LLMEval scheme pins enableGPUValidationMode=1 = Disabled; detached home-screen launches carry no validation layer at all)
+cold/warm: (record manually)
+battery health: (record manually) (maximum capacity %, Settings → Battery → Battery Health, operator-typed — NOT state of charge)
+memory (cross-checks only — Xcode gauge phys_footprint is the value of record): MLX activeMemory 923 MB, peakMemory 1035 MB, cacheMemory 20 MB; task_info phys_footprint 1075 MB
+definitions: decode tok/s = 384 / (t512 − t128), t_k = host monotonic time at which generated token k is available (didGenerate callback, one call per token); prefill span = TokenIterator init (prompt-processing start) → first token available; the first token is sampled from the prompt forward (mlx-swift-lm 3.31.3 TokenIterator.prepare), no decode forward inside the span; tokenization excluded and listed separately
+generated: 640 tokens in 15.1 s (stop: maxNewTokens)
+prefill span: 84 tokens in 0.314 s = 267.81 tok/s (of record — wall, prompt-processing start to first generated token available; library promptTime cross-check 0.313 s; tokenize 8.2 ms excluded)
+decode rate: overall 43.18 tok/s, canonical window (tokens 128-512) 43.19 tok/s

@@ -89,6 +89,17 @@ analyzer REFUSES any headline that depends on a missing field.
 - `roofline.weight_bytes` is optional: per-engine weight bytes streamed per
   token, if the writeup wants implied-bandwidth rows for the external
   engines (ours is built in: 967,753,728 B).
+- `operator_overrides` (optional, per session; added at P6-4 by James's
+  decision): fields the operator supplies post hoc for exports that were
+  copied before the app fields were typed — `defaults` (`round`,
+  `battery_health_percent`) applied to every row of the session whose
+  export left the field blank, and `rows.<stem>` (`cold_warm`, or the same
+  two) per file. Only BLANK fields are filled: an export's own value always
+  wins, so an export whose own round line disagrees with the session is
+  still refused. Every filled field is labeled "operator-supplied post hoc"
+  in the analyzer's notes and the refusal ledger, and the export text is
+  never edited. Record the decision in DECISIONS.md whenever this block is
+  used.
 
 ## Regenerating the writeup tables and figures
 

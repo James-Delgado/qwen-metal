@@ -1,0 +1,16 @@
+qwen-metal Phase 6 row export (PROVISIONAL)
+date: 2026-09-28
+device: iPhone16,1 (iOS 26.6.1)
+round: (none — PROVISIONAL)
+battery health: (record manually) (maximum capacity %, Settings → Battery → Battery Health, operator-typed — NOT state of charge)
+engine: qwen-metal q4g64 fused-dequant GPU — weights q4g64, residency mmap, kernels fused, prefill tiled (C=512), attention query-tiled
+prompt: decode-essay (84 prompt tokens)
+mode: burst | cold/warm: (record manually)
+sampling: greedy | Metal API validation: confirm OFF and record (P0A-1 addendum)
+generated: 640 tokens in 22.4 s (stop: maxNewTokens)
+prefill span: 84 tokens in 1.982 s = 42.38 tok/s (of record) — GPU 0.361 s, 397 dispatches (prompt processing only, excl. first decode forward)
+ttft-style (legacy P2-6 field, runner-clocked): 84 prompt tokens, 1.98 s to first token available
+per-token (640 tokens): median GPU 30.77 ms, median wall 32.14 ms, median wall-GPU 1.433 ms, UNSTABLE 200-397 dispatches/token
+decode rate: overall 31.28 tok/s, canonical window (tokens 128-512) 31.21 tok/s
+latency (window tokens 128-512): p50 32.13 ms, p95 33.24 ms, p99 33.90 ms, max 34.89 ms, stalls 0 (spans > 2x p50, n = 384)
+phys_footprint (in-app cross-check; Xcode gauge is the metric of record): 570.3 MB

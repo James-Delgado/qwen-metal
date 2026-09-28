@@ -1,0 +1,15 @@
+qwen-metal PREFILL per-stage GPU attribution — DIAGNOSTIC (PF-1 opt-in mode; never a benchmark row)
+date: 2026-09-28
+device: iPhone16,1 (iOS 26.6.1)
+engine: weights q4g64, residency mmap, kernels fused, prefill tiled (C=512), attention query-tiled
+prompt: 852 tokens in 2 chunk(s); prefills: 2 attributed + 2 production, interleaved, each from an empty cache
+per-class GPU time, median ms per attributed prefill (share of class-sum):
+  matvec                 0.00 ms  (  0.0%)  0 dispatches
+  attention             91.02 ms  (  2.7%)  56 dispatches
+  norm+elementwise     141.92 ms  (  4.2%)  336 dispatches
+  head/tail              5.73 ms  (  0.2%)  5 dispatches
+  gemm                3105.11 ms  ( 92.9%)  392 dispatches
+attributed: class-sum median 3343.8 ms/prefill, GPU span median 3344.5 ms, wall median 3357.2 ms
+production reference: median GPU 3379.3 ms/prefill @ 789 dispatches (one command buffer per chunk) = 252.12 tok/s on GPU time
+sanity: class-sum / production GPU = 0.99 (pre-committed band 0.50-2.00, DECISIONS.md 2026-09-18)
+note: split-mode sums include per-command-buffer cost; the production prefill span (P5-1 D1) is unchanged and lives in generate/benchmark reports.

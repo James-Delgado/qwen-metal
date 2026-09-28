@@ -1,0 +1,24 @@
+qwen-metal bandwidth microbench — read-only streaming reduce (BW-1)
+date: 2026-09-28
+device: iPhone16,1 (iOS 26.6.1)
+gpu: Apple A17 Pro GPU
+battery health: 100%
+cold/warm: cold
+protocol: 3 × 100663296 fp32 buffers (1.125 GiB read/iteration), 2 warmup discarded + 10 measured, sustained = median (GPU timestamps; wall alongside)
+geometry: 64 float4/thread/buffer, 256-thread threadgroups, one float4 partial per simdgroup
+bytes read/iteration: 1207959552
+bytes written/iteration: 196608 (0.016% of read; excluded from GB/s)
+correctness: 3 sampled partials within pre-committed gate (max |Δ| 0 <= 1e-06)
+per-iteration GB/s (GPU time; wall recorded alongside):
+  iter  1:   44.48 GB/s  (gpu 0.0272s, wall 0.0276s, overhead 0.0005s)
+  iter  2:   44.59 GB/s  (gpu 0.0271s, wall 0.0276s, overhead 0.0005s)
+  iter  3:   44.05 GB/s  (gpu 0.0274s, wall 0.0280s, overhead 0.0006s)
+  iter  4:   44.06 GB/s  (gpu 0.0274s, wall 0.0279s, overhead 0.0005s)
+  iter  5:   44.72 GB/s  (gpu 0.0270s, wall 0.0276s, overhead 0.0006s)
+  iter  6:   44.30 GB/s  (gpu 0.0273s, wall 0.0280s, overhead 0.0007s)
+  iter  7:   44.64 GB/s  (gpu 0.0271s, wall 0.0277s, overhead 0.0006s)
+  iter  8:   44.70 GB/s  (gpu 0.0270s, wall 0.0277s, overhead 0.0007s)
+  iter  9:   44.58 GB/s  (gpu 0.0271s, wall 0.0278s, overhead 0.0007s)
+  iter 10:   44.51 GB/s  (gpu 0.0271s, wall 0.0278s, overhead 0.0007s)
+sustained (median): 44.55 GB/s
+spread: min 44.05 / max 44.72 GB/s

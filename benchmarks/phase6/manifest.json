@@ -1,0 +1,106 @@
+{
+  "device": "iPhone16,1 (iPhone 15 Pro)",
+  "engine_build": {
+    "tag": "phase6-build",
+    "commit": "17cd19c8a1de8d9ebe689976eec594ef3de8aa9d"
+  },
+  "sessions": {
+    "speed": {
+      "round": "phase6-speed-2026-09-28",
+      "dir": "speed",
+      "date": "2026-09-27 21:16 EST (2026-09-28 UTC; the app date stamps read 2026-09-28)",
+      "ios_build": "26.6.1",
+      "xcode": "26.6 (17F113)",
+      "airplane_mode": false,
+      "soc_at_start_percent": 65,
+      "battery_health_percent": 100,
+      "mlx_versions_as_built": "mlx-swift 0.31.4 (dc43e62d), mlx-swift-lm 3.31.3 (1c05248b), swift-transformers 1.3.0 (b38443e4) — Package.resolved in the clone",
+      "operator_overrides": {
+        "note": "Decided by James 2026-09-27 (in conversation): the session's rows were exported before the round marker was typed (all headers read PROVISIONAL) and the MLX/llama.cpp panels' cold/warm and battery-health fields were left blank; James declined a redo and supplied the fields here — round = this session, first launch of each app = cold, all later rows warm, battery health 100% throughout. The export text is never edited; the analyzer labels every filled field as operator-supplied.",
+        "defaults": {
+          "round": "phase6-speed-2026-09-28",
+          "battery_health_percent": 100
+        },
+        "rows": {
+          "mlx-decode-cold-0": {
+            "cold_warm": "cold"
+          },
+          "llama-decode-cold-0": {
+            "cold_warm": "cold"
+          },
+          "mlx-decode-warm-1": {
+            "cold_warm": "warm"
+          },
+          "mlx-decode-warm-2": {
+            "cold_warm": "warm"
+          },
+          "mlx-decode-warm-3": {
+            "cold_warm": "warm"
+          },
+          "llama-decode-warm-1": {
+            "cold_warm": "warm"
+          },
+          "llama-decode-warm-2": {
+            "cold_warm": "warm"
+          },
+          "llama-decode-warm-3": {
+            "cold_warm": "warm"
+          },
+          "ours-prefill-warm-0": {
+            "cold_warm": "warm"
+          },
+          "ours-prefill-warm-1": {
+            "cold_warm": "warm"
+          },
+          "ours-prefill-warm-2": {
+            "cold_warm": "warm"
+          },
+          "mlx-prefill-warm-0": {
+            "cold_warm": "warm"
+          },
+          "mlx-prefill-warm-1": {
+            "cold_warm": "warm"
+          },
+          "mlx-prefill-warm-2": {
+            "cold_warm": "warm"
+          },
+          "llama-prefill-warm-0": {
+            "cold_warm": "warm"
+          },
+          "llama-prefill-warm-1": {
+            "cold_warm": "warm"
+          },
+          "llama-prefill-warm-2": {
+            "cold_warm": "warm"
+          },
+          "ours-bookend-close": {
+            "cold_warm": "warm"
+          },
+          "ours-sustained-0": {
+            "cold_warm": "warm"
+          },
+          "mlx-sustained-0": {
+            "cold_warm": "warm"
+          },
+          "llama-sustained-0": {
+            "cold_warm": "warm"
+          }
+        }
+      },
+      "footprint_mb": {
+        "ours-mmap": 574.9,
+        "ours-wired": 1460.0,
+        "mlx": 1070.0,
+        "llama": 560.9
+      },
+      "footprint_note": "Xcode memory gauge, attached footprint-only launches after the timed rows (F20, James): ours mmap 574.9 MB, ours wiredCopy 1.46 GB, LLMEval 1.07 GB, llama.swiftui 560.9 MB",
+      "ios_build_rechecked_at_end": "26.6.1 (F21: unchanged)",
+      "deviations": [
+        "bandwidth pair run twice, not three times",
+        "no JSON timelines copied (text exports only; our sustained row's elapsed basis = sum of generation wall)",
+        "airplane mode off",
+        "SoC 65% at start"
+      ]
+    }
+  }
+}

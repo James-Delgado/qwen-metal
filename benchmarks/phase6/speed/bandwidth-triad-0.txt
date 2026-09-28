@@ -1,0 +1,22 @@
+qwen-metal bandwidth microbench — STREAM triad (P0B-4)
+date: 2026-09-28
+device: iPhone16,1 (iOS 26.6.1)
+gpu: Apple A17 Pro GPU
+battery health: 100%
+cold/warm: Warm
+protocol: 3 × 100663296 fp32 buffers (1.125 GiB moved/iteration), 2 warmup discarded + 10 measured, sustained = median (GPU timestamps; wall alongside)
+bytes moved/iteration (2R+1W): 1207959552
+correctness: 3 sampled elements within pre-committed gate (max |Δ| 0 <= 1e-06)
+per-iteration GB/s (GPU time; wall recorded alongside):
+  iter  1:   41.37 GB/s  (gpu 0.0292s, wall 0.0297s, overhead 0.0005s)
+  iter  2:   41.50 GB/s  (gpu 0.0291s, wall 0.0296s, overhead 0.0005s)
+  iter  3:   41.45 GB/s  (gpu 0.0291s, wall 0.0297s, overhead 0.0005s)
+  iter  4:   41.73 GB/s  (gpu 0.0290s, wall 0.0295s, overhead 0.0005s)
+  iter  5:   42.04 GB/s  (gpu 0.0287s, wall 0.0298s, overhead 0.0011s)
+  iter  6:   41.03 GB/s  (gpu 0.0294s, wall 0.0301s, overhead 0.0007s)
+  iter  7:   40.98 GB/s  (gpu 0.0295s, wall 0.0302s, overhead 0.0007s)
+  iter  8:   42.02 GB/s  (gpu 0.0287s, wall 0.0297s, overhead 0.0009s)
+  iter  9:   42.45 GB/s  (gpu 0.0285s, wall 0.0288s, overhead 0.0004s)
+  iter 10:   41.02 GB/s  (gpu 0.0295s, wall 0.0302s, overhead 0.0007s)
+sustained (median): 41.48 GB/s
+spread: min 40.98 / max 42.45 GB/s

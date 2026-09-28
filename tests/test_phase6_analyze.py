@@ -697,3 +697,43 @@ def test_roofline_depth_uses_each_engines_prompt_token_count(tmp_path):
     m["roofline"] = {"weight_bytes": {"llama": 1_190_000_000}}
     r = an.analyze_archive(write_archive(tmp_path / "a", m, full_speed_files(), {}))
     assert r.roofline["llama"].bytes_per_token == 1_190_000_000 + an.KV_BYTES_PER_POSITION * (92 + 320)
+
+
+def test_llama_count_equal_to_hf_count_is_parity(tmp_path):
+    """P6-4 finding: the P6-2 harness carries 92 as the llama.cpp decode-essay count on
+    record, but 92 was the Phase 0 Mac `llama-completion` figure; the Phase 0 device
+    rows (results.md) and the P6-4 rows read 84 = the HF count. A count equal to the
+    HF/qwen-metal count is the strongest parity outcome and must not be refused."""
+    line = ("prompt: decode-essay (84 tokens, llama.cpp tokenizer, parse_special=true; feeding: RENDERED "
+            "bundled string; DIFFERS from the llama.cpp count on record (92) — investigate before using "
+            "the row; HF/qwen-metal count 84)")
+    row = ex.parse_export_text(external(engine="llama-swiftui", prompt_line=line))
+    assert row.llama_count_matches is True and row.prompt_token_count == 84
+    truly_off = ex.parse_export_text(external(engine="llama-swiftui", prompt_line=llama_prompt_line(count=95, differs=True)))
+    assert truly_off.llama_count_matches is False
+
+
+def test_manifest_operator_overrides_supply_missing_fields_and_are_labeled(tmp_path):
+    """P6-4 (decided by James 2026-09-27): rows exported without the round marker /
+    cold-warm / health typed are accepted when the operator supplies those fields in
+    manifest.json; the export text is never edited, the override is labeled, and an
+    export whose OWN round disagrees with the session is still refused."""
+    files = full_speed_files()
+    files["ours-decode-warm-1.txt"] = ours_burst(window=31.5, round_=None)
+    files["mlx-decode-warm-1.txt"] = external(window=39.0, round_=None, cold_warm="(record manually)", health=None)
+    files["ours-decode-warm-2.txt"] = ours_burst(window=31.9, round_="phase6-speed-2026-09-30")
+    m = manifest()
+    m["sessions"]["speed"]["operator_overrides"] = {
+        "note": "typed post hoc by the operator",
+        "defaults": {"round": ROUND_SPEED, "battery_health_percent": 100},
+        "rows": {"mlx-decode-warm-1": {"cold_warm": "warm"}},
+    }
+    r = an.analyze_archive(write_archive(tmp_path / "a", m, files, {}))
+    assert r.speed["ours"].decode_warm.n == 3  # warm-1 rescued, warm-2 (own round disagrees) still refused
+    assert r.speed["mlx"].decode_warm.n == 3
+    assert any("ours-decode-warm-2" in x and "round" in x for x in r.refusals)
+    assert any("ours-decode-warm-1" in x and "operator-supplied" in x for x in r.notes)
+    assert any("mlx-decode-warm-1" in x and "cold/warm" in x for x in r.notes)
+    # without the override block the same rows are refused (the existing rule)
+    r2 = an.analyze_archive(write_archive(tmp_path / "b", manifest(), files, {}))
+    assert r2.speed["ours"].decode_warm.n == 2 and r2.speed["mlx"].decode_warm.n == 2

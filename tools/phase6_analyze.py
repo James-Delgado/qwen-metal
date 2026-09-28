@@ -32,6 +32,9 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import phase6_exports as ex  # noqa: E402
 from phase6_exports import Refusal  # noqa: E402,F401  (re-exported for callers)
+from phase6_figures import (  # noqa: E402,F401  (re-exported for callers)
+    ENGINE_COLORS, ENGINE_LABELS, ENGINES, EnergyBar, ThermalSeries, energy_bar_data,
+    render_energy_bars, render_thermal_chart)
 
 # --- Pre-committed constants, consumed verbatim (never tuned here) -----------
 RATED_WATT_HOURS = 12.6                       # iPhone 15 Pro rated capacity (DECISIONS 2026-09-05)
@@ -50,13 +53,9 @@ WEIGHT_BYTES = 967_753_728                    # packed q4g64 weights streamed pe
 KV_BYTES_PER_POSITION = 28 * 2 * 8 * 128 * 2  # 28 layers × K,V × 8 kv heads × head_dim 128 × fp16
 WINDOW_MEDIAN_DEPTH_OFFSET = (128 + 512) // 2  # generated-token depth at the window's median
 DEFAULT_DECODE_PROMPT_TOKENS = 84             # decode-essay, HF count (used only when no decode row parsed)
-ENGINES = ("ours", "mlx", "llama")
 DECODE_PROMPT = "decode-essay"                # decode rows, sustained loops, energy cycles (PLAN pins)
 PREFILL_PROMPT = "prefill-summarize"          # prefill rows
 ENERGY_PROMPT = DECODE_PROMPT
-ENGINE_LABELS = {"ours": "qwen-metal", "mlx": "MLX LLMEval", "llama": "llama.cpp"}
-# dataviz reference palette, categorical slots 1–3 (validated all-pairs, both modes)
-ENGINE_COLORS = {"ours": "#2a78d6", "mlx": "#eb6834", "llama": "#1baf7a"}
 
 
 # --------------------------------------------------------------------------
@@ -207,25 +206,6 @@ class Roofline:
 
 
 @dataclass
-class ThermalSeries:
-    engine: str
-    file: str
-    elapsed_s: list[float]
-    window_tok_s: list[float]
-    source: str          # json | text
-    basis: str           # loopClock | sumOfGenerationWall
-    bold: bool = False
-
-
-@dataclass
-class EnergyBar:
-    engine: str
-    mean: float
-    statistical_halfwidth: float
-    systematic_halfwidth: float
-
-
-@dataclass
 class Report:
     manifest: dict
     speed: dict
@@ -329,8 +309,9 @@ def load_manifest(root: Path) -> dict:
         raise Refusal(f"{path} does not parse: {e}") from e
 
 
-def load_session_rows(root: Path, session: dict, refusals: list[str]):
+def load_session_rows(root: Path, session: dict, refusals: list[str], notes: Optional[list[str]] = None):
     """Yield (name, RowExport|BandwidthExport, Timeline|None) for one session dir."""
+    notes = notes if notes is not None else []
     directory = root / session.get("dir", "")
     if not directory.is_dir():
         raise Refusal(f"session directory {directory} missing")
@@ -348,6 +329,7 @@ def load_session_rows(root: Path, session: dict, refusals: list[str]):
             refusals.append(f"{path.stem}: unreadable export — {e}")
             continue
         timeline = _sidecar_timeline(path, refusals)
+        apply_operator_overrides(row, session, path.stem, notes)
         yield path.stem, row, timeline
 
 
@@ -360,6 +342,33 @@ def _sidecar_timeline(path: Path, refusals: list[str]) -> Optional[ex.Timeline]:
     except ex.ParseError as e:
         refusals.append(f"{sidecar.name}: unreadable timeline JSON — {e}")
         return None
+
+
+OVERRIDABLE_FIELDS = ("round", "cold_warm", "battery_health_percent")
+
+
+def apply_operator_overrides(row: ex.RowExport, session: dict, name: str, notes: list[str]) -> None:
+    """Fill operator fields the export left blank from manifest `operator_overrides`
+    (decided by James 2026-09-27, P6-4). Only BLANK fields are filled — an export's
+    own value always wins — and every filled field is labeled in the notes. The
+    export text itself is never edited."""
+    overrides = session.get("operator_overrides") or {}
+    supplied = dict(overrides.get("defaults") or {})
+    supplied.update((overrides.get("rows") or {}).get(name) or {})
+    filled = []
+    for field_name in OVERRIDABLE_FIELDS:
+        if field_name not in supplied:
+            continue
+        if field_name == "round":
+            if row.provisional and row.round is None:
+                row.round, row.provisional = str(supplied["round"]), False
+                filled.append("round")
+        elif getattr(row, field_name) is None:
+            value = supplied[field_name]
+            setattr(row, field_name, float(value) if field_name == "battery_health_percent" else str(value))
+            filled.append("cold/warm" if field_name == "cold_warm" else "battery health")
+    if filled:
+        notes.append(f"{name}: operator-supplied post hoc via manifest — {', '.join(filled)}")
 
 
 def headline_eligibility(row: ex.RowExport, session: dict, name: str) -> tuple[list[str], list[str]]:
@@ -397,7 +406,7 @@ def analyze_speed(root: Path, manifest: dict, refusals: list[str], notes: list[s
     if session is None:
         refusals.append("manifest has no speed session — no headline speed rows")
         return speed, bandwidth, None
-    for name, item, timeline in load_session_rows(root, session, refusals):
+    for name, item, timeline in load_session_rows(root, session, refusals, notes):
         if isinstance(item, ex.BandwidthExport):
             _add_bandwidth(bandwidth, name, item)
             continue
@@ -487,7 +496,7 @@ def sustained_from(name: str, row: ex.RowExport, timeline: Optional[ex.Timeline]
 # Energy round
 # --------------------------------------------------------------------------
 
-def analyze_energy(root: Path, manifest: dict, refusals: list[str]) -> tuple[dict, list]:
+def analyze_energy(root: Path, manifest: dict, refusals: list[str], notes: list[str]) -> tuple[dict, list]:
     sessions = manifest.get("sessions", {})
     session = sessions.get("energy")
     energy = {e: EngineEnergy(engine=e) for e in ENGINES}
@@ -499,7 +508,7 @@ def analyze_energy(root: Path, manifest: dict, refusals: list[str]) -> tuple[dic
     idle = _idle_baseline(session, session_refusals)
     cycles: dict[str, list[EnergyCycle]] = {e: [] for e in ENGINES}
     rows = []
-    for name, row, timeline in load_session_rows(root, session, refusals):
+    for name, row, timeline in load_session_rows(root, session, refusals, notes):
         if isinstance(row, ex.BandwidthExport):
             refusals.append(f"{name}: bandwidth export in the energy session ignored")
             continue
@@ -626,85 +635,6 @@ def _mark_median_cycles(series: list[ThermalSeries]) -> None:
         keyed[len(keyed) // 2].bold = True
 
 
-def render_thermal_chart(series: list[ThermalSeries], out: Path) -> Path:
-    plt = _pyplot()
-    fig, ax = plt.subplots(figsize=(9, 4.8), dpi=150)
-    for s in series:
-        if not s.window_tok_s:
-            continue
-        ax.plot([e / 60 for e in s.elapsed_s], s.window_tok_s, color=ENGINE_COLORS[s.engine],
-                linewidth=2.0 if s.bold else 1.2, alpha=1.0 if s.bold else 0.35,
-                label=ENGINE_LABELS[s.engine] if s.bold else None)
-        if s.bold:
-            ax.annotate(ENGINE_LABELS[s.engine], (s.elapsed_s[-1] / 60, s.window_tok_s[-1]),
-                        textcoords="offset points", xytext=(6, 0), fontsize=9, color="#52514e", va="center")
-    ax.set_xlabel("elapsed in the energy cycle (min)")
-    ax.set_ylabel("decode tok/s, canonical window (128–512)")
-    ax.set_title("Sustained-thermal: per-generation window rate, all cycles (median cycle bold)")
-    _style_axes(ax)
-    if any(s.bold for s in series):
-        ax.legend(frameon=False, fontsize=9)
-    fig.tight_layout()
-    fig.savefig(out)
-    plt.close(fig)
-    return out
-
-
-def energy_bar_data(energy: dict) -> list[EnergyBar]:
-    bars = []
-    for engine in ENGINES:
-        h = energy[engine].headline
-        if h is None:
-            continue
-        bars.append(EnergyBar(engine, h.mean_j_per_token, (h.spread[1] - h.spread[0]) / 2,
-                              h.mean_j_per_token * h.systematic_fraction))
-    return bars
-
-
-def render_energy_bars(energy: dict, out: Path) -> Path:
-    plt = _pyplot()
-    bars = energy_bar_data(energy)
-    fig, ax = plt.subplots(figsize=(6.5, 4.4), dpi=150)
-    xs = list(range(len(bars)))
-    for x, b in zip(xs, bars):
-        ax.bar(x, b.mean, width=0.55, color=ENGINE_COLORS[b.engine], linewidth=0)
-        ax.errorbar(x - 0.08, b.mean, yerr=b.statistical_halfwidth, fmt="none", ecolor="#0b0b0b", capsize=4,
-                    linewidth=1.2, label="statistical (min–max over n cycles)" if x == 0 else None)
-        ax.errorbar(x + 0.08, b.mean, yerr=b.systematic_halfwidth, fmt="none", ecolor="#52514e", capsize=4,
-                    linewidth=1.2, linestyle="--", label="systematic (SoC-reading quantization)" if x == 0 else None)
-        ax.annotate(f"{b.mean:.3f} J", (x - 0.28, b.mean), textcoords="offset points", xytext=(0, 6),
-                    ha="left", fontsize=9)
-    ax.set_xticks(xs, [ENGINE_LABELS[b.engine] for b in bars])
-    ax.set_ylabel("net J per token")
-    ax.set_title("Energy per token — sustained, idle-subtracted")
-    if bars:
-        ax.legend(frameon=False, fontsize=8, loc="lower right")
-    refused = [ENGINE_LABELS[e] for e in ENGINES if energy[e].headline is None]
-    if refused:
-        fig.text(0.01, 0.01, "no headline (below the ≥3 valid-cycle pin or refused): " + ", ".join(refused),
-                 fontsize=8, color="#52514e", ha="left", va="bottom")
-    _style_axes(ax)
-    fig.tight_layout(rect=(0, 0.04, 1, 1))
-    fig.savefig(out)
-    plt.close(fig)
-    return out
-
-
-def _pyplot():
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    return plt
-
-
-def _style_axes(ax) -> None:
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    ax.grid(axis="y", color="#e5e4df", linewidth=0.6)
-    ax.set_axisbelow(True)
-    ax.set_facecolor("#fcfcfb")
-
-
 # --------------------------------------------------------------------------
 # Whole archive
 # --------------------------------------------------------------------------
@@ -715,7 +645,7 @@ def analyze_archive(root: Path) -> Report:
     refusals: list[str] = []
     notes: list[str] = []
     speed, bandwidth, bookend_delta = analyze_speed(root, manifest, refusals, notes)
-    energy, energy_rows = analyze_energy(root, manifest, refusals)
+    energy, energy_rows = analyze_energy(root, manifest, refusals, notes)
     return Report(
         manifest=manifest, speed=speed, energy=energy, bandwidth=bandwidth,
         roofline=roofline(speed, bandwidth, manifest), verdict=success_verdict(speed),

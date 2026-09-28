@@ -1,0 +1,15 @@
+qwen-metal per-stage GPU attribution — DIAGNOSTIC (D1 opt-in mode; never a benchmark row)
+date: 2026-09-28
+device: iPhone16,1 (iOS 26.6.1)
+engine: weights q4g64, residency mmap, fused (P4-7 split-K SDPA + P4-3/P4-6 folds) kernel structure
+prompt: 84 tokens; decode steps: 32 attributed + 32 production, interleaved (cache depth 83-146)
+per-class GPU time, median ms per attributed token (share of class-sum):
+  matvec              22.17 ms  (76.3%)
+  attention            1.17 ms  (4.0%)
+  norm+elementwise     0.42 ms  (1.4%)
+  head/tail            5.29 ms  (18.2%)
+  gemm                 0.00 ms  (0.0%)
+attributed: class-sum median 29.07 ms/token, GPU span median 29.14 ms, wall median 30.03 ms
+production reference: median GPU 29.03 ms/token @ 199 dispatches (one command buffer)
+sanity: class-sum / production GPU = 1.00 (pre-committed band 0.50-2.00, DECISIONS.md 2026-09-08)
+note: split-mode sums include per-command-buffer cost; the production wall-GPU overhead metric (P2-5) is unchanged and lives in generate/benchmark reports.

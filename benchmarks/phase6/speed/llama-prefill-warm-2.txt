@@ -1,0 +1,15 @@
+qwen-metal Phase 6 row export (PROVISIONAL) — engine: llama-swiftui
+round: (none — PROVISIONAL)
+harness: llama.cpp b9999 47c78692 llama.swiftui + qwen-metal-p0a1 (97e552a, bceddff) + P6-2 patch
+checkpoint: locally converted Q4_K_M GGUF (qwen3-1.7b-70d244cc-Q4_K_M.gguf, sha256 in qwen-metal DECISIONS.md), from Qwen/Qwen3-1.7B @ 70d244cc
+mode: burst
+prompt: prefill-summarize (852 tokens, llama.cpp tokenizer, parse_special=true; feeding: RENDERED bundled string; matches the llama.cpp count on record (852); HF/qwen-metal count 852 — tokenizer difference, reported as pinned)
+sampling: greedy (llama_sampler_init_greedy); burst cap 640 new tokens; loop cap = n_ctx − prompt (reset on EOS or context fill); n_ctx 4096
+Metal API validation: OFF (llama.swiftui scheme carries enableGPUValidationMode=1 = Disabled upstream; detached home-screen launches carry no validation layer at all)
+cold/warm: (record manually)
+battery health: (record manually) (maximum capacity %, Settings → Battery → Battery Health, operator-typed — NOT state of charge)
+memory (cross-check only — Xcode gauge phys_footprint is the value of record; mmap'd GGUF pages are file-backed and excluded, the invariant-3 accounting asymmetry): task_info phys_footprint 571 MB
+definitions: decode tok/s = 384 / (t512 − t128), t_k = host monotonic time right after llama_sampler_sample returns token k (llama_get_logits_ith synchronizes the backend first); prefill span = completion_init start → first sampled token available = tokenize + one llama_decode over the prompt batch + first sample (spec D1); the prompt llama_decode enqueue is async and listed separately
+generated: 617 tokens in 20.6 s (stop: eos)
+prefill span: 852 tokens in 1.928 s = 441.87 tok/s (of record — wall, completion_init start to first sampled token available; tokenize 11.3 ms inside the span; prompt llama_decode enqueue 1119.9 ms, async)
+decode rate: overall 33.07 tok/s, canonical window (tokens 128-512) 33.35 tok/s

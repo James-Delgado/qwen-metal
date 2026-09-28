@@ -2480,7 +2480,8 @@ tasks:
   - id: P6-4
     rank: 22.4
     title: "Phase 6 speed session (James, detached): all three engines, one session, one iOS build, rotating order + our bookends — burst cold/warm, prefill, 5-min sustained loops, phys_footprint (ours mmap + wired); tripwires walked; exports archived"
-    status: in_progress
+    status: done
+    completed_at: 2026-09-28 02:57:17+00:00
     started_at: 2026-09-28 00:25:35+00:00
     owner: james
     depends_on: [P6-3]
@@ -2502,11 +2503,19 @@ tasks:
       DIAGNOSTIC) on the same build/session feed writeup section 6.
       The MLX window rate from this session is the denominator of the
       success-metric verdict (P6-EXEC).
+    p6_4_landed: |
+      2026-09-27 (done, James on-device): 30 exports + 2 attribution exports archived under
+      benchmarks/phase6/speed/ (+ manifest.json); results.md rows + DECISIONS.md entry.
+      Decode warm window medians ours 31.16 / MLX 43.40 / llama.cpp 34.80 (ratio 0.718 —
+      NOT MET input for P6-EXEC); prefill 232.63 / 387.60 / 440.71; 5-min plateaus 22.83 /
+      34.94 / 27.41; footprints 574.9 MB mmap, 1.46 GB wired, 1.07 GB, 560.9 MB; bandwidth
+      pair ratios 1.074 / 0.996 (n=2). Tripwires PASS/PASS; bookend delta +0.05. Operator
+      fields supplied post hoc by James's decision (manifest operator_overrides, labeled).
 
   - id: P6-5
     rank: 22.5
     title: "Phase 6 energy round (James, detached): idle baseline (>=4% SoC) + >=3 battery-delta cycles per engine in the 80->70 band, Latin-square order, health-based capacity basis, validity walked per cycle; timelines archived (the sustained-thermal chart data)"
-    status: blocked
+    status: ready
     owner: james
     depends_on: [P6-4]
     blocks: [P6-6]
@@ -2526,6 +2535,13 @@ tasks:
       averaged into the table; the decision lands in DECISIONS.md.
       Instruments Energy Log, if captured, is "energy impact
       (relative, unitless)" only.
+    p6_4_handoff: |
+      Same iOS build as the speed session: 26.6.1. Copy the JSON timeline for EVERY cycle
+      (the speed session copied text only). Type round `phase6-energy-<date>`, battery
+      health, cold/warm, and the Settings SoC marks in the app BEFORE copying; the
+      manifest override mechanism exists but the energy math needs the SoC marks from the
+      export (operator_overrides does not cover SoC). Idle baseline (>=4% drop) goes in
+      manifest.json -> sessions.energy.idle_baseline. Runbook section 3.
 
   - id: P6-6
     rank: 22.6

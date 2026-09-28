@@ -245,10 +245,16 @@ def _parse_prompt_line(row: RowExport, line: str) -> bool:
     m = _PROMPT_LLAMA.match(line)
     if m:
         row.prompt_name, row.prompt_token_count = m.group(1), int(m.group(2))
-        if "DIFFERS from the llama.cpp count on record" in line:
-            row.llama_count_matches = False
-        elif "matches the llama.cpp count on record" in line:
+        hf = re.search(r"HF/qwen-metal count (\d+)", line)
+        if "matches the llama.cpp count on record" in line:
             row.llama_count_matches = True
+        elif hf and int(hf.group(1)) == row.prompt_token_count:
+            # Equal to the HF count is the strongest parity outcome (P6-4 finding:
+            # the harness's "92 on record" was the Phase 0 Mac CLI figure; the
+            # Phase 0 device rows read 84).
+            row.llama_count_matches = True
+        elif "DIFFERS from the llama.cpp count on record" in line:
+            row.llama_count_matches = False
         return True
     return False
 

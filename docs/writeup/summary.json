@@ -1,0 +1,426 @@
+{
+  "sessions": {
+    "speed": {
+      "round": "phase6-speed-2026-09-28",
+      "dir": "speed",
+      "date": "2026-09-27 21:16 EST (2026-09-28 UTC; the app date stamps read 2026-09-28)",
+      "ios_build": "26.6.1",
+      "xcode": "26.6 (17F113)",
+      "airplane_mode": false,
+      "soc_at_start_percent": 65,
+      "battery_health_percent": 100,
+      "mlx_versions_as_built": "mlx-swift 0.31.4 (dc43e62d), mlx-swift-lm 3.31.3 (1c05248b), swift-transformers 1.3.0 (b38443e4) — Package.resolved in the clone",
+      "operator_overrides": {
+        "note": "Decided by James 2026-09-27 (in conversation): the session's rows were exported before the round marker was typed (all headers read PROVISIONAL) and the MLX/llama.cpp panels' cold/warm and battery-health fields were left blank; James declined a redo and supplied the fields here — round = this session, first launch of each app = cold, all later rows warm, battery health 100% throughout. The export text is never edited; the analyzer labels every filled field as operator-supplied.",
+        "defaults": {
+          "round": "phase6-speed-2026-09-28",
+          "battery_health_percent": 100
+        },
+        "rows": {
+          "mlx-decode-cold-0": {
+            "cold_warm": "cold"
+          },
+          "llama-decode-cold-0": {
+            "cold_warm": "cold"
+          },
+          "mlx-decode-warm-1": {
+            "cold_warm": "warm"
+          },
+          "mlx-decode-warm-2": {
+            "cold_warm": "warm"
+          },
+          "mlx-decode-warm-3": {
+            "cold_warm": "warm"
+          },
+          "llama-decode-warm-1": {
+            "cold_warm": "warm"
+          },
+          "llama-decode-warm-2": {
+            "cold_warm": "warm"
+          },
+          "llama-decode-warm-3": {
+            "cold_warm": "warm"
+          },
+          "ours-prefill-warm-0": {
+            "cold_warm": "warm"
+          },
+          "ours-prefill-warm-1": {
+            "cold_warm": "warm"
+          },
+          "ours-prefill-warm-2": {
+            "cold_warm": "warm"
+          },
+          "mlx-prefill-warm-0": {
+            "cold_warm": "warm"
+          },
+          "mlx-prefill-warm-1": {
+            "cold_warm": "warm"
+          },
+          "mlx-prefill-warm-2": {
+            "cold_warm": "warm"
+          },
+          "llama-prefill-warm-0": {
+            "cold_warm": "warm"
+          },
+          "llama-prefill-warm-1": {
+            "cold_warm": "warm"
+          },
+          "llama-prefill-warm-2": {
+            "cold_warm": "warm"
+          },
+          "ours-bookend-close": {
+            "cold_warm": "warm"
+          },
+          "ours-sustained-0": {
+            "cold_warm": "warm"
+          },
+          "mlx-sustained-0": {
+            "cold_warm": "warm"
+          },
+          "llama-sustained-0": {
+            "cold_warm": "warm"
+          }
+        }
+      },
+      "footprint_mb": {
+        "ours-mmap": 574.9,
+        "ours-wired": 1460.0,
+        "mlx": 1070.0,
+        "llama": 560.9
+      },
+      "footprint_note": "Xcode memory gauge, attached footprint-only launches after the timed rows (F20, James): ours mmap 574.9 MB, ours wiredCopy 1.46 GB, LLMEval 1.07 GB, llama.swiftui 560.9 MB",
+      "ios_build_rechecked_at_end": "26.6.1 (F21: unchanged)",
+      "deviations": [
+        "bandwidth pair run twice, not three times",
+        "no JSON timelines copied (text exports only; our sustained row's elapsed basis = sum of generation wall)",
+        "airplane mode off",
+        "SoC 65% at start"
+      ]
+    }
+  },
+  "speed": {
+    "ours": {
+      "engine": "ours",
+      "decode_warm": {
+        "values": [
+          31.21,
+          31.16,
+          31.19,
+          31.16,
+          31.14
+        ],
+        "files": [
+          "ours-bookend-close",
+          "ours-bookend-open",
+          "ours-decode-warm-1",
+          "ours-decode-warm-2",
+          "ours-decode-warm-3"
+        ],
+        "token_count": 84
+      },
+      "decode_cold": {
+        "values": [
+          31.35
+        ],
+        "files": [
+          "ours-decode-cold-0"
+        ],
+        "token_count": 84
+      },
+      "prefill_warm": {
+        "values": [
+          179.79,
+          232.63,
+          233.41
+        ],
+        "files": [
+          "ours-prefill-warm-0",
+          "ours-prefill-warm-1",
+          "ours-prefill-warm-2"
+        ],
+        "token_count": 852
+      },
+      "prefill_cold": {
+        "values": [],
+        "files": [],
+        "token_count": null
+      },
+      "sustained": {
+        "file": "ours-sustained-0",
+        "generations": 4,
+        "first_window": 31.37,
+        "last_window": 22.83,
+        "plateau_second_half_median": 22.83,
+        "minutes": 5.0,
+        "basis": "text gen lines"
+      },
+      "footprint_mb": {
+        "ours-mmap": 574.9,
+        "ours-wired": 1460.0
+      },
+      "notes": [],
+      "decode_warm_median": 31.16,
+      "prefill_warm_median": 232.63
+    },
+    "mlx": {
+      "engine": "mlx",
+      "decode_warm": {
+        "values": [
+          43.19,
+          43.71,
+          43.4
+        ],
+        "files": [
+          "mlx-decode-warm-1",
+          "mlx-decode-warm-2",
+          "mlx-decode-warm-3"
+        ],
+        "token_count": 84
+      },
+      "decode_cold": {
+        "values": [
+          43.38
+        ],
+        "files": [
+          "mlx-decode-cold-0"
+        ],
+        "token_count": 84
+      },
+      "prefill_warm": {
+        "values": [
+          363.89,
+          388.01,
+          387.6
+        ],
+        "files": [
+          "mlx-prefill-warm-0",
+          "mlx-prefill-warm-1",
+          "mlx-prefill-warm-2"
+        ],
+        "token_count": 852
+      },
+      "prefill_cold": {
+        "values": [],
+        "files": [],
+        "token_count": null
+      },
+      "sustained": {
+        "file": "mlx-sustained-0",
+        "generations": 5,
+        "first_window": 40.53,
+        "last_window": 35.1,
+        "plateau_second_half_median": 34.94,
+        "minutes": 5.0616666666666665,
+        "basis": "text gen lines"
+      },
+      "footprint_mb": {
+        "mlx": 1070.0
+      },
+      "notes": [],
+      "decode_warm_median": 43.4,
+      "prefill_warm_median": 387.6
+    },
+    "llama": {
+      "engine": "llama",
+      "decode_warm": {
+        "values": [
+          34.8,
+          34.96,
+          34.58
+        ],
+        "files": [
+          "llama-decode-warm-1",
+          "llama-decode-warm-2",
+          "llama-decode-warm-3"
+        ],
+        "token_count": 84
+      },
+      "decode_cold": {
+        "values": [
+          34.66
+        ],
+        "files": [
+          "llama-decode-cold-0"
+        ],
+        "token_count": 84
+      },
+      "prefill_warm": {
+        "values": [
+          395.95,
+          440.71,
+          441.87
+        ],
+        "files": [
+          "llama-prefill-warm-0",
+          "llama-prefill-warm-1",
+          "llama-prefill-warm-2"
+        ],
+        "token_count": 852
+      },
+      "prefill_cold": {
+        "values": [],
+        "files": [],
+        "token_count": null
+      },
+      "sustained": {
+        "file": "llama-sustained-0",
+        "generations": 5,
+        "first_window": 33.98,
+        "last_window": 27.41,
+        "plateau_second_half_median": 27.41,
+        "minutes": 5.035,
+        "basis": "text gen lines"
+      },
+      "footprint_mb": {
+        "llama": 560.9
+      },
+      "notes": [],
+      "decode_warm_median": 34.8,
+      "prefill_warm_median": 440.71
+    }
+  },
+  "energy": {
+    "ours": {
+      "engine": "ours",
+      "cycles": [],
+      "n_valid": 0,
+      "headline": null,
+      "refusals": [
+        "manifest has no energy session"
+      ],
+      "notes": []
+    },
+    "mlx": {
+      "engine": "mlx",
+      "cycles": [],
+      "n_valid": 0,
+      "headline": null,
+      "refusals": [
+        "manifest has no energy session"
+      ],
+      "notes": []
+    },
+    "llama": {
+      "engine": "llama",
+      "cycles": [],
+      "n_valid": 0,
+      "headline": null,
+      "refusals": [
+        "manifest has no energy session"
+      ],
+      "notes": []
+    }
+  },
+  "bandwidth": {
+    "triad": {
+      "kernel": "triad",
+      "values": [
+        41.48,
+        42.94
+      ],
+      "spreads": [
+        [
+          40.98,
+          42.45
+        ],
+        [
+          42.62,
+          43.79
+        ]
+      ]
+    },
+    "read-only": {
+      "kernel": "read-only",
+      "values": [
+        44.55,
+        42.75
+      ],
+      "spreads": [
+        [
+          44.05,
+          44.72
+        ],
+        [
+          41.95,
+          43.26
+        ]
+      ]
+    },
+    "pairs": {
+      "0": {
+        "read-only": 44.55,
+        "triad": 41.48
+      },
+      "1": {
+        "read-only": 42.75,
+        "triad": 42.94
+      }
+    },
+    "ratio_readonly_over_triad": [
+      1.0740115718418515,
+      0.9955752212389382
+    ]
+  },
+  "roofline": {
+    "ours": {
+      "engine": "ours",
+      "window_tok_s": 31.16,
+      "bytes_per_token": 1014087680,
+      "implied_gbps": 31.598972108799998,
+      "denominator_gbps": 42.209999999999994,
+      "fraction_of_triad": 0.7486134117223407
+    }
+  },
+  "verdict": {
+    "ours_median": 31.16,
+    "mlx_median": 43.4,
+    "ratio": 0.7179723502304147,
+    "met": false,
+    "constant_29_4": 29.4,
+    "refusals": []
+  },
+  "tripwires": {
+    "decode": {
+      "name": "decode warm-burst window median",
+      "floor": 24.0,
+      "value": 31.16,
+      "passed": true
+    },
+    "prefill": {
+      "name": "prefill warm span median",
+      "floor": 135.0,
+      "value": 232.63,
+      "passed": true
+    }
+  },
+  "bookend_delta": 0.05000000000000071,
+  "refusals": [],
+  "notes": [
+    "llama-decode-cold-0: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "llama-decode-warm-1: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "llama-decode-warm-2: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "llama-decode-warm-3: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "llama-prefill-warm-0: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "llama-prefill-warm-1: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "llama-prefill-warm-2: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "llama-sustained-0: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "mlx-decode-cold-0: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "mlx-decode-warm-1: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "mlx-decode-warm-2: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "mlx-decode-warm-3: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "mlx-prefill-warm-0: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "mlx-prefill-warm-1: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "mlx-prefill-warm-2: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "mlx-sustained-0: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "ours-bookend-close: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "ours-bookend-open: operator-supplied post hoc via manifest — round",
+    "ours-decode-cold-0: operator-supplied post hoc via manifest — round",
+    "ours-decode-warm-1: operator-supplied post hoc via manifest — round",
+    "ours-decode-warm-2: operator-supplied post hoc via manifest — round",
+    "ours-decode-warm-3: operator-supplied post hoc via manifest — round",
+    "ours-prefill-warm-0: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "ours-prefill-warm-1: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "ours-prefill-warm-2: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "ours-sustained-0: operator-supplied post hoc via manifest — round, cold/warm, battery health"
+  ]
+}
