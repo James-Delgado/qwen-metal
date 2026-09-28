@@ -47,7 +47,11 @@ tools/.venv/bin/python tools/consolidate_shards.py --out <path>.safetensors
 | `dump_mlx.py` | secondary mlx-lm dump (loose, argmax-level; Phase 3 quality-gate comparator) |
 | `dump_quality_gate.py` | P3-3 quality-gate dump: band-setters vs mlx-lm 4-bit, WikiText-2 ppl slice, local-only reference-logits artifact (see its module docstring for the full protocol) |
 | `consolidate_shards.py` | shard → single-file safetensors consolidation |
-| `requirements.txt` | exact pinned package versions |
+| `requirements.txt` | exact pinned package versions (this venv) |
+| `phase6_analyze.py` | P6-3: Phase 6 archive (`benchmarks/phase6/`) → writeup tables + figures; refuses headline values that violate the pre-committed validity criteria. Runs under the REPO-ROOT `.venv` |
+| `phase6_exports.py` | parsers for the three row-export formats + the two bandwidth exports |
+| `phase6_tables.py` | Markdown rendering of the analyzer's report |
+| `requirements-phase6.txt` | pins for the analyzer (repo-root `.venv`: matplotlib, numpy, pytest) |
 
 ## Quality-gate fixtures (tests/fixtures/qwen3-1.7b-quality/)
 
@@ -58,3 +62,14 @@ local-only `models/qwen3-1.7b-70d244cc-ref-logits-250.bin` (152 MB, never
 committed — sha256 in DECISIONS.md). Validated by
 `tests/test_quality_fixtures.py`; consumed by the Swift
 `QuantQualityGateTests` (run release-mode).
+
+## Phase 6 analyzer (tests/test_phase6_analyze.py; runs under the repo-root .venv)
+
+```sh
+.venv/bin/pip install -r tools/requirements-phase6.txt
+.venv/bin/python tools/phase6_analyze.py benchmarks/phase6 --out docs/writeup
+.venv/bin/python -m pytest tests/test_phase6_analyze.py -q
+```
+
+Archive layout and the operator manifest: `benchmarks/phase6/README.md`.
+Runbook: `benchmarks/phase6-runbook.md`.

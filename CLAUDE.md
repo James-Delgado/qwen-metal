@@ -20,7 +20,13 @@
 Phases 0–5 exited (as of 2026-09-23); Phase 6 (benchmark writeup) is in
 progress — spec at docs/phases/phase-6.md (SPEC-P6 done 2026-09-23); P6-1
 (energy-mode harness, health/SoC fields, timeline JSON, round marker) done
-2026-09-24; P6-2 is the next ready task. Pinned model: Qwen/Qwen3-1.7B @ 70d244cc on iPhone
+2026-09-24; P6-2 (external-harness parity patches) done 2026-09-26; BW-1
+(read-only bandwidth microbench) done 2026-09-26; P6-3 (runbook +
+tools/phase6_analyze.py + benchmarks/phase6/ archive layout) done
+2026-09-27 — the engine is FROZEN at the `phase6-build` tag with its full
+correctness evidence recorded. Next: P6-4 (James, the device speed session
+per benchmarks/phase6-runbook.md); the next agent task by rank is LD-1
+(Mac-only long-depth free-run report). Pinned model: Qwen/Qwen3-1.7B @ 70d244cc on iPhone
 15 Pro. The engine decodes end-to-end from the packed 4-bit q4g64 format
 on-device at 31.67 tok/s warm-burst — the committed 29.4 target (0.75 × MLX)
 is EXCEEDED — and prefills through a tiled dequant-GEMM + query-tiled

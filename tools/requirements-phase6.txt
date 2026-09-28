@@ -1,0 +1,9 @@
+# Pinned deps for tools/phase6_analyze.py + tests/test_phase6_analyze.py (P6-3).
+# These run under the REPO-ROOT .venv (the lightweight one that also runs the
+# backlog drift test), NOT tools/.venv (the torch/transformers oracle venv).
+# Versions = what the repo-root .venv resolved on 2026-09-27 (Python 3.14.6);
+# matplotlib was already the architecture.pdf generator's dependency.
+# Setup: .venv/bin/pip install -r tools/requirements-phase6.txt
+matplotlib==3.11.1
+numpy==2.5.2
+pytest==9.1.1

@@ -5648,3 +5648,142 @@ dependency) with a `bw_1_handoff` note: the runbook's speed session
 includes the bandwidth pair (read-only then triad, ×3 rested, median
 run + paired ratio) and the analyzer parses the two bandwidth export
 headers. The device row stays on P6-4's list (owner james).
+
+## 2026-09-27 — P6-3: Phase 6 runbook + analyzer landed; engine FROZEN at `phase6-build` with the full correctness evidence re-run green
+
+Spec: docs/phases/phase-6.md D3–D8 + edge tests 5–6 (+ the P6-2 and BW-1
+handoff notes). No engine change: the Swift tree is byte-identical to the
+BW-1 commit (a012332) — `git rev-parse HEAD:Sources` =
+6f9849a9d36bd683f4718a85c8c8cc319d7d12ae, `HEAD:tests/QwenMetalEngineTests`
+= 5a3e0afa1a0c2199e5d540b3a1723bf184eb948d, `HEAD:Package.swift` =
+e51e09eea9b9d10c84299478baec6e10ec6c930e on both the evidence run and the
+tagged commit. No gate, tolerance, or protocol pin changed (hard rule 6);
+the analyzer consumes the 2026-09-23 validity criteria and reused
+tripwires verbatim as named constants.
+
+**What landed:**
+
+- `benchmarks/phase6-runbook.md` — the Phase 0 runbook's successor: §0
+  build-of-record + harness + session-fact preconditions; §1 operator
+  fields; §2 the speed session in run order (BW-1 bandwidth pair ×3 first,
+  weights-free; per-engine cold rows with our opening bookend; warm decode
+  rotation ours→MLX→llama.cpp ×3, then prefill ×3; 5-min loops with D6
+  rests; closing bookend; attribution exports (DIAGNOSTIC); attached
+  footprint launches last, ours in both residency modes) with the per-row
+  checklist (validation OFF line, round marker, MLX `parity target …:
+  MATCH` required with the template-mode fallback per D2, llama.cpp
+  `matches the llama.cpp count on record (92 / 852)`, zero `<think>`) and
+  the D7 tripwire walk; §3 the energy round (conditions, the ≥4% idle
+  baseline once per iOS build, the cycle procedure at the 80/70 Settings
+  marks, the Latin-square order, INVALID-and-repeat, the llama.cpp cut
+  rule); §4 results.md row templates; §5 rest/drift; §6 archival +
+  regeneration.
+- `tools/phase6_analyze.py` (+ `phase6_exports.py` parsers,
+  `phase6_tables.py` rendering — three modules to stay under the 800-line
+  rule) — archive → `tables.md` / `summary.json` / `thermal.png` /
+  `energy.png`. Parses the three row-export formats (ours text +
+  `qwen-metal-timeline/1` JSON; MLX and llama.cpp text + `/1-external`
+  JSON) and the two bandwidth headers. Energy math per D4: J per 1% =
+  453.6 × health/100 (health only — a missing health field REFUSES), idle
+  ΔSoC scaled pro-rata by cycle wall, net J/token, implied gross W; cycle
+  validity = start mark 80, ≥8% burned, 3–9 W; n≥3 valid per engine or the
+  engine is labeled "below the ≥3 pin — not a comparative energy row"
+  (values listed, never averaged); idle baseline ≥4% or every energy
+  headline is refused; systematic bar = ±0.5%-per-reading quantization
+  propagated through the net term (≈±14% at 10%/1.2% idle). Row
+  eligibility (D7): PROVISIONAL or wrong round marker, our export's iOS ≠
+  the session's, MLX parity MISMATCH (template-mode allowed, labeled),
+  llama.cpp count DIFFERS, a decode row without a window rate, a prefill
+  row without a span (or WARM PREFIX), a loop on the wrong prompt, a cycle
+  not ended by the operator stop, cumulative ≠ Σ per-generation tokens,
+  energy-round iOS ≠ speed-session iOS — each REFUSES the row/headline and
+  is written into the refusal ledger. Speed outputs: warm/cold window
+  medians (bookends count as warm rows and give the drift delta), prefill
+  span medians with token counts, sustained first/last/second-half-median,
+  the PLAN-formula verdict (ratio ≥ 0.75, 29.4 alongside, REFUSED when
+  either side is missing), tripwires 24.0/135, the bandwidth pair medians +
+  paired ratios (DIAGNOSTIC exports refused), roofline inputs (bytes/token
+  = 967,753,728 + 114,688 × (prompt + 320) against the session's triad
+  median). Figures: the thermal chart reads the per-generation timeline
+  (JSON preferred, text gen lines otherwise; median cycle bold, repeats
+  faint) — never the cumulative line; energy bars carry both error bars.
+- `tests/test_phase6_analyze.py` — 34 tests on synthetic exports whose
+  builders reproduce the producing format strings verbatim: parsers for
+  every format, the energy arithmetic, out-of-anchor / shallow / off-band
+  cycles, n=2 engine, missing idle, idle < 4%, missing health/SoC,
+  cumulative mismatch, OS-build mismatch (both forms), PROVISIONAL and
+  wrong-round rows, MLX MISMATCH/template, llama DIFFERS, no-window decode
+  row, wrong-prompt loops, non-operator-stop cycles, sustained stats,
+  bandwidth pair + DIAGNOSTIC, roofline depth per engine, the chart series
+  (with a deliberately inconsistent cumulative line that must not reach
+  it), both PNGs rendering, CLI end-to-end + missing-manifest exit 2.
+- `benchmarks/phase6/README.md` — archive layout + `manifest.json` schema;
+  `tools/requirements-phase6.txt` (repo-root .venv: matplotlib 3.11.1,
+  numpy 2.5.2, pytest 9.1.1 — the versions already resolved there);
+  `tools/README.md` updated.
+
+**Decisions taken here (agent, reversible, convention-following —
+surfaced, not blocked on):**
+
+1. Archive layout `benchmarks/phase6/{speed,energy}/<engine>-<kind>-<n>.txt|.json`
+   + one `manifest.json` for the facts no export carries (iOS build per
+   session, Xcode gauge footprints, the idle baseline, optional per-engine
+   weight bytes). The analyzer classifies rows from export CONTENT and
+   reads only bookend/bandwidth roles from file names.
+2. "Sustained plateau" = median of the second half of a loop's
+   per-generation window rates (first/last reported alongside) — a
+   definition, not a constant.
+3. Band deviation: a cycle must START at the 80% mark (the anchor); the
+   end mark is judged only by the ≥8%-burned pin (a late stop stays
+   valid, noted) — no new tolerance introduced.
+4. Round-marker naming `phase6-speed-YYYY-MM-DD` / `phase6-energy-YYYY-MM-DD`
+   (free text in the app; the manifest must match).
+
+**Tag + correctness evidence (D5; quoted):** run detached (`nohup`, the
+PF-1/PF-2 precedent), one class or one test per invocation, on the
+working tree at e5023ca (Swift tree identical to the tagged commit — hashes
+above; `git status --porcelain -- Sources tests/QwenMetalEngineTests
+Package.swift` = 0 files):
+
+- debug broad suite (everything but the four multi-hour oracle suites):
+  "Executed 555 tests, with 7 tests skipped and 0 failures (0 unexpected)
+  in 216.616 s" (the 7 skips = the opt-in report/diagnostic harnesses).
+- release quant Tier-M: "Executed 4 tests, with 0 failures … in 1.867 s";
+  Tier-E: "Executed 3 tests, with 0 failures … in 3.219 s".
+- release GPU-quant 250-step teacher-forced logit suite, one test per
+  invocation, ALL HELD: ShortEnglish 155.2 s, MultiSentence 176.4 s,
+  CodeSnippet 171.7 s, NonASCII 168.5 s, ChatTemplate 160.8 s (each
+  "passed").
+- release free-run divergence report on the production default (tiled
+  prefill → fused decode; `PrefillRealArtifactTests/
+  testTiledPrefillFreeRunDivergenceReport`, QWEN_FREE_RUN_REPORT=1):
+  **first divergence: NONE on all 5 prompts** (128 tokens identical to the
+  CPU-quant reference on every prompt; texts coherent, same species as
+  P5-4/PF-2). Also the fused-decode report (`QuantFreeRunReportTests`):
+  NONE ×5.
+- release CPU-quant quality gate (unaffected by harness-only changes;
+  run for completeness): "Executed 2 tests, with 0 failures … in
+  463.773 s" (ppl_ours 16.496, ppl_fp32 13.996, Δppl ours 2.500 vs mlx
+  2.474 — the P3-3 band holds).
+- Python: `tests/test_phase6_analyze.py` 34 passed + backlog drift test
+  5 passed; analyzer CLI end-to-end on a synthetic archive (both figures
+  eyeballed: labels, legend, no overflow).
+
+Environment note: the machine ran with 12.5 of 13.3 GB swap in use; the
+two free-run reports took 18,777 s and 5,864 s of wall time (PF-2: 1,877 s)
+— inflated by paging, not by the engine (GPU work is unchanged; the
+CPU-quant oracle is the paging victim). Two background review agents
+stalled on the same pressure (600 s watchdog, no output); the fresh-eyes
+pass was done inline instead and produced three fixes before commit
+(non-operator-stop cycles refused; wrong-prompt loops/bursts refused;
+roofline depth from each engine's own prompt count) — each landed test-
+first (3 red → green).
+
+**Tag:** `phase6-build` = the P6-3 deliverable commit. Engine freeze
+begins; P6-4 (James) builds the app from the tag.
+
+**Follow-ups:** EXT-1 seeded (external exports carry no device/iOS line;
+manifest-typed for now — cosmetic). P6-6 handoff appended (cycle-wall vs
+Settings-mark lag as a limitations item; every writeup number via the
+analyzer). Backlog: P6-3 done; P6-4 blocked → ready (owner james). Next
+agent task by rank: LD-1.
