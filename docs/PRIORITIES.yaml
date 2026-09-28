@@ -2515,7 +2515,8 @@ tasks:
   - id: P6-5
     rank: 22.5
     title: "Phase 6 energy round (James, detached): idle baseline (>=4% SoC) + >=3 battery-delta cycles per engine in the 80->70 band, Latin-square order, health-based capacity basis, validity walked per cycle; timelines archived (the sustained-thermal chart data)"
-    status: ready
+    status: in_progress
+    started_at: 2026-09-28 03:11:44+00:00
     owner: james
     depends_on: [P6-4]
     blocks: [P6-6]
