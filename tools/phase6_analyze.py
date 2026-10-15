@@ -45,6 +45,7 @@ BAND_START_PERCENT = 80.0                     # the 80→70 band anchor (start m
 MIN_VALID_CYCLES = 3                          # PLAN: ≥3 repeats per engine
 MIN_IDLE_DROP_PERCENT = 4.0                   # D7 gate: idle baseline ≥4% SoC drop
 SOC_READING_QUANTUM_PERCENT = 0.5             # ±0.5% per Settings reading (systematic bar, D4)
+PROGRAMMATIC_SOC_QUANTUM_PERCENT = 5.0        # UIDevice.batteryLevel steps (cross-check tolerance)
 TRIPWIRE_DECODE_TOK_S = 24.0                  # Phase 4/5 constant, reused (D7)
 TRIPWIRE_PREFILL_TOK_S = 135.0                # Phase 5 constant, reused (D7)
 SUCCESS_RATIO = 0.75                          # PLAN success metric: ours / MLX ≥ 0.75
@@ -102,6 +103,8 @@ class EnergyCycle:
     invalid_reasons: list[str]
     soc_start: float
     soc_end: float
+    off_band_start: bool = False
+    cross_check_note: Optional[str] = None
 
 
 @dataclass
@@ -231,8 +234,11 @@ def joules_per_soc_percent(health_percent: Optional[float]) -> float:
     return JOULES_PER_PERCENT_AT_FULL_HEALTH * float(health_percent) / 100.0
 
 
-def analyze_energy_cycle(row: ex.RowExport, idle: IdleBaseline, file: str = "") -> EnergyCycle:
-    """One D4 cycle: gross → idle-subtracted net J/token, watts, validity."""
+def analyze_energy_cycle(row: ex.RowExport, idle: IdleBaseline, file: str = "",
+                         require_band_start: bool = True) -> EnergyCycle:
+    """One D4 cycle: gross → idle-subtracted net J/token, watts, validity.
+    `require_band_start=False` = the session's any-start rule (a recorded
+    operator decision): the 80% anchor is not enforced, the cycle is labeled."""
     j_per_pct = joules_per_soc_percent(row.battery_health_percent)
     if row.soc_start is None or row.soc_end is None:
         raise Refusal(f"{file}: state of charge at the band marks not recorded")
@@ -253,7 +259,7 @@ def analyze_energy_cycle(row: ex.RowExport, idle: IdleBaseline, file: str = "") 
     idle_scaled = idle.soc_drop * wall / float(idle.wall_seconds)
     net_delta = delta - idle_scaled
     net = net_delta * j_per_pct
-    reasons = _cycle_validity(row.soc_start, delta, watts)
+    reasons = _cycle_validity(row.soc_start, delta, watts, require_band_start)
     quantum = 2 * SOC_READING_QUANTUM_PERCENT
     systematic = (quantum + idle_scaled * quantum / idle.soc_drop) / net_delta if net_delta > 0 else float("inf")
     return EnergyCycle(
@@ -261,12 +267,28 @@ def analyze_energy_cycle(row: ex.RowExport, idle: IdleBaseline, file: str = "") 
         cycle_wall_s=wall, tokens=summed, gross_joules=gross, implied_watts=watts,
         idle_soc_scaled=idle_scaled, net_joules=net, net_joules_per_token=net / summed,
         net_watts=net / wall, systematic_fraction=systematic, valid=not reasons,
-        invalid_reasons=reasons, soc_start=row.soc_start, soc_end=row.soc_end)
+        invalid_reasons=reasons, soc_start=row.soc_start, soc_end=row.soc_end,
+        off_band_start=row.soc_start != BAND_START_PERCENT,
+        cross_check_note=_programmatic_cross_check(row, delta))
 
 
-def _cycle_validity(soc_start: float, delta: float, watts: float) -> list[str]:
+def _programmatic_cross_check(row: ex.RowExport, delta: float) -> Optional[str]:
+    """The programmatic SoC is a cross-check only; a disagreement beyond its own
+    quantization is NOTED on the cycle (never a refusal — the Settings marks are
+    the value of record)."""
+    if row.programmatic_soc_start is None or row.programmatic_soc_end is None:
+        return None
+    prog = row.programmatic_soc_start - row.programmatic_soc_end
+    if abs(prog - delta) < PROGRAMMATIC_SOC_QUANTUM_PERCENT:
+        return None
+    return (f"programmatic cross-check read {prog:g}% ({row.programmatic_soc_start:g}→"
+            f"{row.programmatic_soc_end:g}) vs the operator marks' {delta:g}% — disagreement beyond the "
+            f"{PROGRAMMATIC_SOC_QUANTUM_PERCENT:g}% reading step; operator marks used, noted")
+
+
+def _cycle_validity(soc_start: float, delta: float, watts: float, require_band_start: bool = True) -> list[str]:
     reasons = []
-    if soc_start != BAND_START_PERCENT:
+    if require_band_start and soc_start != BAND_START_PERCENT:
         reasons.append(f"start mark {soc_start:g}% is not the 80% band anchor")
     if delta < MIN_SOC_BURN_PERCENT:
         reasons.append(f"burned {delta:g}% SoC — below the ≥8% floor")
@@ -281,6 +303,11 @@ def summarize_engine_energy(engine: str, cycles: list[EnergyCycle], refusals: li
     for c in cycles:
         if not c.valid:
             result.notes.append(f"{c.file}: INVALID — " + "; ".join(c.invalid_reasons))
+        elif c.off_band_start:
+            result.notes.append(f"{c.file}: off-band start {c.soc_start:g}%→{c.soc_end:g}% accepted under the "
+                                "session's any-start rule (recorded decision) — labeled, not the 80→70 pin")
+        if c.cross_check_note:
+            result.notes.append(f"{c.file}: {c.cross_check_note}")
     if refusals:
         return result
     if len(valid) < MIN_VALID_CYCLES:
@@ -344,7 +371,9 @@ def _sidecar_timeline(path: Path, refusals: list[str]) -> Optional[ex.Timeline]:
         return None
 
 
-OVERRIDABLE_FIELDS = ("round", "cold_warm", "battery_health_percent")
+OVERRIDABLE_FIELDS = ("round", "cold_warm", "battery_health_percent", "soc_start", "soc_end")
+_OVERRIDE_LABELS = {"cold_warm": "cold/warm", "battery_health_percent": "battery health",
+                    "soc_start": "SoC marks", "soc_end": "SoC marks"}
 
 
 def apply_operator_overrides(row: ex.RowExport, session: dict, name: str, notes: list[str]) -> None:
@@ -352,6 +381,11 @@ def apply_operator_overrides(row: ex.RowExport, session: dict, name: str, notes:
     (decided by James 2026-09-27, P6-4). Only BLANK fields are filled — an export's
     own value always wins — and every filled field is labeled in the notes. The
     export text itself is never edited."""
+    aliases = [str(a) for a in (session.get("round_aliases") or [])]
+    if not row.provisional and row.round in aliases and session.get("round"):
+        notes.append(f"{name}: round marker {row.round!r} is a listed alias of the session round "
+                     f"{session['round']!r} (operator typed the round index) — mapped, labeled")
+        row.round = str(session["round"])
     overrides = session.get("operator_overrides") or {}
     supplied = dict(overrides.get("defaults") or {})
     supplied.update((overrides.get("rows") or {}).get(name) or {})
@@ -365,8 +399,10 @@ def apply_operator_overrides(row: ex.RowExport, session: dict, name: str, notes:
                 filled.append("round")
         elif getattr(row, field_name) is None:
             value = supplied[field_name]
-            setattr(row, field_name, float(value) if field_name == "battery_health_percent" else str(value))
-            filled.append("cold/warm" if field_name == "cold_warm" else "battery health")
+            setattr(row, field_name, str(value) if field_name == "cold_warm" else float(value))
+            label = _OVERRIDE_LABELS[field_name]
+            if label not in filled:
+                filled.append(label)
     if filled:
         notes.append(f"{name}: operator-supplied post hoc via manifest — {', '.join(filled)}")
 
@@ -506,6 +542,7 @@ def analyze_energy(root: Path, manifest: dict, refusals: list[str], notes: list[
         return energy, []
     session_refusals = _energy_session_refusals(session, sessions.get("speed"))
     idle = _idle_baseline(session, session_refusals)
+    any_start = (session.get("band_start_rule") or {}).get("rule") == "any-start"
     cycles: dict[str, list[EnergyCycle]] = {e: [] for e in ENGINES}
     rows = []
     for name, row, timeline in load_session_rows(root, session, refusals, notes):
@@ -523,7 +560,8 @@ def analyze_energy(root: Path, manifest: dict, refusals: list[str], notes: list[
         if idle is None:
             continue
         try:
-            cycles[row.engine].append(analyze_energy_cycle(row, idle, file=name))
+            cycles[row.engine].append(analyze_energy_cycle(
+                row, idle, file=name, require_band_start=not any_start))
         except Refusal as e:
             refusals.append(str(e))
     for e in ENGINES:

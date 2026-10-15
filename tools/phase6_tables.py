@@ -80,7 +80,8 @@ def _energy_tables(r: an.Report) -> list[str]:
         for c in r.energy[e].cycles:
             rows.append(f"| {ENGINE_LABELS[e]} | {c.file} | {c.health_percent:g} | {c.soc_start:g}→{c.soc_end:g} | {c.delta_soc:g} | "
                         f"{c.cycle_wall_s:.0f} | {c.tokens} | {c.gross_joules:.0f} | {c.implied_watts:.2f} | {c.idle_soc_scaled:.2f} | "
-                        f"{c.net_joules:.0f} | {c.net_joules_per_token:.4f} | {'VALID' if c.valid else 'INVALID: ' + '; '.join(c.invalid_reasons)} |")
+                        f"{c.net_joules:.0f} | {c.net_joules_per_token:.4f} | "
+                        f"{('VALID' + (' (off-band start, any-start rule)' if c.off_band_start else '')) if c.valid else 'INVALID: ' + '; '.join(c.invalid_reasons)} |")
     rows += ["", "| engine | n valid | mean net J/token | spread (min–max) | systematic ± | implied W (mean) | status |", "|---|---|---|---|---|---|---|"]
     for e in ENGINES:
         en = r.energy[e]

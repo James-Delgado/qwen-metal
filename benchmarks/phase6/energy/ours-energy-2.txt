@@ -1,0 +1,31 @@
+qwen-metal Phase 6 row export (round: 3)
+date: 2026-10-14
+device: iPhone16,1 (iOS 26.6.1)
+round: 3
+battery health: 100% (maximum capacity %, Settings → Battery → Battery Health, operator-typed — NOT state of charge)
+state of charge (Settings → Battery, operator-read at the band marks — value of record): start 74%, end 64%
+state of charge (programmatic UIDevice.batteryLevel — cross-check only, never the value of record): start 75.0%, end 65.0%
+engine: qwen-metal q4g64 fused-dequant GPU — weights q4g64, residency mmap, kernels fused, prefill tiled (C=512), attention query-tiled
+prompt: decode-essay (84 prompt tokens)
+mode: energy | cold/warm: warm
+sampling: greedy | Metal API validation: confirm OFF and record (P0A-1 addendum)
+energy cycle: 14 generations — ended by operator stop (final generation truncated at a token boundary)
+  cumulative: 23859 generated tokens; Σ generation wall 1142.5 s; cycle wall 1142.5 s (idle-baseline pro-rata basis)
+  gen 0: overall 25.49 tok/s, window 30.73 tok/s — 1828 tokens in 72.1 s (stop: eos)
+  gen 1: overall 21.55 tok/s, window 23.67 tok/s — 1828 tokens in 85.3 s (stop: eos)
+  gen 2: overall 21.49 tok/s, window 23.60 tok/s — 1828 tokens in 85.6 s (stop: eos)
+  gen 3: overall 21.36 tok/s, window 23.57 tok/s — 1828 tokens in 86.1 s (stop: eos)
+  gen 4: overall 21.35 tok/s, window 23.35 tok/s — 1828 tokens in 86.2 s (stop: eos)
+  gen 5: overall 20.64 tok/s, window 23.13 tok/s — 1828 tokens in 89.1 s (stop: eos)
+  gen 6: overall 20.35 tok/s, window 22.38 tok/s — 1828 tokens in 90.4 s (stop: eos)
+  gen 7: overall 20.38 tok/s, window 22.28 tok/s — 1828 tokens in 90.3 s (stop: eos)
+  gen 8: overall 20.37 tok/s, window 22.36 tok/s — 1828 tokens in 90.3 s (stop: eos)
+  gen 9: overall 20.31 tok/s, window 22.38 tok/s — 1828 tokens in 90.6 s (stop: eos)
+  gen 10: overall 20.37 tok/s, window 22.32 tok/s — 1828 tokens in 90.3 s (stop: eos)
+  gen 11: overall 20.32 tok/s, window 22.32 tok/s — 1828 tokens in 90.5 s (stop: eos)
+  gen 12: overall 20.22 tok/s, window 22.30 tok/s — 1828 tokens in 91.0 s (stop: eos)
+  gen 13: overall 23.83 tok/s — 95 tokens in 4.7 s (stop: stopRequested)
+last generation per-token: median GPU 39.39 ms, median wall 40.84 ms, median wall-GPU 1.352 ms, UNSTABLE 200-397 dispatches/token
+last generation latency (all tokens): p50 40.65 ms, p95 52.87 ms, p99 63.77 ms, max 63.77 ms, stalls 0 (spans > 2x p50, n = 94)
+energy J/token: not computed in-app — tools/phase6_analyze.py (P6-3) derives it from the health/SoC fields and the token total above
+phys_footprint (in-app cross-check; Xcode gauge is the metric of record): 593.0 MB

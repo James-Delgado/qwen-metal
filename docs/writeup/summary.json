@@ -96,6 +96,86 @@
         "airplane mode off",
         "SoC 65% at start"
       ]
+    },
+    "energy": {
+      "round": "phase6-energy-2026-10-12",
+      "dir": "energy",
+      "date": "idle baseline overnight 2026-09-29 21:40 → 2026-09-30 07:40 EST; cycles 2026-10-12/13 (round 1) and 2026-10-14 (rounds 2–3); app date stamps 2026-10-13 / 2026-10-14",
+      "ios_build": "26.6.1",
+      "xcode": "26.6 (17F113)",
+      "battery_health_percent": 100,
+      "conditions": "airplane mode ON, minimum brightness, Auto-Lock Never, Background App Refresh off, unplugged, detached, validation OFF",
+      "idle_baseline": {
+        "health_percent": 100,
+        "soc_start": 93,
+        "soc_end": 74,
+        "wall_seconds": 36000,
+        "ios_build": "26.6.1",
+        "note": "QwenMetalApp foregrounded on the Benchmark screen, model loaded, no generation; 21:40 → 07:40 EST (10 h). First-hour reading was 93 → 92 (quantized); the 10 h drop is the basis."
+      },
+      "band_start_rule": {
+        "rule": "any-start",
+        "decision": "James, 2026-10-13 (in conversation): the 80→70 start anchor is waived for this round — 'I will attempt to start at 80 but if it doesn't, then that's okay'. ≥8% burned and 3–9 W implied gross still bind; off-band cycles are labeled in every table and in the writeup's limitations section."
+      },
+      "operator_overrides": {
+        "note": "Decided by James 2026-10-13: the apps were given the marker '1' (and the round lines of the three round-1 exports were then edited by hand to '1' / '(none — 1'); the archived files were restored to the apps' canonical blank-round lines and the round of record is supplied here. The MLX/llama.cpp panels' cold/warm, health, and Settings SoC marks were left blank; James supplied them (MLX 71→61, llama.cpp 61→51; the programmatic cross-checks read 70→60 and 60→50). Every filled field is labeled operator-supplied post hoc. Rounds 2–3 (2026-10-14): the same pattern — the apps were given '2' / '3' (ours round 3 carries it in the header, app-typed → accepted as a listed alias); the external exports' round lines were hand-edited and 'Battery: a% —> b%' lines were typed in by hand; the archived files were restored to the apps' canonical lines and the SoC marks moved here (llama.cpp r2 83→73, MLX r2 71→61, MLX r3 60→50, llama.cpp r3 75→65).",
+        "defaults": {
+          "round": "phase6-energy-2026-10-12",
+          "battery_health_percent": 100
+        },
+        "rows": {
+          "ours-energy-0": {},
+          "mlx-energy-0": {
+            "cold_warm": "warm",
+            "soc_start": 71,
+            "soc_end": 61
+          },
+          "llama-energy-0": {
+            "cold_warm": "warm",
+            "soc_start": 61,
+            "soc_end": 51
+          },
+          "llama-energy-1": {
+            "cold_warm": "warm",
+            "soc_start": 83,
+            "soc_end": 73
+          },
+          "mlx-energy-1": {
+            "cold_warm": "warm",
+            "soc_start": 71,
+            "soc_end": 61
+          },
+          "ours-energy-1": {},
+          "ours-energy-2": {},
+          "mlx-energy-2": {
+            "cold_warm": "warm",
+            "soc_start": 60,
+            "soc_end": 50
+          },
+          "llama-energy-2": {
+            "cold_warm": "warm",
+            "soc_start": 75,
+            "soc_end": 65
+          }
+        }
+      },
+      "round_aliases": [
+        "1",
+        "2",
+        "3"
+      ],
+      "cycle_order_as_run": [
+        "round 1: ours, MLX, llama.cpp",
+        "round 2: llama.cpp, MLX, ours",
+        "round 3: ours, MLX, llama.cpp"
+      ],
+      "deviations": [
+        "80→70 band not held (any-start rule, decided by James 2026-10-13): starts 99/71/61 (r1), 83/71/61 (r2), 74/60/75 (r3)",
+        "Latin square not realized: MLX ran second in every round; ours/llama.cpp swapped positions in rounds 2–3 (runbook: (ours,MLX,llama), (MLX,llama,ours), (llama,ours,MLX))",
+        "no JSON timelines copied (text exports only; our cycles' thermal x-axis = Σ generation wall)",
+        "external panels' cold/warm, health, SoC marks typed post hoc (operator overrides, labeled); round markers typed as 1/2/3 (aliases)",
+        "recharge/rest between cycles not logged per cycle"
+      ]
     }
   },
   "speed": {
@@ -282,33 +362,274 @@
   "energy": {
     "ours": {
       "engine": "ours",
-      "cycles": [],
-      "n_valid": 0,
-      "headline": null,
-      "refusals": [
-        "manifest has no energy session"
+      "cycles": [
+        {
+          "file": "ours-energy-0",
+          "engine": "ours",
+          "health_percent": 100.0,
+          "delta_soc": 10.0,
+          "cycle_wall_s": 1119.9,
+          "tokens": 23851,
+          "gross_joules": 4536.0,
+          "implied_watts": 4.050361639432092,
+          "idle_soc_scaled": 0.5910583333333334,
+          "net_joules": 4267.89594,
+          "net_joules_per_token": 0.17893991614607355,
+          "net_watts": 3.810961639432092,
+          "systematic_fraction": 0.10958813114829598,
+          "valid": true,
+          "invalid_reasons": [],
+          "soc_start": 99.0,
+          "soc_end": 89.0,
+          "off_band_start": true,
+          "cross_check_note": null
+        },
+        {
+          "file": "ours-energy-1",
+          "engine": "ours",
+          "health_percent": 100.0,
+          "delta_soc": 10.0,
+          "cycle_wall_s": 793.5,
+          "tokens": 16517,
+          "gross_joules": 4536.0,
+          "implied_watts": 5.7164461247637055,
+          "idle_soc_scaled": 0.4187916666666667,
+          "net_joules": 4346.0361,
+          "net_joules_per_token": 0.2631250287582491,
+          "net_watts": 5.477046124763706,
+          "systematic_fraction": 0.10667147932802493,
+          "valid": true,
+          "invalid_reasons": [],
+          "soc_start": 61.0,
+          "soc_end": 51.0,
+          "off_band_start": true,
+          "cross_check_note": null
+        },
+        {
+          "file": "ours-energy-2",
+          "engine": "ours",
+          "health_percent": 100.0,
+          "delta_soc": 10.0,
+          "cycle_wall_s": 1142.5,
+          "tokens": 23859,
+          "gross_joules": 4536.0,
+          "implied_watts": 3.9702407002188185,
+          "idle_soc_scaled": 0.6029861111111111,
+          "net_joules": 4262.485500000001,
+          "net_joules_per_token": 0.17865314975480953,
+          "net_watts": 3.730840700218819,
+          "systematic_fraction": 0.10979403918206877,
+          "valid": true,
+          "invalid_reasons": [],
+          "soc_start": 74.0,
+          "soc_end": 64.0,
+          "off_band_start": true,
+          "cross_check_note": null
+        }
       ],
-      "notes": []
+      "n_valid": 3,
+      "headline": {
+        "n": 3,
+        "mean_j_per_token": 0.20690603155304407,
+        "spread": [
+          0.17865314975480953,
+          0.2631250287582491
+        ],
+        "systematic_fraction": 0.1086845498861299,
+        "implied_watts_mean": 4.579016154804872,
+        "values": [
+          0.17893991614607355,
+          0.2631250287582491,
+          0.17865314975480953
+        ]
+      },
+      "refusals": [],
+      "notes": [
+        "ours-energy-0: off-band start 99%→89% accepted under the session's any-start rule (recorded decision) — labeled, not the 80→70 pin",
+        "ours-energy-1: off-band start 61%→51% accepted under the session's any-start rule (recorded decision) — labeled, not the 80→70 pin",
+        "ours-energy-2: off-band start 74%→64% accepted under the session's any-start rule (recorded decision) — labeled, not the 80→70 pin"
+      ]
     },
     "mlx": {
       "engine": "mlx",
-      "cycles": [],
-      "n_valid": 0,
-      "headline": null,
-      "refusals": [
-        "manifest has no energy session"
+      "cycles": [
+        {
+          "file": "mlx-energy-0",
+          "engine": "mlx",
+          "health_percent": 100.0,
+          "delta_soc": 10.0,
+          "cycle_wall_s": 991.4,
+          "tokens": 33166,
+          "gross_joules": 4536.0,
+          "implied_watts": 4.575347992737543,
+          "idle_soc_scaled": 0.5232388888888888,
+          "net_joules": 4298.65884,
+          "net_joules_per_token": 0.12961040945546645,
+          "net_watts": 4.335947992737543,
+          "systematic_fraction": 0.1084272228498133,
+          "valid": true,
+          "invalid_reasons": [],
+          "soc_start": 71.0,
+          "soc_end": 61.0,
+          "off_band_start": true,
+          "cross_check_note": null
+        },
+        {
+          "file": "mlx-energy-1",
+          "engine": "mlx",
+          "health_percent": 100.0,
+          "delta_soc": 10.0,
+          "cycle_wall_s": 884.1,
+          "tokens": 28825,
+          "gross_joules": 4536.0,
+          "implied_watts": 5.130641330166271,
+          "idle_soc_scaled": 0.46660833333333335,
+          "net_joules": 4324.346460000001,
+          "net_joules_per_token": 0.15002069245446664,
+          "net_watts": 4.891241330166271,
+          "systematic_fraction": 0.10747049624696352,
+          "valid": true,
+          "invalid_reasons": [],
+          "soc_start": 71.0,
+          "soc_end": 61.0,
+          "off_band_start": true,
+          "cross_check_note": null
+        },
+        {
+          "file": "mlx-energy-2",
+          "engine": "mlx",
+          "health_percent": 100.0,
+          "delta_soc": 10.0,
+          "cycle_wall_s": 763.8,
+          "tokens": 25277,
+          "gross_joules": 4536.0,
+          "implied_watts": 5.93872741555381,
+          "idle_soc_scaled": 0.4031166666666666,
+          "net_joules": 4353.14628,
+          "net_joules_per_token": 0.17221767931320964,
+          "net_watts": 5.69932741555381,
+          "systematic_fraction": 0.10641128282966866,
+          "valid": true,
+          "invalid_reasons": [],
+          "soc_start": 60.0,
+          "soc_end": 50.0,
+          "off_band_start": true,
+          "cross_check_note": null
+        }
       ],
-      "notes": []
+      "n_valid": 3,
+      "headline": {
+        "n": 3,
+        "mean_j_per_token": 0.15061626040771425,
+        "spread": [
+          0.12961040945546645,
+          0.17221767931320964
+        ],
+        "systematic_fraction": 0.10743633397548184,
+        "implied_watts_mean": 5.214905579485875,
+        "values": [
+          0.12961040945546645,
+          0.15002069245446664,
+          0.17221767931320964
+        ]
+      },
+      "refusals": [],
+      "notes": [
+        "mlx-energy-0: off-band start 71%→61% accepted under the session's any-start rule (recorded decision) — labeled, not the 80→70 pin",
+        "mlx-energy-1: off-band start 71%→61% accepted under the session's any-start rule (recorded decision) — labeled, not the 80→70 pin",
+        "mlx-energy-2: off-band start 60%→50% accepted under the session's any-start rule (recorded decision) — labeled, not the 80→70 pin"
+      ]
     },
     "llama": {
       "engine": "llama",
-      "cycles": [],
-      "n_valid": 0,
-      "headline": null,
-      "refusals": [
-        "manifest has no energy session"
+      "cycles": [
+        {
+          "file": "llama-energy-0",
+          "engine": "llama",
+          "health_percent": 100.0,
+          "delta_soc": 10.0,
+          "cycle_wall_s": 833.8,
+          "tokens": 21057,
+          "gross_joules": 4536.0,
+          "implied_watts": 5.440153514032143,
+          "idle_soc_scaled": 0.44006111111111107,
+          "net_joules": 4336.38828,
+          "net_joules_per_token": 0.20593571163983473,
+          "net_watts": 5.200753514032143,
+          "systematic_fraction": 0.10702590497730984,
+          "valid": true,
+          "invalid_reasons": [],
+          "soc_start": 61.0,
+          "soc_end": 51.0,
+          "off_band_start": true,
+          "cross_check_note": null
+        },
+        {
+          "file": "llama-energy-1",
+          "engine": "llama",
+          "health_percent": 100.0,
+          "delta_soc": 10.0,
+          "cycle_wall_s": 1294.6,
+          "tokens": 32021,
+          "gross_joules": 4536.0,
+          "implied_watts": 3.5037849528811993,
+          "idle_soc_scaled": 0.6832611111111111,
+          "net_joules": 4226.07276,
+          "net_joules_per_token": 0.13197816308047844,
+          "net_watts": 3.264384952881199,
+          "systematic_fraction": 0.11119353278716385,
+          "valid": true,
+          "invalid_reasons": [],
+          "soc_start": 83.0,
+          "soc_end": 73.0,
+          "off_band_start": true,
+          "cross_check_note": "programmatic cross-check read 15% (85→70) vs the operator marks' 10% — disagreement beyond the 5% reading step; operator marks used, noted"
+        },
+        {
+          "file": "llama-energy-2",
+          "engine": "llama",
+          "health_percent": 100.0,
+          "delta_soc": 10.0,
+          "cycle_wall_s": 1056.9,
+          "tokens": 26460,
+          "gross_joules": 4536.0,
+          "implied_watts": 4.291796764121487,
+          "idle_soc_scaled": 0.5578083333333334,
+          "net_joules": 4282.97814,
+          "net_joules_per_token": 0.16186614285714288,
+          "net_watts": 4.052396764121487,
+          "systematic_fraction": 0.10901688608665186,
+          "valid": true,
+          "invalid_reasons": [],
+          "soc_start": 75.0,
+          "soc_end": 65.0,
+          "off_band_start": true,
+          "cross_check_note": null
+        }
       ],
-      "notes": []
+      "n_valid": 3,
+      "headline": {
+        "n": 3,
+        "mean_j_per_token": 0.16659333919248534,
+        "spread": [
+          0.13197816308047844,
+          0.20593571163983473
+        ],
+        "systematic_fraction": 0.10907877461704185,
+        "implied_watts_mean": 4.411911743678276,
+        "values": [
+          0.20593571163983473,
+          0.13197816308047844,
+          0.16186614285714288
+        ]
+      },
+      "refusals": [],
+      "notes": [
+        "llama-energy-0: off-band start 61%→51% accepted under the session's any-start rule (recorded decision) — labeled, not the 80→70 pin",
+        "llama-energy-1: off-band start 83%→73% accepted under the session's any-start rule (recorded decision) — labeled, not the 80→70 pin",
+        "llama-energy-1: programmatic cross-check read 15% (85→70) vs the operator marks' 10% — disagreement beyond the 5% reading step; operator marks used, noted",
+        "llama-energy-2: off-band start 75%→65% accepted under the session's any-start rule (recorded decision) — labeled, not the 80→70 pin"
+      ]
     }
   },
   "bandwidth": {
@@ -421,6 +742,15 @@
     "ours-prefill-warm-0: operator-supplied post hoc via manifest — round, cold/warm, battery health",
     "ours-prefill-warm-1: operator-supplied post hoc via manifest — round, cold/warm, battery health",
     "ours-prefill-warm-2: operator-supplied post hoc via manifest — round, cold/warm, battery health",
-    "ours-sustained-0: operator-supplied post hoc via manifest — round, cold/warm, battery health"
+    "ours-sustained-0: operator-supplied post hoc via manifest — round, cold/warm, battery health",
+    "llama-energy-0: operator-supplied post hoc via manifest — round, cold/warm, battery health, SoC marks",
+    "llama-energy-1: operator-supplied post hoc via manifest — round, cold/warm, battery health, SoC marks",
+    "llama-energy-2: operator-supplied post hoc via manifest — round, cold/warm, battery health, SoC marks",
+    "mlx-energy-0: operator-supplied post hoc via manifest — round, cold/warm, battery health, SoC marks",
+    "mlx-energy-1: operator-supplied post hoc via manifest — round, cold/warm, battery health, SoC marks",
+    "mlx-energy-2: operator-supplied post hoc via manifest — round, cold/warm, battery health, SoC marks",
+    "ours-energy-0: operator-supplied post hoc via manifest — round",
+    "ours-energy-1: operator-supplied post hoc via manifest — round",
+    "ours-energy-2: round marker '3' is a listed alias of the session round 'phase6-energy-2026-10-12' (operator typed the round index) — mapped, labeled"
   ]
 }

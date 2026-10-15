@@ -1,0 +1,33 @@
+qwen-metal Phase 6 row export (PROVISIONAL) — engine: llama-swiftui
+round: (none — PROVISIONAL)
+harness: llama.cpp b9999 47c78692 llama.swiftui + qwen-metal-p0a1 (97e552a, bceddff) + P6-2 patch
+checkpoint: locally converted Q4_K_M GGUF (qwen3-1.7b-70d244cc-Q4_K_M.gguf, sha256 in qwen-metal DECISIONS.md), from Qwen/Qwen3-1.7B @ 70d244cc
+mode: energy-loop
+prompt: decode-essay (84 tokens, llama.cpp tokenizer, parse_special=true; feeding: RENDERED bundled string; DIFFERS from the llama.cpp count on record (92) — investigate before using the row; HF/qwen-metal count 84)
+sampling: greedy (llama_sampler_init_greedy); burst cap 640 new tokens; loop cap = n_ctx − prompt (reset on EOS or context fill); n_ctx 4096
+Metal API validation: OFF (llama.swiftui scheme carries enableGPUValidationMode=1 = Disabled upstream; detached home-screen launches carry no validation layer at all)
+cold/warm: (record manually)
+battery health: (record manually) (maximum capacity %, Settings → Battery → Battery Health, operator-typed — NOT state of charge)
+state of charge (Settings → Battery, operator-read at the band marks — value of record): start (record manually), end (record manually)
+state of charge (programmatic UIDevice.batteryLevel — cross-check only, never the value of record): start 60.0%, end 50.0%
+memory (cross-check only — Xcode gauge phys_footprint is the value of record; mmap'd GGUF pages are file-backed and excluded, the invariant-3 accounting asymmetry): task_info phys_footprint 561 MB
+definitions: decode tok/s = 384 / (t512 − t128), t_k = host monotonic time right after llama_sampler_sample returns token k (llama_get_logits_ith synchronizes the backend first); prefill span = completion_init start → first sampled token available = tokenize + one llama_decode over the prompt batch + first sample (spec D1); the prompt llama_decode enqueue is async and listed separately
+energy cycle: 12 generations — ended by operator stop (final generation truncated at a token boundary)
+cumulative: 21057 generated tokens; Σ generation wall 833.6 s; cycle wall 833.8 s
+energy J/token is derived by tools/phase6_analyze.py from these raw fields (never in-harness)
+  gen 0: overall 30.25 tok/s, window 31.50 tok/s — 1880 tokens in 62.7 s (stop: eos) [elapsed 62.7 s]
+  gen 1: overall 25.64 tok/s, window 26.74 tok/s — 1880 tokens in 73.8 s (stop: eos) [elapsed 136.6 s]
+  gen 2: overall 25.80 tok/s, window 26.87 tok/s — 1880 tokens in 73.3 s (stop: eos) [elapsed 209.9 s]
+  gen 3: overall 25.75 tok/s, window 26.83 tok/s — 1880 tokens in 73.4 s (stop: eos) [elapsed 283.3 s]
+  gen 4: overall 24.61 tok/s, window 26.86 tok/s — 1880 tokens in 76.8 s (stop: eos) [elapsed 360.1 s]
+  gen 5: overall 25.21 tok/s, window 25.69 tok/s — 1880 tokens in 75.1 s (stop: eos) [elapsed 435.2 s]
+  gen 6: overall 24.83 tok/s, window 23.64 tok/s — 1880 tokens in 76.1 s (stop: eos) [elapsed 511.4 s]
+  gen 7: overall 25.16 tok/s, window 26.49 tok/s — 1880 tokens in 75.1 s (stop: eos) [elapsed 586.5 s]
+  gen 8: overall 25.16 tok/s, window 26.01 tok/s — 1880 tokens in 75.2 s (stop: eos) [elapsed 661.7 s]
+  gen 9: overall 24.26 tok/s, window 25.89 tok/s — 1880 tokens in 77.9 s (stop: eos) [elapsed 739.7 s]
+  gen 10: overall 23.98 tok/s, window 25.18 tok/s — 1880 tokens in 78.9 s (stop: eos) [elapsed 818.5 s]
+  gen 11: overall 25.43 tok/s — 377 tokens in 15.2 s (stop: stopRequested) [elapsed 833.8 s] [truncated by operator stop]
+last generation:
+generated: 377 tokens in 15.2 s (stop: stopRequested)
+prefill span: 84 tokens in 0.444 s = 189.21 tok/s (of record — wall, completion_init start to first sampled token available; tokenize 1.2 ms inside the span; prompt llama_decode enqueue 5.3 ms, async)
+decode rate: overall 25.43 tok/s, canonical window (tokens 128-512) n/a (needs >= 512 generated tokens, got 377)

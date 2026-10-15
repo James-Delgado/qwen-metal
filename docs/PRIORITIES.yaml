@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-09-28
+last_updated: 2026-10-14
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -2515,7 +2515,8 @@ tasks:
   - id: P6-5
     rank: 22.5
     title: "Phase 6 energy round (James, detached): idle baseline (>=4% SoC) + >=3 battery-delta cycles per engine in the 80->70 band, Latin-square order, health-based capacity basis, validity walked per cycle; timelines archived (the sustained-thermal chart data)"
-    status: in_progress
+    status: done
+    completed_at: 2026-10-15 02:12:09+00:00
     started_at: 2026-09-28 03:11:44+00:00
     owner: james
     depends_on: [P6-4]
@@ -2543,6 +2544,13 @@ tasks:
       manifest override mechanism exists but the energy math needs the SoC marks from the
       export (operator_overrides does not cover SoC). Idle baseline (>=4% drop) goes in
       manifest.json -> sessions.energy.idle_baseline. Runbook section 3.
+    p6_5_landed: |
+      2026-10-14 (done, James on-device): idle baseline 0.239 W (19% over 10 h) + 9 cycles
+      (3 per engine, all VALID under the any-start rule decided by James 2026-10-13 — the
+      80->70 start anchor waived, labeled). Net J/token ours 0.2069 (0.1787-0.2631), MLX
+      0.1506 (0.1296-0.1722), llama.cpp 0.1666 (0.1320-0.2059); spread tracks the SoC
+      region (gauge nonlinearity) — the writeup's dominant energy limitation. llama.cpp
+      KEPT at n=3. Exports under benchmarks/phase6/energy/; results.md + DECISIONS.md.
 
   - id: P6-6
     rank: 22.6
@@ -2584,6 +2592,14 @@ tasks:
       tools/phase6_analyze.py --out docs/writeup (tables.md / summary.json / thermal.png /
       energy.png); the external exports carry no device/iOS line, so the iOS build per
       session is manifest-typed (EXT-1 would make it per-row).
+    p6_5_handoff: |
+      Energy section (4) and limitations (7): name the any-start deviation as the
+      dominant energy limitation (cycles started at 60-61% drained 1.4-1.5x faster than
+      cycles started at 74-99%; the 80->70 band exists to remove exactly this), the
+      post-hoc SoC marks on the external rows, the round-2 llama.cpp programmatic
+      disagreement (85->70 vs 83->73), the unrealized Latin square (MLX always second),
+      airplane mode ON (energy) vs OFF (speed). Thermal chart = docs/writeup/thermal.png
+      (our cycles' x-axis is sum-of-generation-wall; external cycles loop-clock).
 
   - id: P6-EXEC
     rank: 23

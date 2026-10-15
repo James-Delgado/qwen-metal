@@ -100,6 +100,19 @@ analyzer REFUSES any headline that depends on a missing field.
   in the analyzer's notes and the refusal ledger, and the export text is
   never edited. Record the decision in DECISIONS.md whenever this block is
   used.
+  At P6-5 (James, 2026-10-13) the override set grew to `soc_start` /
+  `soc_end` (the Settings band marks, when the panel fields were left
+  blank) — labeled "SoC marks".
+- `band_start_rule` (optional, energy session): `{"rule": "any-start",
+  "decision": "<who, when>"}` waives the 80→70 START anchor for the round
+  (James, 2026-10-13). The ≥8%-burned and 3–9 W checks still bind; every
+  off-band cycle is labeled "off-band start" in the per-cycle table and
+  the notes, and the writeup's limitations section must name the
+  deviation. Without the block the pinned rule applies (start = 80).
+- `round_aliases` (optional, per session): markers the operator typed into
+  the apps that stand for this session's round (P6-5: `["1","2","3"]`,
+  the round index). A row whose own round line is a listed alias is
+  mapped to the session round and labeled; any other marker is refused.
 
 ## Regenerating the writeup tables and figures
 

@@ -101,6 +101,86 @@
         "airplane mode off",
         "SoC 65% at start"
       ]
+    },
+    "energy": {
+      "round": "phase6-energy-2026-10-12",
+      "dir": "energy",
+      "date": "idle baseline overnight 2026-09-29 21:40 → 2026-09-30 07:40 EST; cycles 2026-10-12/13 (round 1) and 2026-10-14 (rounds 2–3); app date stamps 2026-10-13 / 2026-10-14",
+      "ios_build": "26.6.1",
+      "xcode": "26.6 (17F113)",
+      "battery_health_percent": 100,
+      "conditions": "airplane mode ON, minimum brightness, Auto-Lock Never, Background App Refresh off, unplugged, detached, validation OFF",
+      "idle_baseline": {
+        "health_percent": 100,
+        "soc_start": 93,
+        "soc_end": 74,
+        "wall_seconds": 36000,
+        "ios_build": "26.6.1",
+        "note": "QwenMetalApp foregrounded on the Benchmark screen, model loaded, no generation; 21:40 → 07:40 EST (10 h). First-hour reading was 93 → 92 (quantized); the 10 h drop is the basis."
+      },
+      "band_start_rule": {
+        "rule": "any-start",
+        "decision": "James, 2026-10-13 (in conversation): the 80→70 start anchor is waived for this round — 'I will attempt to start at 80 but if it doesn't, then that's okay'. ≥8% burned and 3–9 W implied gross still bind; off-band cycles are labeled in every table and in the writeup's limitations section."
+      },
+      "operator_overrides": {
+        "note": "Decided by James 2026-10-13: the apps were given the marker '1' (and the round lines of the three round-1 exports were then edited by hand to '1' / '(none — 1'); the archived files were restored to the apps' canonical blank-round lines and the round of record is supplied here. The MLX/llama.cpp panels' cold/warm, health, and Settings SoC marks were left blank; James supplied them (MLX 71→61, llama.cpp 61→51; the programmatic cross-checks read 70→60 and 60→50). Every filled field is labeled operator-supplied post hoc. Rounds 2–3 (2026-10-14): the same pattern — the apps were given '2' / '3' (ours round 3 carries it in the header, app-typed → accepted as a listed alias); the external exports' round lines were hand-edited and 'Battery: a% —> b%' lines were typed in by hand; the archived files were restored to the apps' canonical lines and the SoC marks moved here (llama.cpp r2 83→73, MLX r2 71→61, MLX r3 60→50, llama.cpp r3 75→65).",
+        "defaults": {
+          "round": "phase6-energy-2026-10-12",
+          "battery_health_percent": 100
+        },
+        "rows": {
+          "ours-energy-0": {},
+          "mlx-energy-0": {
+            "cold_warm": "warm",
+            "soc_start": 71,
+            "soc_end": 61
+          },
+          "llama-energy-0": {
+            "cold_warm": "warm",
+            "soc_start": 61,
+            "soc_end": 51
+          },
+          "llama-energy-1": {
+            "cold_warm": "warm",
+            "soc_start": 83,
+            "soc_end": 73
+          },
+          "mlx-energy-1": {
+            "cold_warm": "warm",
+            "soc_start": 71,
+            "soc_end": 61
+          },
+          "ours-energy-1": {},
+          "ours-energy-2": {},
+          "mlx-energy-2": {
+            "cold_warm": "warm",
+            "soc_start": 60,
+            "soc_end": 50
+          },
+          "llama-energy-2": {
+            "cold_warm": "warm",
+            "soc_start": 75,
+            "soc_end": 65
+          }
+        }
+      },
+      "round_aliases": [
+        "1",
+        "2",
+        "3"
+      ],
+      "cycle_order_as_run": [
+        "round 1: ours, MLX, llama.cpp",
+        "round 2: llama.cpp, MLX, ours",
+        "round 3: ours, MLX, llama.cpp"
+      ],
+      "deviations": [
+        "80→70 band not held (any-start rule, decided by James 2026-10-13): starts 99/71/61 (r1), 83/71/61 (r2), 74/60/75 (r3)",
+        "Latin square not realized: MLX ran second in every round; ours/llama.cpp swapped positions in rounds 2–3 (runbook: (ours,MLX,llama), (MLX,llama,ours), (llama,ours,MLX))",
+        "no JSON timelines copied (text exports only; our cycles' thermal x-axis = Σ generation wall)",
+        "external panels' cold/warm, health, SoC marks typed post hoc (operator overrides, labeled); round markers typed as 1/2/3 (aliases)",
+        "recharge/rest between cycles not logged per cycle"
+      ]
     }
   }
 }

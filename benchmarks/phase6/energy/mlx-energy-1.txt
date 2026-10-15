@@ -1,0 +1,35 @@
+qwen-metal Phase 6 row export (PROVISIONAL) — engine: mlx-llmeval
+round: (none — PROVISIONAL)
+harness: mlx-swift-examples 378f2449 + qwen-metal-p0a1 (47c36a0, 992118b) + P6-2 patch; mlx-swift-lm / mlx-swift versions: RECORD FROM Package.resolved AS BUILT
+checkpoint: mlx-community/Qwen3-1.7B-4bit @ 3b1b1768
+mode: energy-loop
+prompt: decode-essay (84 tokens; feeding: RENDERED tokenizer-direct, special tokens parsed, no template; parity target 84: MATCH — parity signature holds)
+sampling: greedy (temperature 0); thinking: off; burst cap 640 new tokens; loop cap = 4096 − prompt (reset on EOS or context fill)
+Metal API validation: OFF (LLMEval scheme pins enableGPUValidationMode=1 = Disabled; detached home-screen launches carry no validation layer at all)
+cold/warm: (record manually)
+battery health: (record manually) (maximum capacity %, Settings → Battery → Battery Health, operator-typed — NOT state of charge)
+state of charge (Settings → Battery, operator-read at the band marks — value of record): start (record manually), end (record manually)
+state of charge (programmatic UIDevice.batteryLevel — cross-check only, never the value of record): start 70.0%, end 60.0%
+memory (cross-checks only — Xcode gauge phys_footprint is the value of record): MLX activeMemory 923 MB, peakMemory 1257 MB, cacheMemory 22 MB; task_info phys_footprint 1138 MB
+definitions: decode tok/s = 384 / (t512 − t128), t_k = host monotonic time at which generated token k is available (didGenerate callback, one call per token); prefill span = TokenIterator init (prompt-processing start) → first token available; the first token is sampled from the prompt forward (mlx-swift-lm 3.31.3 TokenIterator.prepare), no decode forward inside the span; tokenization excluded and listed separately
+energy cycle: 14 generations — ended by operator stop (final generation truncated at a token boundary)
+cumulative: 28825 generated tokens; Σ generation wall 883.9 s; cycle wall 884.1 s
+energy J/token is derived by tools/phase6_analyze.py from these raw fields (never in-harness)
+  gen 0: overall 38.68 tok/s, window 42.39 tok/s — 2069 tokens in 53.8 s (stop: eos) [elapsed 53.8 s]
+  gen 1: overall 33.69 tok/s, window 35.54 tok/s — 2069 tokens in 61.7 s (stop: eos) [elapsed 115.6 s]
+  gen 2: overall 33.56 tok/s, window 35.44 tok/s — 2069 tokens in 62.3 s (stop: eos) [elapsed 177.9 s]
+  gen 3: overall 33.55 tok/s, window 35.34 tok/s — 2069 tokens in 62.4 s (stop: eos) [elapsed 240.3 s]
+  gen 4: overall 33.26 tok/s, window 34.16 tok/s — 2069 tokens in 62.9 s (stop: eos) [elapsed 303.2 s]
+  gen 5: overall 33.23 tok/s, window 35.25 tok/s — 2069 tokens in 62.9 s (stop: eos) [elapsed 366.1 s]
+  gen 6: overall 33.33 tok/s, window 35.02 tok/s — 2069 tokens in 62.7 s (stop: eos) [elapsed 428.9 s]
+  gen 7: overall 33.27 tok/s, window 35.15 tok/s — 2069 tokens in 62.9 s (stop: eos) [elapsed 491.8 s]
+  gen 8: overall 32.20 tok/s, window 34.53 tok/s — 2069 tokens in 64.9 s (stop: eos) [elapsed 556.7 s]
+  gen 9: overall 31.61 tok/s, window 33.24 tok/s — 2069 tokens in 66.2 s (stop: eos) [elapsed 622.9 s]
+  gen 10: overall 31.53 tok/s, window 33.35 tok/s — 2069 tokens in 66.3 s (stop: eos) [elapsed 689.2 s]
+  gen 11: overall 31.36 tok/s, window 33.19 tok/s — 2069 tokens in 66.7 s (stop: eos) [elapsed 756.0 s]
+  gen 12: overall 31.50 tok/s, window 33.30 tok/s — 2069 tokens in 66.4 s (stop: eos) [elapsed 822.4 s]
+  gen 13: overall 31.59 tok/s, window 33.26 tok/s — 1928 tokens in 61.7 s (stop: stopRequested) [elapsed 884.1 s] [truncated by operator stop]
+last generation:
+generated: 1928 tokens in 61.7 s (stop: stopRequested)
+prefill span: 84 tokens in 0.691 s = 121.62 tok/s (of record — wall, prompt-processing start to first generated token available; library promptTime cross-check 0.691 s; tokenize 5.1 ms excluded)
+decode rate: overall 31.59 tok/s, canonical window (tokens 128-512) 33.26 tok/s

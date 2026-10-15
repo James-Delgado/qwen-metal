@@ -1,0 +1,36 @@
+qwen-metal Phase 6 row export (PROVISIONAL) — engine: llama-swiftui
+round: (none — PROVISIONAL)
+harness: llama.cpp b9999 47c78692 llama.swiftui + qwen-metal-p0a1 (97e552a, bceddff) + P6-2 patch
+checkpoint: locally converted Q4_K_M GGUF (qwen3-1.7b-70d244cc-Q4_K_M.gguf, sha256 in qwen-metal DECISIONS.md), from Qwen/Qwen3-1.7B @ 70d244cc
+mode: energy-loop
+prompt: decode-essay (84 tokens, llama.cpp tokenizer, parse_special=true; feeding: RENDERED bundled string; DIFFERS from the llama.cpp count on record (92) — investigate before using the row; HF/qwen-metal count 84)
+sampling: greedy (llama_sampler_init_greedy); burst cap 640 new tokens; loop cap = n_ctx − prompt (reset on EOS or context fill); n_ctx 4096
+Metal API validation: OFF (llama.swiftui scheme carries enableGPUValidationMode=1 = Disabled upstream; detached home-screen launches carry no validation layer at all)
+cold/warm: (record manually)
+battery health: (record manually) (maximum capacity %, Settings → Battery → Battery Health, operator-typed — NOT state of charge)
+state of charge (Settings → Battery, operator-read at the band marks — value of record): start (record manually), end (record manually)
+state of charge (programmatic UIDevice.batteryLevel — cross-check only, never the value of record): start 75.0%, end 65.0%
+memory (cross-check only — Xcode gauge phys_footprint is the value of record; mmap'd GGUF pages are file-backed and excluded, the invariant-3 accounting asymmetry): task_info phys_footprint 557 MB
+definitions: decode tok/s = 384 / (t512 − t128), t_k = host monotonic time right after llama_sampler_sample returns token k (llama_get_logits_ith synchronizes the backend first); prefill span = completion_init start → first sampled token available = tokenize + one llama_decode over the prompt batch + first sample (spec D1); the prompt llama_decode enqueue is async and listed separately
+energy cycle: 15 generations — ended by operator stop (final generation truncated at a token boundary)
+cumulative: 26460 generated tokens; Σ generation wall 1056.6 s; cycle wall 1056.9 s
+energy J/token is derived by tools/phase6_analyze.py from these raw fields (never in-harness)
+  gen 0: overall 30.74 tok/s, window 33.22 tok/s — 1880 tokens in 61.6 s (stop: eos) [elapsed 61.6 s]
+  gen 1: overall 26.00 tok/s, window 26.81 tok/s — 1880 tokens in 72.7 s (stop: eos) [elapsed 134.4 s]
+  gen 2: overall 26.19 tok/s, window 27.41 tok/s — 1880 tokens in 72.2 s (stop: eos) [elapsed 206.6 s]
+  gen 3: overall 26.10 tok/s, window 27.32 tok/s — 1880 tokens in 72.4 s (stop: eos) [elapsed 279.0 s]
+  gen 4: overall 26.08 tok/s, window 27.24 tok/s — 1880 tokens in 72.5 s (stop: eos) [elapsed 351.6 s]
+  gen 5: overall 25.35 tok/s, window 27.19 tok/s — 1880 tokens in 74.6 s (stop: eos) [elapsed 426.2 s]
+  gen 6: overall 25.76 tok/s, window 26.96 tok/s — 1880 tokens in 73.4 s (stop: eos) [elapsed 499.6 s]
+  gen 7: overall 24.70 tok/s, window 26.10 tok/s — 1880 tokens in 76.6 s (stop: eos) [elapsed 576.2 s]
+  gen 8: overall 24.18 tok/s, window 25.63 tok/s — 1880 tokens in 78.2 s (stop: eos) [elapsed 654.4 s]
+  gen 9: overall 24.41 tok/s, window 25.60 tok/s — 1880 tokens in 77.5 s (stop: eos) [elapsed 731.9 s]
+  gen 10: overall 24.38 tok/s, window 25.51 tok/s — 1880 tokens in 77.6 s (stop: eos) [elapsed 809.5 s]
+  gen 11: overall 23.43 tok/s, window 23.59 tok/s — 1880 tokens in 80.7 s (stop: eos) [elapsed 890.2 s]
+  gen 12: overall 23.25 tok/s, window 25.24 tok/s — 1880 tokens in 81.3 s (stop: eos) [elapsed 971.5 s]
+  gen 13: overall 23.78 tok/s, window 25.05 tok/s — 1880 tokens in 79.5 s (stop: eos) [elapsed 1051.0 s]
+  gen 14: overall 25.97 tok/s — 140 tokens in 5.8 s (stop: stopRequested) [elapsed 1056.9 s] [truncated by operator stop]
+last generation:
+generated: 140 tokens in 5.8 s (stop: stopRequested)
+prefill span: 84 tokens in 0.461 s = 182.24 tok/s (of record — wall, completion_init start to first sampled token available; tokenize 1.2 ms inside the span; prompt llama_decode enqueue 4.3 ms, async)
+decode rate: overall 25.97 tok/s, canonical window (tokens 128-512) n/a (needs >= 512 generated tokens, got 140)

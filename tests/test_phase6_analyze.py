@@ -737,3 +737,63 @@ def test_manifest_operator_overrides_supply_missing_fields_and_are_labeled(tmp_p
     # without the override block the same rows are refused (the existing rule)
     r2 = an.analyze_archive(write_archive(tmp_path / "b", manifest(), files, {}))
     assert r2.speed["ours"].decode_warm.n == 2 and r2.speed["mlx"].decode_warm.n == 2
+
+
+def test_soc_marks_can_be_operator_supplied_and_are_labeled(tmp_path):
+    """P6-5 (decided by James 2026-10-13): the external panels' SoC marks were left
+    blank; the operator supplies them via manifest overrides, labeled."""
+    files = full_energy_files(n_mlx=0, n_llama=0)
+    files["mlx-energy-0.txt"] = external(mode="energy-loop", round_=None, health=None,
+                                         soc=(None, None, 70.0, 60.0), gens=default_gens(n=18, window0=39.0, wall=45.0))
+    m = manifest()
+    m["sessions"]["energy"]["operator_overrides"] = {
+        "defaults": {"round": ROUND_ENERGY, "battery_health_percent": 100},
+        "rows": {"mlx-energy-0": {"cold_warm": "warm", "soc_start": 80, "soc_end": 70}},
+    }
+    r = an.analyze_archive(write_archive(tmp_path / "a", m, full_speed_files(), files))
+    assert len(r.energy["mlx"].cycles) == 1 and r.energy["mlx"].cycles[0].delta_soc == 10
+    assert any("mlx-energy-0" in x and "SoC marks" in x for x in r.notes)
+
+
+def test_any_start_band_rule_accepts_off_band_cycles_labeled(tmp_path):
+    """P6-5 (decided by James 2026-10-13): the 80→70 start anchor is waived for the
+    round; ≥8% burned and 3–9 W still bind; off-band cycles are labeled."""
+    files = full_energy_files(n_mlx=0, n_llama=0, ours_soc=[(99, 89, 100.0, 90.0), (80, 70, 80.0, 70.0), (71, 61, 70.0, 60.0)])
+    archive = write_archive(tmp_path / "a", manifest(), full_speed_files(), files)
+    r = an.analyze_archive(archive)
+    assert r.energy["ours"].n_valid == 1  # the pinned rule: two off-band cycles INVALID
+    m = manifest()
+    m["sessions"]["energy"]["band_start_rule"] = {"rule": "any-start", "decision": "James 2026-10-13"}
+    r2 = an.analyze_archive(write_archive(tmp_path / "b", m, full_speed_files(), files))
+    assert r2.energy["ours"].n_valid == 3 and r2.energy["ours"].headline is not None
+    off = [c for c in r2.energy["ours"].cycles if c.off_band_start]
+    assert [c.soc_start for c in off] == [99, 71]
+    assert any("off-band start" in n for n in r2.energy["ours"].notes)
+    shallow = ours_loop(soc=(99, 93, 99.0, 93.0), gens=default_gens(n=18, wall=58.0))
+    files["ours-energy-3.txt"] = shallow
+    r3 = an.analyze_archive(write_archive(tmp_path / "c", m, full_speed_files(), files))
+    assert r3.energy["ours"].n_valid == 3  # the ≥8% floor still binds under any-start
+
+
+def test_round_aliases_map_app_typed_markers_to_the_session(tmp_path):
+    """P6-5: the operator typed '1'/'2'/'3' (the Latin-square round index) into the
+    apps instead of the session marker; a listed alias is accepted and labeled, an
+    unlisted marker is still refused."""
+    files = full_energy_files(n_mlx=0, n_llama=0)
+    files["ours-energy-1.txt"] = ours_loop(round_="3", gens=default_gens(n=18, wall=58.0))
+    files["ours-energy-2.txt"] = ours_loop(round_="7", gens=default_gens(n=18, wall=58.0))
+    m = manifest()
+    m["sessions"]["energy"]["round_aliases"] = ["1", "2", "3"]
+    r = an.analyze_archive(write_archive(tmp_path / "a", m, full_speed_files(), files))
+    assert len(r.energy["ours"].cycles) == 2
+    assert any("ours-energy-1" in x and "alias" in x for x in r.notes)
+    assert any("ours-energy-2" in x and "round" in x for x in r.refusals)
+
+
+def test_programmatic_soc_disagreement_is_noted_not_refused():
+    idle = an.IdleBaseline(100, 80, 75, 4500, IOS)
+    row = ex.parse_export_text(ours_loop(soc=(83, 73, 85.0, 70.0), gens=default_gens(n=18, wall=58.0)))
+    c = an.analyze_energy_cycle(row, idle, require_band_start=False)
+    assert c.valid and c.cross_check_note and "15" in c.cross_check_note
+    ok = an.analyze_energy_cycle(ex.parse_export_text(ours_loop(gens=default_gens(n=18, wall=58.0))), idle)
+    assert ok.cross_check_note is None
