@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-10-14
+last_updated: 2026-10-15
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -2551,6 +2551,9 @@ tasks:
       0.1506 (0.1296-0.1722), llama.cpp 0.1666 (0.1320-0.2059); spread tracks the SoC
       region (gauge nonlinearity) — the writeup's dominant energy limitation. llama.cpp
       KEPT at n=3. Exports under benchmarks/phase6/energy/; results.md + DECISIONS.md.
+      2026-10-15 addendum (round 4, in-band attempt): n=4 headlines ours 0.1975 / MLX
+      0.1428 / llama.cpp 0.1740; 80-region cycles ours 0.169 / MLX 0.119 (81-start) /
+      llama.cpp 0.196 (n=1 each, cited as pinned-protocol spot readings).
 
   - id: P6-6
     rank: 22.6

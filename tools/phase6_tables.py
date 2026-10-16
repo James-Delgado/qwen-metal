@@ -89,6 +89,11 @@ def _energy_tables(r: an.Report) -> list[str]:
             h = en.headline
             rows.append(f"| {ENGINE_LABELS[e]} | {h.n} | {h.mean_j_per_token:.4f} | {h.spread[0]:.4f}–{h.spread[1]:.4f} | "
                         f"±{100 * h.systematic_fraction:.1f}% | {h.implied_watts_mean:.2f} | headline |")
+            if en.in_band:
+                b = en.in_band
+                rows.append(f"| {ENGINE_LABELS[e]} (in-band subset, start = 80) | {b.n} | {b.mean_j_per_token:.4f} | "
+                            f"{b.spread[0]:.4f}–{b.spread[1]:.4f} | ±{100 * b.systematic_fraction:.1f}% | "
+                            f"{b.implied_watts_mean:.2f} | pinned-protocol subset (below the ≥3 pin unless n ≥ 3) |")
         else:
             rows.append(f"| {ENGINE_LABELS[e]} | {en.n_valid} | — | — | — | — | REFUSED: {'; '.join(en.refusals) or 'no valid cycles'} |")
     rows.append("")

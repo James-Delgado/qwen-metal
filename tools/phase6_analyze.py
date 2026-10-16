@@ -123,6 +123,7 @@ class EngineEnergy:
     cycles: list[EnergyCycle] = field(default_factory=list)
     n_valid: int = 0
     headline: Optional[EnergyHeadline] = None
+    in_band: Optional[EnergyHeadline] = None   # the subset that honored the pinned 80% start (any n)
     refusals: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -314,12 +315,19 @@ def summarize_engine_energy(engine: str, cycles: list[EnergyCycle], refusals: li
         result.refusals.append(
             f"{len(valid)} valid cycle(s) — below the ≥3 pin — not a comparative energy row")
         return result
-    values = [c.net_joules_per_token for c in valid]
-    result.headline = EnergyHeadline(
-        n=len(valid), mean_j_per_token=statistics.fmean(values), spread=(min(values), max(values)),
-        systematic_fraction=statistics.fmean(c.systematic_fraction for c in valid),
-        implied_watts_mean=statistics.fmean(c.implied_watts for c in valid), values=values)
+    result.headline = _energy_headline(valid)
+    in_band = [c for c in valid if not c.off_band_start]
+    if in_band and len(in_band) < len(valid):
+        result.in_band = _energy_headline(in_band)
     return result
+
+
+def _energy_headline(cycles: list[EnergyCycle]) -> EnergyHeadline:
+    values = [c.net_joules_per_token for c in cycles]
+    return EnergyHeadline(
+        n=len(cycles), mean_j_per_token=statistics.fmean(values), spread=(min(values), max(values)),
+        systematic_fraction=statistics.fmean(c.systematic_fraction for c in cycles),
+        implied_watts_mean=statistics.fmean(c.implied_watts for c in cycles), values=values)
 
 
 # --------------------------------------------------------------------------

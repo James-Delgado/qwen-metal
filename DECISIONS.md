@@ -5978,3 +5978,38 @@ consistent within each round, named in §7).
 **Backlog:** P6-5 done. P6-6 (the writeup) stays blocked on LD-1 (the
 next agent task by rank). P6-EXEC's llama.cpp-energy decision is now
 moot (n=3 delivered).
+
+## 2026-10-15 — P6-5 addendum (James, on-device): round 4, the in-band attempt — n=4 per engine; headline ours 0.198 / MLX 0.143 / llama.cpp 0.174 J/token; 80-region cycles ours 0.169 / MLX 0.119 (81-start) / llama.cpp 0.196
+
+Taken after my 2026-10-14 recommendation (one more round started at
+exactly 80 → 70 to put a pinned-protocol number next to the any-start
+set). Same round marker, iOS 26.6.1, health 100%, conditions as rounds
+1–3; order MLX, ours, llama.cpp. Exports archived (index 3; external
+round/Battery lines restored and SoC marks supplied post hoc as before;
+ours app-typed `4` → alias). Analyzer gained an in-band subset summary
+(cycles with start == 80, any n, labeled; tests 46 green).
+
+- **n=4 headlines (every valid cycle, any-start):** ours **0.1975**
+  (0.1694–0.2631), MLX **0.1428** (0.1193–0.1722), llama.cpp **0.1740**
+  (0.1320–0.2059); systematic ±10.7–10.9%. Ranking MLX < ours ≈
+  llama.cpp (ours/llama.cpp overlap; MLX's max 0.172 ≈ ours' min 0.169
+  — "MLX lowest" holds at the edge).
+- **80-region cycles:** ours 80→69 (11%, late stop) 0.1694 at 3.78 W;
+  MLX 81→71 0.1193 at 4.18 W (one point above the anchor — labeled
+  off-band under the pinned rule, honestly; it is the 80-region reading
+  in substance); llama.cpp 80→70 0.1964 at 5.33 W. In this region ours ≈
+  1.42× MLX; llama.cpp ≈ 1.65× MLX. Each is n=1 — below the ≥3 pin, so
+  the writeup cites them as the pinned-protocol spot readings next to
+  the n=4 means, never as the headline.
+- **Consistency:** ours' three 70-and-above-start cycles read 0.169 /
+  0.179 / 0.179 (tight); the 61-start read 0.263. MLX 0.119 (81) / 0.130
+  / 0.150 (71) / 0.172 (60). llama.cpp is the exception: its 80-start
+  (0.196) is its second-highest, its 83-start (0.132) its lowest — the
+  cycle whose programmatic cross-check disagreed (85→70). The
+  SoC-region effect stands as the dominant energy limitation (§7).
+- **Thermal chart** regenerated with 12 cycles (docs/writeup/thermal.png);
+  plateaus unchanged: ours ≈22–24, MLX ≈33–36, llama.cpp ≈25–27 tok/s.
+
+No decision changed; P6-5 stays done with this addendum. P6-6 inputs:
+cite the n=4 headline, the in-band subset rows, and the labels verbatim
+from docs/writeup/tables.md.

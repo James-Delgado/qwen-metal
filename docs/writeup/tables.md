@@ -7,9 +7,9 @@ Every value below is regenerated; a dash or a refusal means no headline value ex
 
 | engine | decode tok/s, warm burst (window median, n) | decode tok/s, cold (window) | prefill tok/s, warm (span median, n, tokens) | sustained plateau (2nd-half median) | phys_footprint (Xcode gauge) | net J/token (mean, n) |
 |---|---|---|---|---|---|---|
-| qwen-metal | 31.16 (n=5) | 31.35 | 232.63 (n=3, 852 tok) | 22.83 | ours-mmap 574.9 MB, ours-wired 1460.0 MB | 0.2069 (n=3) |
-| MLX LLMEval | 43.40 (n=3) | 43.38 | 387.60 (n=3, 852 tok) | 34.94 | mlx 1070.0 MB | 0.1506 (n=3) |
-| llama.cpp | 34.80 (n=3) | 34.66 | 440.71 (n=3, 852 tok) | 27.41 | llama 560.9 MB | 0.1666 (n=3) |
+| qwen-metal | 31.16 (n=5) | 31.35 | 232.63 (n=3, 852 tok) | 22.83 | ours-mmap 574.9 MB, ours-wired 1460.0 MB | 0.1975 (n=4) |
+| MLX LLMEval | 43.40 (n=3) | 43.38 | 387.60 (n=3, 852 tok) | 34.94 | mlx 1070.0 MB | 0.1428 (n=4) |
+| llama.cpp | 34.80 (n=3) | 34.66 | 440.71 (n=3, 852 tok) | 27.41 | llama 560.9 MB | 0.1740 (n=4) |
 
 ## 2. Success-metric verdict (PLAN formula) and tripwires
 
@@ -33,18 +33,23 @@ ours 31.16 ÷ MLX 43.40 = 0.718 vs ≥ 0.75 ⇒ **NOT MET** (the committed 29.4 
 | qwen-metal | ours-energy-0 | 100 | 99→89 | 10 | 1120 | 23851 | 4536 | 4.05 | 0.59 | 4268 | 0.1789 | VALID (off-band start, any-start rule) |
 | qwen-metal | ours-energy-1 | 100 | 61→51 | 10 | 794 | 16517 | 4536 | 5.72 | 0.42 | 4346 | 0.2631 | VALID (off-band start, any-start rule) |
 | qwen-metal | ours-energy-2 | 100 | 74→64 | 10 | 1142 | 23859 | 4536 | 3.97 | 0.60 | 4262 | 0.1787 | VALID (off-band start, any-start rule) |
+| qwen-metal | ours-energy-3 | 100 | 80→69 | 11 | 1322 | 27591 | 4990 | 3.78 | 0.70 | 4673 | 0.1694 | VALID |
 | MLX LLMEval | mlx-energy-0 | 100 | 71→61 | 10 | 991 | 33166 | 4536 | 4.58 | 0.52 | 4299 | 0.1296 | VALID (off-band start, any-start rule) |
 | MLX LLMEval | mlx-energy-1 | 100 | 71→61 | 10 | 884 | 28825 | 4536 | 5.13 | 0.47 | 4324 | 0.1500 | VALID (off-band start, any-start rule) |
 | MLX LLMEval | mlx-energy-2 | 100 | 60→50 | 10 | 764 | 25277 | 4536 | 5.94 | 0.40 | 4353 | 0.1722 | VALID (off-band start, any-start rule) |
+| MLX LLMEval | mlx-energy-3 | 100 | 81→71 | 10 | 1086 | 35852 | 4536 | 4.18 | 0.57 | 4276 | 0.1193 | VALID (off-band start, any-start rule) |
 | llama.cpp | llama-energy-0 | 100 | 61→51 | 10 | 834 | 21057 | 4536 | 5.44 | 0.44 | 4336 | 0.2059 | VALID (off-band start, any-start rule) |
 | llama.cpp | llama-energy-1 | 100 | 83→73 | 10 | 1295 | 32021 | 4536 | 3.50 | 0.68 | 4226 | 0.1320 | VALID (off-band start, any-start rule) |
 | llama.cpp | llama-energy-2 | 100 | 75→65 | 10 | 1057 | 26460 | 4536 | 4.29 | 0.56 | 4283 | 0.1619 | VALID (off-band start, any-start rule) |
+| llama.cpp | llama-energy-3 | 100 | 80→70 | 10 | 852 | 22063 | 4536 | 5.33 | 0.45 | 4332 | 0.1964 | VALID |
 
 | engine | n valid | mean net J/token | spread (min–max) | systematic ± | implied W (mean) | status |
 |---|---|---|---|---|---|---|
-| qwen-metal | 3 | 0.2069 | 0.1787–0.2631 | ±10.9% | 4.58 | headline |
-| MLX LLMEval | 3 | 0.1506 | 0.1296–0.1722 | ±10.7% | 5.21 | headline |
-| llama.cpp | 3 | 0.1666 | 0.1320–0.2059 | ±10.9% | 4.41 | headline |
+| qwen-metal | 4 | 0.1975 | 0.1694–0.2631 | ±10.7% | 4.38 | headline |
+| qwen-metal (in-band subset, start = 80) | 1 | 0.1694 | 0.1694–0.1694 | ±10.1% | 3.78 | pinned-protocol subset (below the ≥3 pin unless n ≥ 3) |
+| MLX LLMEval | 4 | 0.1428 | 0.1193–0.1722 | ±10.8% | 4.96 | headline |
+| llama.cpp | 4 | 0.1740 | 0.1320–0.2059 | ±10.9% | 4.64 | headline |
+| llama.cpp (in-band subset, start = 80) | 1 | 0.1964 | 0.1964–0.1964 | ±10.7% | 5.33 | pinned-protocol subset (below the ≥3 pin unless n ≥ 3) |
 
 ## 5. Bandwidth pair (same build, same session)
 
@@ -67,6 +72,7 @@ ours 31.16 ÷ MLX 43.40 = 0.718 vs ≥ 0.75 ⇒ **NOT MET** (the committed 29.4 
 - MLX LLMEval energy: mlx-energy-0: off-band start 71%→61% accepted under the session's any-start rule (recorded decision) — labeled, not the 80→70 pin
 - MLX LLMEval energy: mlx-energy-1: off-band start 71%→61% accepted under the session's any-start rule (recorded decision) — labeled, not the 80→70 pin
 - MLX LLMEval energy: mlx-energy-2: off-band start 60%→50% accepted under the session's any-start rule (recorded decision) — labeled, not the 80→70 pin
+- MLX LLMEval energy: mlx-energy-3: off-band start 81%→71% accepted under the session's any-start rule (recorded decision) — labeled, not the 80→70 pin
 - llama.cpp energy: llama-energy-0: off-band start 61%→51% accepted under the session's any-start rule (recorded decision) — labeled, not the 80→70 pin
 - llama.cpp energy: llama-energy-1: off-band start 83%→73% accepted under the session's any-start rule (recorded decision) — labeled, not the 80→70 pin
 - llama.cpp energy: llama-energy-1: programmatic cross-check read 15% (85→70) vs the operator marks' 10% — disagreement beyond the 5% reading step; operator marks used, noted
@@ -100,9 +106,12 @@ ours 31.16 ÷ MLX 43.40 = 0.718 vs ≥ 0.75 ⇒ **NOT MET** (the committed 29.4 
 - note: llama-energy-0: operator-supplied post hoc via manifest — round, cold/warm, battery health, SoC marks
 - note: llama-energy-1: operator-supplied post hoc via manifest — round, cold/warm, battery health, SoC marks
 - note: llama-energy-2: operator-supplied post hoc via manifest — round, cold/warm, battery health, SoC marks
+- note: llama-energy-3: operator-supplied post hoc via manifest — round, cold/warm, battery health, SoC marks
 - note: mlx-energy-0: operator-supplied post hoc via manifest — round, cold/warm, battery health, SoC marks
 - note: mlx-energy-1: operator-supplied post hoc via manifest — round, cold/warm, battery health, SoC marks
 - note: mlx-energy-2: operator-supplied post hoc via manifest — round, cold/warm, battery health, SoC marks
+- note: mlx-energy-3: operator-supplied post hoc via manifest — round, cold/warm, battery health, SoC marks
 - note: ours-energy-0: operator-supplied post hoc via manifest — round
 - note: ours-energy-1: operator-supplied post hoc via manifest — round
 - note: ours-energy-2: round marker '3' is a listed alias of the session round 'phase6-energy-2026-10-12' (operator typed the round index) — mapped, labeled
+- note: ours-energy-3: round marker '4' is a listed alias of the session round 'phase6-energy-2026-10-12' (operator typed the round index) — mapped, labeled

@@ -797,3 +797,18 @@ def test_programmatic_soc_disagreement_is_noted_not_refused():
     assert c.valid and c.cross_check_note and "15" in c.cross_check_note
     ok = an.analyze_energy_cycle(ex.parse_export_text(ours_loop(gens=default_gens(n=18, wall=58.0))), idle)
     assert ok.cross_check_note is None
+
+
+def test_in_band_subset_is_reported_alongside_the_any_start_headline(tmp_path):
+    """P6-5 round 4: with the any-start rule the headline mean covers every valid cycle;
+    the cycles that honored the pinned start anchor (start == 80) are summarized
+    separately so the writeup can cite the protocol number too."""
+    files = full_energy_files(n_mlx=0, n_llama=0,
+                              ours_soc=[(99, 89, 100.0, 90.0), (80, 70, 80.0, 70.0), (80, 69, 80.0, 70.0)])
+    m = manifest()
+    m["sessions"]["energy"]["band_start_rule"] = {"rule": "any-start", "decision": "test"}
+    r = an.analyze_archive(write_archive(tmp_path / "a", m, full_speed_files(), files))
+    e = r.energy["ours"]
+    assert e.headline.n == 3 and e.in_band.n == 2
+    assert e.in_band.values == pytest.approx([c.net_joules_per_token for c in e.cycles if c.soc_start == 80])
+    assert e.in_band.mean_j_per_token == pytest.approx(sum(e.in_band.values) / 2)
