@@ -2809,7 +2809,8 @@ tasks:
   - id: LD-1
     rank: 22.35
     title: "Long-depth GPU free-run report: fp16-activation behavior at multi-thousand-token cache depth"
-    status: ready
+    status: in_progress
+    started_at: 2026-10-16T03:13:20Z
     depends_on: [P4-4]
     blocks: [P6-6]
     deliverable:
