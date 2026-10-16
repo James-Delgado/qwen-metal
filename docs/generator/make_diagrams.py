@@ -246,14 +246,11 @@ ax.text(5.0, 0.55, "Decode roofline:  tok/s  ≈  DRAM bandwidth  ÷  bytes read
 plt.savefig(f"{OUT}/d4_fused.png", dpi=200, bbox_inches="tight"); plt.close()
 
 # ----------------------------------------------------------------------------
-# D5: Roofline chart
+# D5: Roofline chart (left) + the Phase 6 same-session implied-bandwidth reading (right)
 # ----------------------------------------------------------------------------
-fig, ax = plt.subplots(figsize=(8.8, 4.6))
-bpt = np.linspace(0.4, 3.7, 300)  # GB per token
 # Phase 0 (2026-08-22): planning curves replaced by MEASURED bandwidth —
 # 43.84 GB/s sustained triad (iPhone 15 Pro, DECISIONS.md); 51.2 = A17 Pro
-# rated, shown as context. Both engines measure at ~96-102% of the triad
-# figure (read-mostly traffic exceeds 2R+1W triad — BW-1 will bound it).
+# rated, shown as context.
 # Phase 2 (2026-08-25): our naive bf16 'before' point added — 3.44 GB/token,
 # measured 6.7–8.6 tok/s on-device (50–70% of roofline; DECISIONS.md P2-7).
 # Phase 3 (2026-09-05): packed q4g64 point added — ~0.97 GB/token weights,
@@ -264,36 +261,83 @@ bpt = np.linspace(0.4, 3.7, 300)  # GB per token
 # past the 29.4 target; ~95% of GPU time is weight streaming (DECISIONS.md P4-11).
 # Phase 5 (2026-09-19/23): decode untouched by design; the regression rows measured
 # 31.05 / 30.90 window median on the same detached footing — no new decode point.
+# Phase 6 (2026-10-16, P6-EXEC): the same-session head-to-head (speed session
+# 2026-09-27, iOS 26.6.1, all three engines interleaved) supersedes the Phase 0
+# PROVISIONAL external points, now drawn hollow. The three Phase 6 points and the
+# right panel's implied-bandwidth reading are LOADED from docs/writeup/summary.json
+# — tools/phase6_analyze.py's output over the archived benchmarks/phase6/ exports
+# (never typed here; tests/test_writeup.py keeps that file equal to a fresh
+# regeneration). bytes/token = our counted 1,014,087,680 B (packed weights + fp16
+# KV at the window's median depth); the external engines are placed on that same
+# basis, LABELED — their per-token bytes are not measured by this project.
+import json
+_SUMMARY = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                         "..", "writeup", "summary.json"))
+with open(_SUMMARY) as _f:
+    P6 = json.load(_f)
+P6_ROOF = P6["roofline"]
+P6_DEN = P6["roofline_denominators"]
+P6_VERDICT = P6["verdict"]
+P6_GB = P6_ROOF["ours"]["bytes_per_token"] / 1e9
+P6_OURS = P6_ROOF["ours"]["window_tok_s"]
+P6_MLX = P6_ROOF["mlx"]["window_tok_s"]
+P6_LLAMA = P6_ROOF["llama"]["window_tok_s"]
+P6_RECORD = P6_DEN["triad_of_record_gbps"]
+assert abs(P6_RECORD - 43.84) < 1e-9, "roofline denominator of record moved — re-read DECISIONS.md"
+
+fig, (ax, axr) = plt.subplots(2, 1, figsize=(8.8, 7.4),
+                              gridspec_kw={"height_ratios": [4.6, 2.4]})
+bpt = np.linspace(0.4, 3.7, 300)  # GB per token
 for bw, c, ls, lab in [
     (43.84, BLUE, "-", "43.84 GB/s (MEASURED triad, iPhone 15 Pro)"),
     (51.2, "#93c5fd", "--", "51.2 GB/s (A17 Pro rated)"),
 ]:
     ax.plot(bpt, bw / bpt, color=c, ls=ls, lw=1.8, label=lab)
 ax.axhline(29.4, color=ORANGE, ls=":", lw=1.6)
-ax.text(2.6, 30.4, "committed target: 29.4 tok/s (= 0.75 × MLX measured)",
+ax.text(2.6, 30.4, "committed target: 29.4 tok/s (= 0.75 × MLX's P0 39.2)",
         fontsize=8, color=ORANGE)
-# markers — measured Phase 0 rows (PROVISIONAL)
+# fp16 counterfactual
 ax.scatter([3.1], [43.84/3.1], s=70, color=GRAY, zorder=5)
 ax.annotate("same model @ fp16\n≈ 14 tok/s ceiling", (3.1, 14.1), xytext=(2.45, 44),
             fontsize=8.5, color=GRAY, arrowprops=dict(arrowstyle="->", color=GRAY))
-ax.scatter([1.14], [39.2], s=90, color=GREEN, marker="*", zorder=6)
-ax.annotate("MLX (MEASURED, P0): 39.2 tok/s\nwarm burst @ ~1.14 GB/token —\nessentially on the roofline", (1.14, 39.2),
+# Phase 0 external rows — PROVISIONAL, superseded by Phase 6 (hollow markers)
+ax.scatter([1.14], [39.2], s=90, facecolors="none", edgecolors=GREEN, marker="*",
+           linewidths=1.3, zorder=6)
+ax.scatter([1.3], [32.44], s=70, facecolors="none", edgecolors=ORANGE,
+           linewidths=1.3, zorder=6)
+# Phase 6 same-session rows (filled), all on the 1.014 GB/token basis
+ax.scatter([P6_GB], [P6_MLX], s=130, color=GREEN, marker="*", zorder=8,
+           edgecolors="white", linewidths=0.6)
+ax.scatter([P6_GB], [P6_LLAMA], s=80, color=ORANGE, zorder=8,
+           edgecolors="white", linewidths=0.6)
+ax.scatter([P6_GB], [P6_OURS], s=85, color=PURPLE, zorder=9,
+           edgecolors="white", linewidths=0.6)
+ax.annotate(f"MLX: P0 PROVISIONAL 39.2 (hollow ★) →\n"
+            f"Phase 6 same-session {P6_MLX:.2f} tok/s (★):\n"
+            f"{P6_ROOF['mlx']['implied_gbps']:.1f} GB/s implied on our byte basis\n"
+            f"— at the measured triad ceiling", (P6_GB, P6_MLX),
             xytext=(1.5, 84), fontsize=8.5, color=GREEN,
             arrowprops=dict(arrowstyle="->", color=GREEN))
-ax.scatter([1.3], [32.44], s=70, color=ORANGE, zorder=6)
-ax.annotate("llama.cpp (MEASURED, P0): 32.4\n(Q4_K_M, 5.03 BPW → more bytes/token)", (1.3, 32.44),
-            xytext=(1.85, 60), fontsize=8.5, color=ORANGE,
+ax.annotate(f"llama.cpp: P0 PROVISIONAL 32.4 (hollow ●) →\n"
+            f"Phase 6 {P6_LLAMA:.2f} tok/s (Q4_K_M, 5.03 BPW:\n"
+            f"true bytes/token likely above the basis)", (P6_GB, P6_LLAMA),
+            xytext=(2.0, 60), fontsize=8.5, color=ORANGE,
             arrowprops=dict(arrowstyle="->", color=ORANGE))
 ax.scatter([3.44], [7.5], s=80, color=RED, marker="D", zorder=6)
-ax.annotate("qwen-metal P2 naive bf16 (MEASURED):\n6.7–8.6 tok/s 'before' @ 3.44 GB/token\n(50–70% of roofline; Phases 3–5 close it)", (3.44, 7.5),
-            xytext=(1.8, 1.5), fontsize=8.5, color=RED,
+ax.annotate("qwen-metal P2 naive bf16 (MEASURED):\n6.7–8.6 tok/s 'before' @ 3.44 GB/token\n(50–70% of roofline; Phases 3–5 closed it)", (3.44, 7.5),
+            xytext=(1.9, 1.5), fontsize=8.5, color=RED,
             arrowprops=dict(arrowstyle="->", color=RED))
 ax.scatter([0.97], [20.61], s=90, color=BLUE, marker="D", zorder=6)
-ax.annotate("qwen-metal P3 packed 4-bit (MEASURED):\n20.6 tok/s warm @ ~0.97 GB/token — 49% of\nroofline (weights-only microbench: 80%)", (0.97, 20.61),
+ax.annotate("qwen-metal P3 packed 4-bit (MEASURED):\n20.6 tok/s warm @ ~0.97 GB/token —\n49% of roofline (microbench: 80%)", (0.97, 20.61),
             xytext=(0.5, 6), fontsize=8.5, color=BLUE,
             arrowprops=dict(arrowstyle="->", color=BLUE))
-ax.scatter([0.97], [31.67], s=110, color=PURPLE, marker="*", zorder=7)
-ax.annotate("qwen-metal P4 fused (MEASURED):\n31.67 tok/s warm @ ~0.97 GB/token —\npast the 29.4 target; ~95% of GPU time\nis weight streaming @ 80% of roofline", (0.97, 31.67),
+ax.scatter([0.97], [31.67], s=70, color=PURPLE, marker="*", zorder=7, alpha=0.55)
+ax.annotate(f"qwen-metal: P4 fused 31.67 (faint ★) →\n"
+            f"Phase 6 same-session {P6_OURS:.2f} tok/s (●):\n"
+            f"{P6_ROOF['ours']['implied_gbps']:.1f} GB/s implied, "
+            f"{P6_ROOF['ours']['fraction_of_record']:.2f} of the record;\n"
+            f"verdict {P6_VERDICT['ratio']:.3f} vs ≥ 0.75 ⇒ "
+            f"{'MET' if P6_VERDICT['met'] else 'NOT MET'} (29.4 exceeded)", (P6_GB, P6_OURS),
             xytext=(0.44, 55), fontsize=8.5, color=PURPLE,
             arrowprops=dict(arrowstyle="->", color=PURPLE))
 ax.set_xlabel("Bytes read per generated token (GB)  ≈  packed weights + scales + KV reads", fontsize=9)
@@ -303,6 +347,32 @@ ax.grid(alpha=0.25)
 ax.legend(fontsize=8, loc="upper right")
 ax.set_title("Decode roofline — why quantization and fusion set the speed limit", fontsize=10.5,
              fontweight="bold", color=INK)
+
+# right panel: the Phase 6 implied-bandwidth reading (writeup §5.1, summary.json)
+_rows = [("qwen-metal", "ours", PURPLE), ("llama.cpp", "llama", ORANGE), ("MLX LLMEval", "mlx", GREEN)]
+_y = np.arange(len(_rows))
+for yi, (lab, key, col) in zip(_y, _rows):
+    r = P6_ROOF[key]
+    proxy = key != "ours"
+    axr.barh(yi, r["implied_gbps"], height=0.56, color=col, alpha=0.35 if proxy else 0.85,
+             edgecolor=col, lw=1.4, hatch="//" if proxy else None, zorder=3)
+    axr.text(r["implied_gbps"] + 0.6, yi,
+             f"{r['window_tok_s']:.2f} tok/s → {r['implied_gbps']:.1f} GB/s\n"
+             f"{r['fraction_of_record']:.2f}× record · {r['fraction_of_triad']:.2f}× session triad",
+             va="center", fontsize=7.6, color=INK)
+for val, col, ls, lab in [
+    (P6_DEN["triad_of_record_gbps"], BLUE, "-", f"triad of record {P6_DEN['triad_of_record_gbps']:.2f}"),
+    (P6_DEN["triad_session_gbps"], BLUE, ":", f"session triad {P6_DEN['triad_session_gbps']:.2f}"),
+    (P6_DEN["readonly_session_gbps"], GRAY, "--", f"session read-only {P6_DEN['readonly_session_gbps']:.2f} (BW-1 bound)"),
+]:
+    axr.axvline(val, color=col, ls=ls, lw=1.4, zorder=2, label=lab)
+axr.set_yticks(_y); axr.set_yticklabels([r[0] for r in _rows], fontsize=8.5)
+axr.set_xlim(0, 78); axr.set_ylim(-1.25, len(_rows) - 0.3)
+axr.set_xlabel("implied DRAM GB/s = window tok/s × 1.014 GB/token", fontsize=8.5)
+axr.grid(axis="x", alpha=0.25); axr.set_axisbelow(True)
+axr.legend(fontsize=7.2, loc="lower right")
+axr.set_title("Phase 6 same-session reading (2026-09-27, iOS 26.6.1) — hatched = external engine on our byte basis (labeled proxy)",
+              fontsize=8.8, fontweight="bold", color=INK)
 plt.tight_layout(); plt.savefig(f"{OUT}/d5_roofline.png", dpi=200, bbox_inches="tight"); plt.close()
 
 # ----------------------------------------------------------------------------
@@ -364,7 +434,11 @@ phases = [
     ("3", "4-bit quant + fused dequant-matvec — DONE 2026-09-05", "all gates in-band; microbench 35.3 GB/s ≥ 30.7 gate; decode 20.6 tok/s (3.0×); mmap default", 4.5, 2.5, GREEN, GREENF),
     ("4", "Fused attention + kernel fusion — DONE 2026-09-14", "fused SDPA + folds + GPU argmax: 200 disp/tok; 31.67 tok/s (29.4 target exceeded); overhead gate failed w/ anatomy → PIPE-1", 6.5, 2.5, GREEN, GREENF),
     ("5", "Tiled prefill GEMM — DONE 2026-09-19", "tiled dequant-GEMM + chunked prefill (C=512): 172.23 tok/s (floor 135 PASS; 47% of MLX ≈370), 240.86 at close-out (65%); M=8 gate failed w/ anatomy → P5-2C", 8.5, 2.0, GREEN, GREENF),
-    ("6", "Benchmark writeup — NEXT (spec pending)", "full cross-engine table same-session; thermal + J/tok (battery-delta); roofline analysis from measured bandwidth + GEMM plateau", 10.0, 1.5, BLUE, BLUEF),
+    ("6", "Benchmark writeup — DONE 2026-10-16",
+     f"same-session head-to-head (iOS 26.6.1): decode {P6_OURS:.2f} vs MLX {P6_MLX:.2f} / llama.cpp {P6_LLAMA:.2f} tok/s — verdict {P6_VERDICT['ratio']:.3f} NOT MET (29.4 exceeded); "
+     f"prefill {P6['speed']['ours']['prefill_warm_median']:.2f} vs {P6['speed']['mlx']['prefill_warm_median']:.2f} / {P6['speed']['llama']['prefill_warm_median']:.2f}; "
+     f"J/tok {P6['energy']['ours']['headline']['mean_j_per_token']:.3f} / {P6['energy']['mlx']['headline']['mean_j_per_token']:.3f} / {P6['energy']['llama']['headline']['mean_j_per_token']:.3f} (n=4); docs/writeup.md → CAMP-1 (James)",
+     10.0, 1.5, GREEN, GREENF),
 ]
 ax.set_xlim(-0.2, 12.4); ax.set_ylim(-0.6, len(phases)*1.02); ax.axis("off")
 for i, (num, name, desc, start, dur, ec, fc) in enumerate(reversed(phases)):

@@ -8,11 +8,38 @@ from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Image,
                                 Table, TableStyle, PageBreak, KeepTogether, HRFlowable)
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from PIL import Image as PILImage
+import json
 import os
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 D = os.path.join(_HERE, "diagrams")
 OUTPDF = os.path.normpath(os.path.join(_HERE, "..", "architecture.pdf"))
+
+# Phase 6 numbers of record are LOADED from the analyzer's summary.json (the
+# output of tools/phase6_analyze.py over benchmarks/phase6/; drift-tested by
+# tests/test_writeup.py) — never typed here. Everything else in this document is
+# a ledger-cited snapshot (DECISIONS.md is authoritative when they disagree).
+with open(os.path.normpath(os.path.join(_HERE, "..", "writeup", "summary.json"))) as _f:
+    P6 = json.load(_f)
+_ENGINES = ("ours", "mlx", "llama")
+P6_DEC = {k: P6["speed"][k]["decode_warm_median"] for k in _ENGINES}
+P6_PRE = {k: P6["speed"][k]["prefill_warm_median"] for k in _ENGINES}
+P6_SUS = {k: P6["speed"][k]["sustained"]["plateau_second_half_median"] for k in _ENGINES}
+P6_J = {k: P6["energy"][k]["headline"]["mean_j_per_token"] for k in _ENGINES}
+P6_GBPS = {k: P6["roofline"][k]["implied_gbps"] for k in _ENGINES}
+P6_FREC = {k: P6["roofline"][k]["fraction_of_record"] for k in _ENGINES}
+P6_FTRI = {k: P6["roofline"][k]["fraction_of_triad"] for k in _ENGINES}
+P6_RATIO = P6["verdict"]["ratio"]
+P6_VERDICT = "MET" if P6["verdict"]["met"] else "NOT MET"
+P6_FOOT = {"ours_mmap": P6["speed"]["ours"]["footprint_mb"]["ours-mmap"],
+           "ours_wired": P6["speed"]["ours"]["footprint_mb"]["ours-wired"] / 1000.0,
+           "mlx": P6["speed"]["mlx"]["footprint_mb"]["mlx"] / 1000.0,
+           "llama": P6["speed"]["llama"]["footprint_mb"]["llama"]}
+P6_IDLE_W = P6["idle_baseline"]["watts"]
+P6_BOOKEND = P6["bookend_delta"]
+P6_DEN = P6["roofline_denominators"]
+P6_CEIL = P6["roofline"]["ours"]["ceiling_tok_s_record"]
+assert P6_VERDICT == "NOT MET" and abs(P6_DEN["triad_of_record_gbps"] - 43.84) < 1e-9
 
 INK = colors.HexColor("#1b2432")
 BLUE = colors.HexColor("#2563eb")
@@ -65,7 +92,7 @@ def footer(canvas, doc):
     canvas.setFont("Helvetica", 7.5)
     canvas.setFillColor(GRAY)
     canvas.drawString(0.75 * inch, 0.45 * inch,
-                      "qwen-metal — Architecture & System Design  ·  v1.8  ·  2026-09-23")
+                      "qwen-metal — Architecture & System Design  ·  v1.9  ·  2026-10-16")
     canvas.drawRightString(letter[0] - 0.75 * inch, 0.45 * inch, f"Page {doc.page}")
     canvas.setStrokeColor(colors.HexColor("#e2e8f0"))
     canvas.line(0.75 * inch, 0.62 * inch, letter[0] - 0.75 * inch, 0.62 * inch)
@@ -86,7 +113,7 @@ S.append(Paragraph("Architecture &amp; System Design Document", ParagraphStyle(
 S.append(Paragraph("A from-scratch, single-model LLM inference engine in Swift + Metal for iPhone — "
                    "Qwen ~1.5–2B, 4-bit quantized — benchmarked head-to-head against MLX Swift and "
                    "llama.cpp on the same physical device.", SUB))
-S.append(Paragraph("Version 1.8 · September 23, 2026 (Phase 5 exit: batched prefill on-device; prefill-vs-MLX judged) · Companion to PLAN.md, CLAUDE.md, DECISIONS.md, and the phase specs. "
+S.append(Paragraph("Version 1.9 · October 16, 2026 (Phase 6 exit: the same-session head-to-head measured; success metric NOT MET at 0.718, recorded with anatomy; writeup in docs/writeup.md) · Companion to PLAN.md, CLAUDE.md, DECISIONS.md, docs/writeup.md, and the phase specs. "
                    "Where this document and DECISIONS.md disagree, DECISIONS.md (the append-only log) wins.", CAP))
 S.append(HRFlowable(width="100%", color=INK, thickness=1.2, spaceAfter=10))
 
@@ -102,8 +129,9 @@ S.append(Paragraph(
     "roofline analysis explaining every gap.", BODY))
 S.append(Paragraph(
     "The performance goal is calibrated by physics rather than ambition: MLX decodes the pinned Qwen3-1.7B 4-bit "
-    "checkpoint at a <b>measured 39.2 tok/s</b> warm-burst on the project's iPhone 15 Pro (Phase 0 row, PROVISIONAL), "
-    "which sits essentially at the measured memory-bandwidth roofline (§5). Matching it is therefore not required for "
+    "checkpoint at a <b>measured 39.2 tok/s</b> warm-burst on the project's iPhone 15 Pro (Phase 0 row, PROVISIONAL; "
+    f"<b>{P6_DEC['mlx']:.2f} tok/s</b> at the canonical window in the Phase 6 same-session round), "
+    "which sits at the measured memory-bandwidth roofline (§5). Matching it is therefore not required for "
     "success. The committed target is absolute and now pinned (DECISIONS.md, Phase 0 exit): decode ≥ 0.75 × MLX's "
     "measured decode tok/s = <b>29.4 tok/s</b>, both sides measured in the same session at the canonical measurement "
     "window (generated tokens 128–512). Being able to account for the remaining gap is the point. Phase 2 (exited "
@@ -128,7 +156,22 @@ S.append(Paragraph(
     "compute plateau on the A17 Pro (GE-1, campaign). Decode measured unchanged (31.05 / 30.90). A second gate is on "
     "record FAILED with its anatomy: the GEMM microbench at M=8 (19.54 vs ≥30.69 GB/s) — the device is already "
     "compute-bound at M=8, so the gate's bandwidth premise does not hold there; remedy P5-2C in the campaign. "
-    "Phase 6 (benchmark writeup: the same-session head-to-head) is next.", BODY))
+    "Phase 6 (exited 2026-10-16) is the round every earlier comparison was provisional for: all three engines re-run "
+    "in one session on one iOS build (26.6.1), interleaved and bookended, with one metric definition per metric. "
+    f"Decode at the canonical window: <b>qwen-metal {P6_DEC['ours']:.2f} vs MLX {P6_DEC['mlx']:.2f} vs llama.cpp "
+    f"{P6_DEC['llama']:.2f} tok/s</b>; the success metric evaluated as written reads <b>{P6_DEC['ours']:.2f} ÷ "
+    f"{P6_DEC['mlx']:.2f} = {P6_RATIO:.3f} ⇒ {P6_VERDICT}</b> (≥ 0.75), while the committed 29.4 tok/s constant stays "
+    "exceeded — the Phase 0 basis understated MLX by ≈11% (validation ON, the app's overall rate, template feeding, "
+    f"an older OS build). Anatomy: on our counted byte basis MLX decodes at {P6_FREC['mlx']:.2f}× the 43.84 GB/s "
+    f"triad of record and we decode at {P6_FREC['ours']:.2f}× — the matvec streams weights at ≈80% of roofline and "
+    "≈1.4 ms/token of submission overhead sits outside the GPU; that is the campaign's first headline gap, with named "
+    f"owners (matvec stream rate, PIPE-1). Prefill {P6_PRE['ours']:.2f} vs {P6_PRE['mlx']:.2f} / {P6_PRE['llama']:.2f} "
+    f"tok/s ({P6_PRE['ours']/P6_PRE['mlx']*100:.0f}% / {P6_PRE['ours']/P6_PRE['llama']*100:.0f}%; one owner, the "
+    f"GEMM compute plateau, GE-1); sustained plateaus {P6_SUS['ours']:.2f} / {P6_SUS['mlx']:.2f} / {P6_SUS['llama']:.2f}; "
+    f"net energy {P6_J['ours']:.3f} / {P6_J['mlx']:.3f} / {P6_J['llama']:.3f} J/token (n=4 each, the start-of-charge "
+    "anchor waived by decision — the energy row's dominant limitation, stated). The writeup — roofline from measured "
+    "denominators, per-component headroom, seventeen measurement limitations, honest gaps, every table regenerated "
+    "and drift-tested — is docs/writeup.md. Next: the optimization campaign charter (CAMP-1, James).", BODY))
 S.append(Paragraph("1.1 · Non-goals (scope is a feature)", H2))
 S.append(Paragraph(
     "Breadth is where mature engines spend most of their engineering, and it teaches little per hour invested. Each "
@@ -215,7 +258,11 @@ S.append(Paragraph(
     "to load — stays the default for Phase 4+, with wired-copy retained in the app only as a diagnostic toggle. "
     "Phase 5 added the only new persistent allocation since: the preallocated prefill scratch (34.0 MiB at chunk "
     "size 512, inside its pre-committed ≤64 MiB budget; no per-chunk allocation, asserted by test) — phys_footprint "
-    "<b>573.2 MB</b> mmap on the Phase 5 device rows (DECISIONS.md 2026-09-18), +35 MB over the Phase 4 gauge.", BODY))
+    "<b>573.2 MB</b> mmap on the Phase 5 device rows (DECISIONS.md 2026-09-18), +35 MB over the Phase 4 gauge. "
+    "The Phase 6 round re-read the gauge on the frozen build alongside the other engines (DECISIONS.md 2026-09-27): "
+    f"<b>{P6_FOOT['ours_mmap']:.1f} MB mmap / {P6_FOOT['ours_wired']:.2f} GB wired</b> vs MLX {P6_FOOT['mlx']:.2f} GB "
+    f"(dirty buffer memory — a resident total) and llama.cpp {P6_FOOT['llama']:.1f} MB (file-backed GGUF pages "
+    "excluded, like our mmap row) — three footprints that are not one accounting basis, which the writeup states.", BODY))
 S += fig(f"{D}/d3_memory.png", CW,
          "Figure 3 — Static memory budget against the practical iOS ceiling (with the Increased Memory Limit "
          "entitlement). Figures derive from the pinned Qwen3-1.7B config (DECISIONS.md PIN-1): ~0.97 GB packed "
@@ -252,17 +299,22 @@ S.append(Paragraph(
     "43.84 GB/s — and the measured engine rows land essentially on it: MLX 39.2 tok/s (~1.14 GB/token) and llama.cpp "
     "32.4 tok/s (Q4_K_M's 5.03 bits/weight costs more bytes/token). Both operate at ~96–102% of the triad figure, "
     "which is itself a finding: decode traffic is read-dominated and a 2-read+1-write triad slightly understates "
-    "read-mostly achievable bandwidth (backlog task BW-1 bounds this with a read-only variant). MLX being on the "
+    "read-mostly achievable bandwidth (BW-1 measured the read-only variant: ≈0.97× the triad on the Mac, 1.074 and "
+    "0.996 in the two device pairs — inconclusive at n=2; the Phase 6 same-session reading puts MLX at 1.00× the "
+    "record on our byte basis). MLX being on the "
     "physical limit is the evidence that the target must be framed relative to its measured speed, not beating "
     "physics. The same chart shows why quantization is worth ~3× by itself (fp16 weights triple the "
     "denominator), and it gives every future benchmark number a place to stand: a result is explained when its distance "
     "from the roofline is attributed to identified causes (dispatch overhead, unfused ops, cache traffic), and suspect "
     "when it exceeds it.", BODY))
-S += fig(f"{D}/d5_roofline.png", CW * 0.92,
-         "Figure 5 — Decode roofline with measured values: the 43.84 GB/s sustained triad curve, the measured "
-         "MLX and llama.cpp rows, the committed 29.4 tok/s target, the fp16 counterfactual, the Phase 2 naive "
-         "bf16 'before' point (6.7–8.6 tok/s, 2026-08-25), the Phase 3 packed 4-bit point (20.6 tok/s at "
-         "~0.97 GB/token, 2026-09-05), and the Phase 4 fused point (31.67 tok/s, 2026-09-14 — past the target).")
+S += fig(f"{D}/d5_roofline.png", CW * 0.95,
+         "Figure 5 — Top: decode roofline with measured values — the 43.84 GB/s sustained triad curve, the committed "
+         "29.4 tok/s target, the fp16 counterfactual, the Phase 2 naive bf16 'before' point (2026-08-25), the Phase 3 "
+         "packed point (2026-09-05), the Phase 4 fused point (2026-09-14), the Phase 0 PROVISIONAL external points "
+         "(hollow, superseded) and the Phase 6 same-session points (filled, 2026-09-27). Bottom: the Phase 6 "
+         "implied-bandwidth reading per engine against the three measured denominators (triad of record, session "
+         "triad, session read-only), loaded from docs/writeup/summary.json; the external engines are placed on our "
+         "counted byte basis and labeled as a proxy.")
 S.append(Paragraph(
     "Phase 2 put the first of our own points on this chart (PROVISIONAL, naive by design — no kernel has been "
     "optimized yet, per the correctness-first rule). The bf16 engine reads ~3.44 GB per token, a ~12.7 tok/s "
@@ -288,6 +340,24 @@ S.append(Paragraph(
     "decode regression rows measured the fused path unchanged (window median 31.05, then 30.90 on the PF-2 build) — "
     "the decode point on Figure 5 stands.", BODY))
 S.append(Paragraph(
+    "<b>Phase 6 (speed session 2026-09-27; exit 2026-10-16) put all three engines on the chart in one session at one "
+    "definition</b> — window tok/s × our counted 1.014 GB/token (967,753,728 B of packed weights + fp16 KV at the "
+    "window's median depth) = implied DRAM GB/s; the external engines are placed on that basis and labeled, since "
+    f"their per-token bytes are not measured by this project. <b>MLX {P6_DEC['mlx']:.2f} tok/s ⇒ {P6_GBPS['mlx']:.1f} "
+    f"GB/s = {P6_FREC['mlx']:.2f}× the 43.84 GB/s record</b> ({P6_FTRI['mlx']:.2f}× this session's triad median "
+    f"{P6_DEN['triad_session_gbps']:.2f}; between the triad and the {P6_DEN['readonly_session_gbps']:.2f} read-only "
+    f"bound) — MLX decodes at the ceiling this project can measure. <b>llama.cpp {P6_DEC['llama']:.2f} ⇒ "
+    f"{P6_GBPS['llama']:.1f} GB/s = {P6_FREC['llama']:.2f}×</b> (its Q4_K_M bytes/token are likely above the proxy, so "
+    f"its true fraction is likely higher). <b>qwen-metal {P6_DEC['ours']:.2f} ⇒ {P6_GBPS['ours']:.1f} GB/s = "
+    f"{P6_FREC['ours']:.2f}×</b> ({P6_FTRI['ours']:.2f}× the session triad). The same-session attribution export "
+    "locates our residual: the weight-streaming kernels take 27.46 of the 29.07 ms GPU class-sum per token — 35.2 GB/s "
+    "inside the matvec, ≈80% of roofline, the P4-EXEC finding reproduced on the frozen build — and the rest of the "
+    "token (attention 1.17 ms, elementwise 0.42 ms, ≈1.4 ms of wall−GPU submission overhead) dilutes it to the "
+    f"end-to-end figure. The bandwidth ceiling at this depth is {P6_CEIL:.2f} tok/s; the two named levers are the "
+    f"matvec stream rate and PIPE-1. Verdict by the PLAN formula: {P6_DEC['ours']:.2f} ÷ {P6_DEC['mlx']:.2f} = "
+    f"{P6_RATIO:.3f} vs ≥ 0.75 ⇒ <b>{P6_VERDICT}</b>, recorded with this anatomy (DECISIONS.md 2026-10-16, P6-EXEC); "
+    "the 29.4 constant is reported alongside and remains exceeded.", BODY))
+S.append(Paragraph(
     "Prefill obeys different physics: processing the whole prompt at once is matrix-matrix work in which each weight "
     "read is reused across all prompt positions, so it is compute-bound and rewards classical GEMM engineering — "
     "threadgroup-memory tiling and simdgroup_matrix (8×8 cooperative tile-multiply) accumulation. It was deliberately "
@@ -301,7 +371,11 @@ S.append(Paragraph(
     "exactly the tiled kernel's measured M-sweep plateau (0.78 TFLOPS, saturating by M=64) — so the span is bounded "
     "at ≈276 tok/s until that kernel improves; MLX's ≈370 implies ≈1.17 TFLOPS for the same GEMMs, and the attention "
     "kernel already sustains 0.92 on this silicon. The M-sweep is also the project's first measured compute-side "
-    "denominator, which the Phase 6 roofline analysis consumes.", BODY))
+    f"denominator, which the Phase 6 roofline analysis consumes. Phase 6 measured prefill same-session: <b>{P6_PRE['ours']:.2f} "
+    f"tok/s vs MLX {P6_PRE['mlx']:.2f} vs llama.cpp {P6_PRE['llama']:.2f}</b> (852 tokens on every engine, first-token "
+    f"span, {P6_PRE['ours']/P6_PRE['mlx']*100:.0f}% / {P6_PRE['ours']/P6_PRE['llama']*100:.0f}%); the attribution export "
+    "on the frozen build reads the layer GEMMs at 3105 ms = 92.9% of the span = 0.773 TFLOPS — at the kernel's plateau — "
+    "against ≥1.09 TFLOPS implied by MLX's span and ≥1.24 by llama.cpp's on the same silicon. One owner: GE-1.", BODY))
 S.append(Paragraph(
     "Two secondary kernel concerns round out the design. Dispatch overhead: each kernel launch costs fixed time, so "
     "Phase 4 folded RMSNorm and RoPE into neighboring kernels and fused scaled-dot-product attention (with the GQA head "
@@ -414,7 +488,7 @@ S.append(Paragraph(
 S.append(table([
     ["Metric", "Definition", "Instrument", "Notes"],
     ["Prefill tok/s", "per-engine prompt tokens ÷ engine-measured prefill-span wall time (prompt processing only, excluding the first decode forward; GPU time recorded alongside)", "engine span timer (Phase 5 D1)", "compute-bound; reported separately from decode, always"],
-    ["Decode tok/s", "generated tokens ÷ decode wall time", "in-app timer", "the roofline-governed headline; burst and sustained"],
+    ["Decode tok/s", "384 ÷ (t₅₁₂ − t₁₂₈), where tₖ = host wall time at which generated token k is available — the canonical window, on every engine (Phase 6 D1)", "per-token host timestamps (ours: DecodeInstrumentation; MLX / llama.cpp: the P6-2 harness patches)", "the roofline-governed headline; burst and sustained (per generation)"],
     ["Peak memory", "high-water mark during generation", "phys_footprint (Xcode memory gauge)", "one metric everywhere; Instruments Allocations misses Metal resource memory — not used for headline rows"],
     ["Energy (J/tok)", "(run − idle baseline) joules ÷ tokens", "battery-delta protocol (below)", "sustained runs only; mean ± spread over ≥3 runs"],
     ["Energy impact", "Instruments Energy Log score", "Instruments", "unitless relative indicator only; never presented as energy"],
@@ -432,6 +506,22 @@ S.append(Paragraph(
     "carries an explicit measurement-limitations paragraph — stated error bounds read as more credible than "
     "suspiciously precise tables. The iOS app's benchmark mode logs durations, token counts, and start/end battery "
     "level so every sustained run self-documents.", BODY))
+S.append(Paragraph(
+    "<b>Phase 6 outcome (exited 2026-10-16) — the protocol as executed.</b> Speed session 2026-09-27 on iOS 26.6.1: "
+    "three engines interleaved in rotating order, our warm-burst bookends opening and closing the session "
+    f"(Δ {P6_BOOKEND:+.2f} tok/s — every cross-engine effect claimed exceeds it by more than 70×), detached launches, "
+    "Metal API validation OFF on every row, MLX fed the rendered prompt with the exact-count parity signature "
+    f"(852 / 84 on every row), tripwires PASS (decode {P6_DEC['ours']:.2f} ≥ 24.0; prefill {P6_PRE['ours']:.2f} ≥ 135). "
+    f"Energy round 2026-10-12 … 10-15 on the same build: idle baseline {P6_IDLE_W:.3f} W measured over a 19-point "
+    "overnight drop; twelve cycles (four per engine), ten points burned each, implied gross 3.5–5.9 W (all inside the "
+    "3–9 W anchor), capacity basis 453.6 J per 1% from the health read at each cycle (100%, recorded separately from "
+    f"SoC); <b>net J/token {P6_J['ours']:.3f} (ours) / {P6_J['mlx']:.3f} (MLX) / {P6_J['llama']:.3f} (llama.cpp)</b> "
+    "with both bars (min–max ±19–24% statistical; ±10.7–10.9% systematic from SoC quantization). Two deviations "
+    "recorded, never hidden: the 80→70% start anchor was waived by decision for rounds 1–3 (the any-start rule — the "
+    "data show the effect the band exists to remove: each engine's 60–61%-start cycle is its highest J/token), and "
+    "the Latin-square order was not realized. llama.cpp's energy row was KEPT (n=4; the pre-declared cut rule was "
+    "never exercised). The writeup (docs/writeup.md) embeds every table verbatim from tools/phase6_analyze.py over "
+    "the archived exports in benchmarks/phase6/ and is drift-tested (tests/test_writeup.py).", BODY))
 
 # ============================ 8. ROADMAP ============================
 S.append(Paragraph("8 · Delivery Roadmap", H1))
@@ -451,7 +541,9 @@ S.append(table([
     ["3", "CPU-quant oracle exists; dequant tile test bit-exact; matvec within tolerance; quality gate passed; ~4× memory drop; matvec GB/s microbench — EXITED 2026-09-05: all gates in-band (quality at KL parity with mlx-lm after two recipe amendments), microbench 35.3 GB/s ≥ 30.7 gate, decode 20.6 tok/s (3.0× Phase 2), wired footprint 1.43 GB vs 4.3, mmap default closed"],
     ["4", "Fused GQA SDPA replaces naive attention; norm/RoPE folded into neighbors; dispatches-per-token reduced; latency variance measured — EXITED 2026-09-14: decode 31.67 tok/s (29.4 target exceeded), 200 dispatches/token, fused +48% claim-grade, ~95% of GPU time weight streaming @ 80% roofline; overhead gate FAILED 1.40 vs ≤1.2 ms, recorded with anatomy (~62% OS/driver latency) — remedy PIPE-1 (pipelined decode) approved for the campaign"],
     ["5", "Tiled prefill GEMM (threadgroup memory + simdgroup_matrix); prefill benchmarked separately vs MLX — EXITED 2026-09-19: tiled q4g64 dequant-GEMM + chunked prefill (C=512) landed with the layered suite at reused constants; device prefill 172.23 tok/s (floor ≥135 PASS; 3.8× the 45.3 sequential ceiling; ≈4.70× sequential claim-grade), decode regression PASS 31.05; GEMM M=8 microbench gate FAILED 19.54 vs ≥30.69 GB/s, recorded with anatomy (A17 Pro compute-bound at M=8) — remedy P5-2C in the campaign; prefill-vs-MLX judged 47% (65% = 240.86 tok/s after the in-phase query-tiled attention), remaining gap = the 0.78 TFLOPS GEMM plateau (GE-1)"],
-    ["6", "Full cross-engine table (incl. optional Core ML column), sustained-thermal chart, J/tok with error bars, roofline analysis, honest gaps"],
+    ["6", "Full cross-engine table (incl. optional Core ML column), sustained-thermal chart, J/tok with error bars, roofline analysis, honest gaps — EXITED 2026-10-16: all seven spec exit criteria MET on the walk (docs/writeup.md: nine sections, every table regenerated from the archived exports and drift-tested); "
+     f"same-session decode {P6_DEC['ours']:.2f} vs MLX {P6_DEC['mlx']:.2f} / llama.cpp {P6_DEC['llama']:.2f} — success metric {P6_RATIO:.3f} vs ≥ 0.75 {P6_VERDICT} (the 29.4 constant exceeded), recorded with anatomy as the campaign's first headline gap; "
+     f"prefill {P6_PRE['ours']:.2f} vs {P6_PRE['mlx']:.2f} / {P6_PRE['llama']:.2f}; J/tok {P6_J['ours']:.3f} / {P6_J['mlx']:.3f} / {P6_J['llama']:.3f} (n=4, start anchor waived by decision); llama.cpp energy KEPT; the optional Core ML column not taken"],
 ], [0.55 * inch, 6.45 * inch]))
 S.append(Spacer(1, 4))
 S.append(Paragraph(
@@ -490,19 +582,21 @@ S.append(Paragraph(
 S.append(table([
     ["Risk", "Exposure", "First contact / mitigation"],
     ["Actual device bandwidth and jetsam ceiling differ from planning estimates", "Roofline targets and memory budget shift", "CLOSED: Phase 0 measured 43.84 GB/s (2026-08-22); Phase 3 measured the packed budget on-device (phys_footprint mmap ~538 MB / wired 1.43 GB honest total — the derived ~1.5 GB plan confirmed, ample jetsam headroom)"],
-    ["MLX/llama.cpp baseline numbers off published figures (different device, model rev, thermal state)", "Gap-closing target mis-calibrated", "CLOSED: Phase 0 measured both on-device (39.2 / 32.4 tok/s warm-burst, PROVISIONAL); target 29.4 committed from local rows"],
+    ["MLX/llama.cpp baseline numbers off published figures (different device, model rev, thermal state)", "Gap-closing target mis-calibrated", f"CLOSED: Phase 0 measured both on-device (39.2 / 32.4 tok/s warm-burst, PROVISIONAL); target 29.4 committed from local rows. Phase 6 re-measured both same-session at the canonical window ({P6_DEC['mlx']:.2f} / {P6_DEC['llama']:.2f})"],
+    ["The Phase 0 MLX basis understated the same-session window rate (validation ON, overall rate, template feeding, older OS)", "The committed 29.4 constant is exceeded, yet the metric as written is missed", f"RECORDED (Phase 6 exit, 2026-10-16): same-session MLX {P6_DEC['mlx']:.2f} ⇒ verdict {P6_RATIO:.3f} vs ≥ 0.75 {P6_VERDICT}, by the pre-committed rule not blocking the exit; the Phase 0 → Phase 6 causes are named per engine in the writeup's provisional-vs-final table; the gap (bandwidth utilization — matvec stream ≈80% of roofline + ≈1.4 ms/token submission overhead) is the campaign's first headline gap with named owners"],
     ["Tokenizer or chat-template mismatch vs HF reference", "Phase 1 logit test fails for non-engine reasons", "CLOSED: Phase 1 verified swift-transformers (pinned exact 1.3.3) id-identical to Python on all 5 fixture prompts; tokenizer artifacts sha256-pinned (TOK-1)"],
     ["swift-transformers / mlx-swift API drift by build time", "Integration friction", "swift-transformers pinned exact 1.3.3; agent instructed to log and surface conflicts (CLAUDE.md), never silently work around"],
     ["Thermal throttling makes sustained numbers device-state-sensitive", "Noisy benchmark rows", "MITIGATED: Phase 3 pinned the D8 protocol (≥3 same-session repeats as median + range; A/B interleaved with non-overlapping ranges required for directional claims; detached launches). First application resolved the microbench/decode rows cleanly and showed session-scale thermal drift dominating the residency comparison — recorded as 'unresolved at n=3' rather than forced"],
-    ["Battery 'health' readings were actually state-of-charge; energy capacity basis wrong", "Absolute J/token figures off ×1.172", "CLOSED (2026-09-05 correction entry): basis re-based to 100% health (453.6 J per 1% SoC); corrected table appended, no rows overwritten; relative MLX-vs-llama.cpp result unchanged. Phase 6 re-pins the basis from health read at run time, with health and charge as separate fields"],
+    ["Battery 'health' readings were actually state-of-charge; energy capacity basis wrong", "Absolute J/token figures off ×1.172", "CLOSED (2026-09-05 correction entry): basis re-based to 100% health (453.6 J per 1% SoC); corrected table appended, no rows overwritten; relative MLX-vs-llama.cpp result unchanged. Phase 6 did re-pin it: health read at every cycle (100%) as a field separate from SoC, 453.6 J per 1%"],
     ["Scope temptation (extra quant formats, samplers, models)", "Schedule and depth erosion", "Non-goals are contractual; agent flags additions in DECISIONS.md instead of implementing"],
 ], [1.95 * inch, 1.6 * inch, 3.45 * inch]))
 S.append(Spacer(1, 10))
 S.append(HRFlowable(width="100%", color=colors.HexColor("#e2e8f0"), thickness=0.8, spaceAfter=6))
 S.append(Paragraph(
     "Document lineage: this PDF renders the state of PLAN.md, CLAUDE.md, docs/phases/phase-0-1.md, "
-    "docs/phases/phase-2.md, docs/phases/phase-3.md, docs/phases/phase-4.md, docs/phases/phase-5.md, DECISIONS.md, and benchmarks/results.md as of 2026-09-23 "
-    "(Phase 5 exit) into one navigable artifact. It is a snapshot: when the build produces new "
+    "docs/phases/phase-2.md, docs/phases/phase-3.md, docs/phases/phase-4.md, docs/phases/phase-5.md, docs/phases/phase-6.md, "
+    "docs/writeup.md, DECISIONS.md, and benchmarks/results.md as of 2026-10-16 "
+    "(Phase 6 exit) into one navigable artifact. It is a snapshot: when the build produces new "
     "measurements or decisions, DECISIONS.md is updated first and this document is regenerated from it, not edited "
     "independently.", CAP))
 

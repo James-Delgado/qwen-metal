@@ -17,38 +17,31 @@
 
 ## Project status
 
-Phases 0–5 exited (as of 2026-09-23); Phase 6 (benchmark writeup) is in
-progress — spec at docs/phases/phase-6.md (SPEC-P6 done 2026-09-23); P6-1
-(energy-mode harness, health/SoC fields, timeline JSON, round marker) done
-2026-09-24; P6-2 (external-harness parity patches) done 2026-09-26; BW-1
-(read-only bandwidth microbench) done 2026-09-26; P6-3 (runbook +
-tools/phase6_analyze.py + benchmarks/phase6/ archive layout) done
-2026-09-27 — the engine is FROZEN at the `phase6-build` tag with its full
-correctness evidence recorded; P6-4 (the same-session speed session, James)
-done 2026-09-27: decode window 31.16 vs MLX 43.40 (ratio 0.718 — the
-success-metric input reads NOT MET; verdict at P6-EXEC), prefill 232.63
-vs 387.60 / 440.71, tripwires PASS; P6-5 (the energy round, James) done
-2026-10-15: net J/token ours 0.198 / MLX 0.143 / llama.cpp 0.174 (n=4
-each; the 80→70 start band was waived by decision for rounds 1–3 — cycles
-labeled off-band, the writeup's dominant energy limitation; round 4 ran
-at the 80 mark: ours 0.169 / MLX 0.119 / llama.cpp 0.196, n=1 each); LD-1
-(Mac-only long-depth free-run report) done 2026-10-16: 5 prompts × 3900
-steps to depth 3904–3961 on the production default, 0 non-finite
-logits/KV entries, 80/80 sampled CPU-quant checkpoints within the Tier-E
-species, no depth trend. Next agent task by rank: P6-6 (the writeup).
-Pinned model: Qwen/Qwen3-1.7B @ 70d244cc on iPhone
-15 Pro. The engine decodes end-to-end from the packed 4-bit q4g64 format
-on-device at 31.67 tok/s warm-burst — the committed 29.4 target (0.75 × MLX)
-is EXCEEDED — and prefills through a tiled dequant-GEMM + query-tiled
-attention at 240.86 tok/s (the Phase 5 number of record per James; the
-gate-walk rows read 172.23) — 65% of MLX's PROVISIONAL ≈370, judged not
-gated. Two gates are on
-record as FAILED with their anatomy: Phase 4 overhead (1.40 ms vs ≤1.2;
-≈62% OS/driver latency; remedy PIPE-1) and Phase 5 GEMM M=8 (19.54 vs
-≥30.69 GB/s; device compute-bound at M=8; remedy P5-2C) — both in the
-campaign behind SPEC-P7, with GE-1 (the GEMM compute plateau, the whole
-remaining prefill gap). See PLAN.md phase table for the roadmap and
-DECISIONS.md for the measurement ledger.
+Phases 0–6 exited (as of 2026-10-16). Phase 6 (the benchmark writeup, spec
+docs/phases/phase-6.md) closed at P6-EXEC on 2026-10-16: docs/writeup.md is
+the document the project is defined by. The same-session head-to-head (P6-4,
+2026-09-27, iOS 26.6.1, three engines interleaved, one metric definition per
+metric): decode 31.16 vs MLX 43.40 vs llama.cpp 34.80 tok/s at the canonical
+window, prefill 232.63 vs 387.60 vs 440.71 (852 tokens), sustained plateaus
+22.83 / 34.94 / 27.41, phys_footprint 574.9 MB mmap / 1.46 GB wired vs 1.07 GB
+vs 560.9 MB. The energy round (P6-5, n=4 cycles per engine; the 80→70 start
+band waived by decision for rounds 1–3 — the writeup's dominant energy
+limitation): net J/token 0.198 / 0.143 / 0.174; llama.cpp energy KEPT.
+Success-metric verdict by the PLAN formula: 31.16 ÷ 43.40 = 0.718 < 0.75 ⇒
+NOT MET, recorded with its anatomy (on our byte basis MLX decodes at 1.00× the
+measured 43.84 GB/s roofline, ours at 0.72×: matvec stream ≈80% of roofline
+plus ≈1.4 ms/token submission overhead) — by the pre-committed rule it did not
+block the exit, and the committed 29.4 constant stays exceeded. LD-1
+(2026-10-16) measured the fp16 path at full 4K depth: 0 non-finite values,
+80/80 checkpoints in-species. The engine is FROZEN at the `phase6-build` tag
+(17cd19c). Pinned model: Qwen/Qwen3-1.7B @ 70d244cc on iPhone 15 Pro. Two
+gates are on record as FAILED with their anatomy: Phase 4 overhead (1.40 ms vs
+≤1.2; ≈62% OS/driver latency; remedy PIPE-1) and Phase 5 GEMM M=8 (19.54 vs
+≥30.69 GB/s; device compute-bound at M=8; remedy P5-2C) — both in the campaign
+behind SPEC-P7, with GE-1 (the GEMM compute plateau, the whole remaining
+prefill gap). Next task by rank: CAMP-1 (owner james — the campaign charter;
+agents prepare the brief, James decides). See PLAN.md phase table for the
+roadmap and DECISIONS.md for the measurement ledger.
 
 ## Codebase map
 
@@ -68,11 +61,17 @@ docs/
   PRIORITIES.yaml           ranked task backlog (drift-tested)
   METHODOLOGY.md            binding standards
   PRD-phase-0.md            Phase 0 deliverables + acceptance criteria
-  phases/                   per-phase engineering specs (phase-0-1, -2, -3)
+  phases/                   per-phase engineering specs (phase-0-1, -2, -3, -4, -5, -6)
+  writeup.md + writeup/     the Phase 6 benchmark writeup + its figures/tables/summary.json
+                            (number-held: tables embedded from tools/phase6_analyze.py,
+                            drift-tested by tests/test_writeup.py)
   architecture.pdf          rendered design snapshot (see upkeep rule below)
-benchmarks/                 results.md + pinned prompt set + device-shell/ + runbooks
+benchmarks/                 results.md + pinned prompt set + device-shell/ + runbooks +
+                            phase6/ (the raw-export archive every writeup number is
+                            regenerated from) + patches/ (external-harness patches)
 models/                     local-only pinned artifacts (gitignored; sha256s in DECISIONS)
-tests/                      test_priorities.py (backlog drift test) +
+tests/                      test_priorities.py (backlog drift test) + test_phase6_analyze.py +
+                            test_writeup.py (writeup drift test) +
                             QwenMetalEngineTests/ (XCTest; explicit path in manifest —
                             repo test root is lowercase on a case-insensitive FS)
 tools/                      Python fixture/reference-dump scripts (Phase 1+, pinned deps)

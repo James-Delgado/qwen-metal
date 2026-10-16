@@ -6304,3 +6304,171 @@ lead with the Phase 6 numbers and link the writeup, architecture.pdf
 v1.9 roofline figure from summary.json, keep `tests/test_writeup.py`
 green). Backlog: P6-6 done; P6-EXEC blocked → ready (James-heavy
 close-out; the next task by rank).
+
+## 2026-10-16 — P6-EXEC: Phase 6 exit criteria walked — Phase 6 EXITED; success-metric verdict by the PLAN formula: 31.16 ÷ 43.40 = 0.718 ⇒ NOT MET (29.4 exceeded alongside), recorded with anatomy; llama.cpp energy KEPT (n=4); architecture.pdf v1.9; CAMP-1 ready
+
+The close-out mandated by the Phase 6 task breakdown (docs/phases/phase-6.md
+"P6-EXEC: the exit walk, the success-metric verdict, the llama.cpp-energy
+decision recorded, architecture.pdf + README/CLAUDE.md refresh, CAMP-1
+unblocked") and the standing *-EXEC rules (2026-08-26). Engine code is
+unchanged since the `phase6-build` tag (17cd19c); the correctness evidence of
+record is the P6-3 entry's re-run on that tag (2026-09-27) plus LD-1
+(2026-10-16). Per hard rule 6 no gate, tolerance, constant or protocol pin
+moves anywhere in this entry. docs/writeup.md is not edited (its drift test
+stays green — below).
+
+**Exit criteria (docs/phases/phase-6.md "Exit criteria", walked):**
+
+| Criterion (PLAN.md row 6, as the spec operationalizes it) | Verdict | Evidence |
+|---|---|---|
+| Full table across engines re-run same-session/same-OS = P6-4's rows under the D7 validity gate (one session, one iOS build, interleaved, bookended), with our tripwires walked | MET | P6-4 (2026-09-27): one calendar session on iOS 26.6.1 (re-checked unchanged at the end), D3 rotation (cold rows first, then ours→MLX→llama.cpp ×3 for decode and for prefill), bookends 31.16 → 31.21 (Δ +0.05), detached signature on every row of ours (wall−GPU 1.34–1.43 ms/token), validation OFF recorded, MLX rendered feeding with the exact-count signature (84 / 852 MATCH on all seven rows); tripwires decode 31.16 ≥ 24.0 PASS, prefill 232.63 ≥ 135 PASS; writeup §1 (table 1, regenerated, 0 refusals) |
+| Sustained-thermal chart = the D4 timeline chart from the energy cycles (+ the 5-min loop rows), all three engines | MET | docs/writeup/thermal.png (twelve cycles, four per engine, median cycle bold) + writeup §3 (table 3: the three 5-min loops and the twelve per-cycle first/last/second-half-median rows, regenerated); one thermal step then a flat plateau on every engine, no bimodality |
+| Energy/token (sustained, with error bars) = P6-5's ≥3 valid cycles per engine on the health-based capacity basis, both error bars stated; llama.cpp's row present or its absence decided | MET | P6-5 + addendum (2026-10-14/15): n=4 valid cycles per engine, every cycle ≥8% burned and inside 3–9 W, idle 0.239 W from a 19-point drop subtracted, 453.6 J per 1% from health read at each cycle (health and SoC separate fields); writeup §4 (table 4): means 0.1975 / 0.1428 / 0.1740 with the statistical (min–max) and systematic (±10.7–10.9%) bars; llama.cpp's row PRESENT. The band deviation (start anchor waived rounds 1–3) is recorded in the P6-5 entry, labeled on every affected cycle, and named in §4/§7 as the dominant limitation — a recorded deviation, not a silent one |
+| Roofline analysis from measured bandwidth = writeup §5 on 43.84 GB/s and the measured GEMM plateau, every fraction traceable to a row | MET | §5.1 (tables 5–6): the session triad/read-only pairs (BW-1), the three denominators (43.84 record / 42.21 session triad / 43.65 session read-only), per-engine implied GB/s with a labeled basis (ours measured; external engines on our byte basis, labeled "not measured"), fractions against both denominators, the 43.23 / 41.62 tok/s ceilings; the matvec stream rate 35.2 GB/s ≈ 80% from the attribution export; §5.2: GEMMs at 0.773 TFLOPS vs the 0.78 M=512 plateau, the 45.30 tok/s sequential ceiling, the crossover below M=8. Every number is regenerated or recomputed by tests/test_writeup.py |
+| Measurement-limitations section = writeup §7 covering the enumerated D8 items, incl. provisional-vs-final handling | MET | §7: seventeen items — no power rail / battery-delta with both bars; SoC quantization + gauge nonlinearity; the band not held (dominant); the health basis (and the pre-2026-09-05 "health" = SoC history); post-hoc operator fields (labeled, Appendix A); cycle-wall basis; Latin square not realized + airplane-mode difference; the provisional-vs-final table per engine with causes named; BW-1 (measured, inconclusive at n=2 on the device); LD-1 (measured); no temperature readout; per-engine token counts; the footprint accounting asymmetry + the Phase 0 activeMemory mislabel; generation cap / EOS behavior; dual timing ours alone; small n; single device/model |
+| Honest gaps = writeup §8: the two FAILED gates with anatomy, the prefill gap's owner, the Phase 6 verdicts as measured | MET | §8: the NOT MET verdict with its anatomy; Phase 4 overhead gate (1.40 vs ≤1.2 ms, ≈62% OS/driver, PIPE-1) and Phase 5 GEMM M=8 gate (19.54 vs ≥30.69 GB/s, compute-bound at M=8, P5-2C) unmodified; the single prefill owner (GE-1); the sustained-regime widening (0.653); the energy row's weakness; the non-goals not built |
+| DECISIONS.md entries for the validity walks, the tripwire verdicts, the success-metric verdict, the llama.cpp-energy decision, and anything else decided/measured | MET | 2026-09-23 (gates; SPEC-P6), 2026-09-24 (veto close; P6-1), 2026-09-26 (P6-2; BW-1 gate + landing), 2026-09-27 (P6-3 + freeze; P6-4 validity walk + tripwires), 2026-10-14/15 (P6-5 validity walk + decisions + addendum), 2026-10-16 (LD-1; P6-6) + this entry (the verdict and the llama.cpp decision, below) |
+
+**Success-metric verdict (D7; PLAN formula, no new number — the formal
+record):** MET iff (our warm-burst window median) ÷ (MLX warm-burst window
+median, same session, same definition) ≥ 0.75. Inputs: ours **31.16** (n=5,
+incl. both bookends; 31.14–31.21), MLX **43.40** (n=3; 43.19–43.71), both
+from the P6-4 speed session (2026-09-27, iOS 26.6.1, D1 window definition
+384 ÷ (t₅₁₂ − t₁₂₈) on host wall time, detached, validation OFF). **31.16 ÷
+43.40 = 0.718 < 0.75 ⇒ NOT MET.** The committed 29.4 tok/s constant (0.75 ×
+the Phase 0 PROVISIONAL 39.2, DECISIONS.md 2026-08-22) is reported alongside
+and remains exceeded (31.16; 31.67 / 31.05 / 30.90 on the Phase 4–5 rows);
+it never loosens (hard rule 6) and it is not the metric — the metric as
+written was evaluated for the first time this round. Per the pre-committed
+rule (2026-09-23 gates entry, veto window closed 2026-09-24 unamended) the
+NOT MET verdict does not block the phase exit; it is recorded here with its
+anatomy and becomes the campaign's first headline gap:
+
+- *Why the basis moved:* the same-session MLX window rate is 43.40, ≈11%
+  above the 39.2 it was planned from. Phase 0 measured MLX with Metal API
+  validation ON, as the app's overall rate (which includes the slower first
+  tokens and the EOS tail), with template feeding (862 app-side tokens), on
+  iOS 26.5.2; Phase 6 measured validation OFF, the canonical window, rendered
+  feeding with the exact-count signature (84 / 852), on 26.6.1 — each cause
+  named in writeup §7 item 8.
+- *Where the gap lives (measured, writeup §5–§6):* on our counted
+  1,014,087,680 B/token basis MLX decodes at 44.01 GB/s implied = 1.004× the
+  43.84 GB/s triad of record (1.043× the session triad 42.21; between the
+  triad and the 43.65 read-only bound) — at the ceiling this project can
+  measure. Ours: 31.60 GB/s implied = 0.721× the record (0.749× the session
+  triad). The same-session attribution export (sanity 1.00) puts the
+  weight-streaming kernels at 27.46 of the 29.07 ms GPU class-sum per token
+  = 35.2 GB/s inside the matvec, ≈80% of roofline (the P4-EXEC finding
+  reproduced on the frozen build); attention 1.17 ms, elementwise 0.42 ms
+  and ≈1.4 ms/token of wall−GPU submission overhead dilute it to the
+  end-to-end figure. The ceiling at this depth is 43.23 tok/s.
+- *Named owners (campaign, behind SPEC-P7):* the quant-matvec stream rate
+  (80% → toward 100% would take the weight-streaming time from 27.46 to
+  ≈22.1 ms) and PIPE-1 (pipelined GPU-driven decode removing the ≈1.4 ms
+  overhead from the critical path; PD-1 approved 2026-09-14). Against
+  llama.cpp the ratio is 31.16 ÷ 34.80 = 0.895; in the sustained regime the
+  MLX ratio widens to 22.83 ÷ 34.94 = 0.653 (ours loses the most to the
+  thermal step, −27% vs −14% / −19%).
+
+**llama.cpp-energy decision (PLAN energy protocol: "decide in DECISIONS.md,
+not silently"; spec D4 recommendation KEEP at n=3; OV#8):** **KEPT.** The
+pre-declared cut rule (llama.cpp's cycles dropped first if the calendar
+forces a cut; a partial round labeled below the ≥3 pin) was never exercised:
+P6-5 delivered n=3 (2026-10-14) and the round-4 addendum n=4 (2026-10-15)
+for llama.cpp alongside the other two engines, every cycle valid on the ≥8%
+and 3–9 W checks. The three-way energy row the PLAN goal names is on record
+(0.1740 J/token, 0.1320–0.2059, ±10.9% systematic) with the pinned-protocol
+spot reading (0.1964, the 80→70 cycle) beside it. Recorded here as the
+decision of record (earlier entries called it moot; this is the formal line).
+
+**Phase 6 EXITED** — recorded on this walk: every exit criterion is MET,
+the two run-validity gates were walked on the device entries (speed session
+2026-09-27; energy round 2026-10-14/15 with its recorded deviations), the
+tripwires PASS, the verdict is recorded with anatomy, and the exit turns on
+the writeup's completeness (PLAN row 6), which P6-6 delivered and
+tests/test_writeup.py holds to the data. Who decided: the agent, on the
+walk — the exit is mechanical here (no judgment-derived constant, no gate
+failed in-phase, no exit-vs-iterate fork as at P4/P5-EXEC); flagged, not
+blocked on, per AGENT_OPERATION ("reversible, convention-following decisions
+proceed — surface them"). James's veto window is natural: the next task by
+rank, CAMP-1, is James-owned and nothing proceeds past this point without
+him. Reopening Phase 6 would be a new dated entry here plus flipping P6-EXEC
+back in the backlog; nothing in this close-out is destructive (writeup, rows,
+exports, the tag all untouched).
+
+**Close-out actions (this entry; the standing *-EXEC rules):**
+
+- **architecture.pdf v1.9** (docs/generator/build_pdf.py + make_diagrams.py
+  + the PNGs + the PDF, committed together). Figure 5 is now two panels:
+  the decode roofline (Phase 0 external points drawn hollow as superseded
+  PROVISIONAL rows; the three Phase 6 same-session points filled at the
+  1.014 GB/token basis; the verdict in the qwen-metal annotation) and a
+  Phase 6 implied-bandwidth panel (per-engine implied GB/s against the
+  triad of record, the session triad and the session read-only bound;
+  external engines hatched as the labeled proxy basis). Both generator
+  scripts LOAD the Phase 6 numbers from docs/writeup/summary.json (the
+  analyzer's output, drift-tested) — nothing Phase 6 is typed into the
+  generator; the generator asserts the 43.84 denominator and the NOT MET
+  verdict against that file so a regenerated summary cannot silently
+  change the document's claims. Prose: executive summary (Phase 6 outcome
+  + verdict + anatomy), §4 (Phase 6 footprints, three accounting bases),
+  §5.2 (the Phase 6 decode reading paragraph; prefill same-session; BW-1
+  measured), §7 (the decode metric definition moved to the D1 window on
+  every engine; "the protocol as executed" paragraph with the energy
+  round's deviations and the llama.cpp KEEP), §8 phase table row 6 EXITED,
+  §10 risks (Phase 0 basis understated MLX — RECORDED; the battery-health
+  row closed as done), lineage (phase-6.md, docs/writeup.md, 2026-10-16),
+  roadmap figure row 6 DONE. pypdf text check: "v1.8" 0 occurrences, "is
+  next" 0, "Phase 5 exit" lineage 0; "v1.9" on all 15 pages.
+- **README.md**: Status leads with the Phase 6 same-session table (decode,
+  prefill, sustained, footprint, energy for all three engines) and the NOT
+  MET verdict with anatomy, links docs/writeup.md; Documents table gains
+  the writeup as its first row; Layout names benchmarks/phase6/;
+  Development gains the writeup drift-test and regeneration commands.
+- **CLAUDE.md**: Project status rewritten to the Phase 6 exit state (the
+  repo no longer presents the Phase 5 240.86 / 31.67 as the current
+  comparison); codebase map gains docs/writeup.md + writeup/, phases -4/-5/-6,
+  benchmarks/phase6/ + patches/, tests/test_phase6_analyze.py + test_writeup.py.
+- **Backlog**: P6-EXEC done (landed note); CAMP-1 blocked → ready (owner
+  james — the next task by rank; agents prepare the charter brief, James
+  decides).
+
+**Post-task review (inline fresh-eyes):** the first two-panel render had
+the roofline's left panel squeezed (annotations colliding) — restacked
+vertically at the original 8.8-inch width so the pre-existing annotation
+geometry survives, labels shortened; two residual collisions (P2/P3 labels,
+the bar panel's legend over the qwen-metal label) fixed before the build.
+Derived percentages in README/CLAUDE/PDF were recomputed: 232.63 ÷ 387.60 =
+0.600 ⇒ 60%, 232.63 ÷ 440.71 = 0.528 ⇒ 53%, 43.40 ÷ 39.2 = 1.107 ⇒ ≈11%,
+1460.0 MB ⇒ 1.46 GB. Cross-check against METHODOLOGY: no gate or pin moved
+(2, 5); no number invented — every Phase 6 figure is loaded from summary.json
+or quoted from the writeup/ledger (4); append-only ledger (7); nothing from
+the non-goals built (8). Deviation from the spec: none. Noted: the PDF's §7
+metric table still describes energy as "mean ± spread over ≥3 runs" — true
+(n=4) and unchanged.
+
+**Verification (SOP step 5, quoted):**
+
+- `.venv/bin/python docs/generator/make_diagrams.py` → "diagrams done:
+  ['d1_system.png', … 'd7_roadmap.png']" (the matplotlib tight-layout
+  warning on d7 is pre-existing); d5_roofline.png and d7_roadmap.png
+  inspected.
+- `.venv/bin/python docs/generator/build_pdf.py` → "PDF built:
+  …/docs/architecture.pdf 1405457 bytes"; pypdf: pages 15, 'v1.8' 0,
+  'v1.9' 15, 'is next' 0, 'NOT MET' 4, 'EXITED 2026-10-16' 1,
+  'docs/writeup.md' 6.
+- `.venv/bin/python -m pytest tests/test_priorities.py
+  tests/test_phase6_analyze.py tests/test_writeup.py -q` → **"74 passed in
+  1.76s"** (5 backlog drift + 51 analyzer + 18 writeup; the writeup's
+  embedded blocks still equal a fresh regeneration — docs/writeup.md and
+  docs/writeup/ are untouched by this close-out).
+
+**Follow-ups:** none seeded — nothing surfaced that the backlog does not
+already track (WR-1 external byte counts; EXT-1 per-row device line; the
+campaign levers PIPE-1 / P5-2C / GE-1 behind CAMP-1 → SPEC-P7). Next task by
+rank: **CAMP-1 (owner james)** — the campaign charter; the agent-prepared
+brief draws on TODOS.md "Post-Phase-6 optimization campaign", the CAMP-1
+notes (sampling architecture, KV allocation policy, fp16 rounding
+boundaries, token re-indexing/context schemes, the A20 / larger-model
+ambitions), the P4-EXEC/P5-EXEC decompositions re-exported at P6-4, and the
+Phase 6 head-to-head gaps recorded above.

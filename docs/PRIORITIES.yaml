@@ -2636,10 +2636,23 @@ tasks:
   - id: P6-EXEC
     rank: 23
     title: "Phase 6 exit milestone: exit criteria walked, success-metric verdict (PLAN formula), llama.cpp-energy decision recorded, architecture.pdf v1.9 + README/CLAUDE.md refresh; unblocks CAMP-1"
-    status: in_progress
+    status: done
     started_at: 2026-10-16T04:50:18Z
+    completed_at: 2026-10-16T05:20:00Z
     depends_on: [P6-6]
     blocks: [CAMP-1]
+    p6_exec_landed: |
+      2026-10-16 (done): Phase 6 EXITED on the walk — all seven spec exit
+      criteria MET (DECISIONS.md 2026-10-16 P6-EXEC entry: criteria table,
+      the success-metric verdict 31.16 ÷ 43.40 = 0.718 ⇒ NOT MET with
+      anatomy and the 29.4 constant alongside, llama.cpp energy KEPT at
+      n=4). Close-out: architecture.pdf v1.9 (Figure 5 is now two panels —
+      the roofline with the Phase 6 same-session points and a Phase 6
+      implied-bandwidth panel — both loaded from docs/writeup/summary.json
+      by the generator, never typed; exec summary, §4, §5.2, §7, phase
+      table, risks, lineage, roadmap), README.md + CLAUDE.md lead with the
+      Phase 6 numbers and link docs/writeup.md. docs/writeup.md untouched
+      (tests/test_writeup.py green). CAMP-1 flipped ready (owner james).
     p6_6_handoff: |
       The writeup (docs/writeup.md) is the exit-walk input: §2 carries the
       verdict input 31.16 ÷ 43.40 = 0.718 ⇒ NOT MET (29.4 exceeded alongside),
@@ -2672,7 +2685,7 @@ tasks:
   - id: CAMP-1
     rank: 23.1
     title: "Charter the optimization campaign: axes, ordering, non-goal re-entries — decision in DECISIONS.md"
-    status: blocked
+    status: ready
     owner: james
     depends_on: [P6-EXEC]
     blocks: [SPEC-P7]
