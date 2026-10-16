@@ -2558,7 +2558,8 @@ tasks:
   - id: P6-6
     rank: 22.6
     title: "The writeup: docs/writeup.md + docs/writeup/ figures regenerated from benchmarks/phase6/ — headline table, verdict input, thermal chart, energy with both error bars, roofline from measured denominators, per-component headroom, measurement limitations, honest gaps, reproducibility"
-    status: ready
+    status: in_progress
+    started_at: 2026-10-16 04:17:39+00:00
     depends_on: [P6-5, LD-1]
     blocks: [P6-EXEC]
     p6_2_handoff: |
