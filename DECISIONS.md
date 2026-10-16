@@ -6013,3 +6013,159 @@ ours app-typed `4` → alias). Analyzer gained an in-band subset summary
 No decision changed; P6-5 stays done with this addendum. P6-6 inputs:
 cite the n=4 headline, the in-band subset rows, and the labels verbatim
 from docs/writeup/tables.md.
+
+## 2026-10-16 — LD-1: long-depth GPU free-run report — 5 prompts × 3900 steps to cache depth 3904–3961 on the production default path: 0 non-finite logits, 0 non-finite KV entries, 80 of 80 CPU-quant checkpoints within every Tier-E species with 80/80 argmax agreement, no growth of the deviation with depth
+
+Deliverable (docs/PRIORITIES.yaml LD-1; seeded 2026-09-10 from the P4-3
+fp16-activation discussion, pulled ahead of the writeup 2026-09-24 as
+SPEC-P6 veto item 8): the measurement that replaces the convexity
+argument ("attention is a convex combination, so fp16 KV-cache rounding
+does not amplify with depth") before the writeup cites it. REPORT, never
+a gate — the 2026-08-23 rationale stands unchanged. The engine is
+untouched (frozen at `phase6-build`; no file under Sources/ changed);
+everything landed in the test target: `tests/QwenMetalEngineTests/
+LongDepthReport.swift` (artifact-free helpers) + `LongDepthFreeRunReport
+Tests.swift` (10 unit tests + the opt-in harness). The raw report is
+archived verbatim at `benchmarks/long-depth/ld1-report-2026-10-16.txt`
+(sha256 03e6ee01…8741; a sibling of benchmarks/phase6/, which the
+analyzer never scans — Mac diagnostics, not round exports).
+
+**Oracle strategy (the decision this task owned), recorded with why:**
+sampled teacher-forced CPU-quant checkpoints ON THE GPU'S OWN TRAJECTORY,
+every 256 generated tokens plus the final step (16 per prompt, 80 total).
+At checkpoint step k the fp32 CPU-quant reference runs one full forward
+over prompt + the GPU's first k−1 tokens and its logits are compared
+with the GPU logits that produced token k, using the GPU-quant logit
+suite's arithmetic verbatim (full-vocab |Δ| vs 2⁻⁵·M_step, top-64 at the
+CPU indices vs 2⁻⁵·M64, float64 lse/mean vs 2⁻⁵·M64 and std vs 2⁻⁴·M64,
+tie-aware top-1 at ε_tie = 2⁻⁴·M64) as DESCRIPTIVE classifications
+(within / outside), never assertions. Rejected: (a) the per-step live
+oracle — the CPU reference has no KV cache, so each step is a full
+forward and the total is quadratic in depth (≈7.6M token-forwards per
+prompt; the measured forward cost 4.4 s at depth 516 → 30 s at depth
+≈3960 puts it at tens of hours per prompt); (b) the GPU-naive-vs-
+GPU-fused cross-check — both arms are fp16 pipelines, so it cannot speak
+to the fp16-vs-fp32 question, and the naive arm is not the shipping
+path. Cost as run (M2 Pro, 16 GB, release, swap ≥ 92% in use throughout):
+546 s of GPU free-run + 1,279 s of CPU forwards for the 80 checkpoints;
+the whole report 1,830.8 s wall.
+
+**What "divergence" means under this design (honest scope):** the
+128-step reports' per-step first-divergence of two self-fed trajectories
+is unobservable without the per-step oracle. Reported instead: (a) the
+first checkpoint at which the CPU-quant argmax over the GPU prefix
+differs from the GPU's token at all; (b) the first at which it differs
+BEYOND the tie band (bug-scale). The per-step observables on the GPU
+side are the fp16-overflow tripwires (non-finite logit count per step;
+a post-run scan of every fp16 K/V slot in the cache) and the GPU's own
+top-1/top-2 margin distribution (the fork-eligible population).
+
+**Measured (production default: q4g64 weights, fused decode, tiled
+prefill with query-tiled SDPA, C=512, maxContext 4096; `DecodeLoop.
+generate`, no stop set, 3900 steps per prompt):**
+
+| prompt | prompt tokens | final depth | non-finite logits / KV | max \|K/V\| (fp16 max 65504) | fork-eligible steps (margin < ε_tie) | worst full-vocab \|Δ\| / species ratio (all 16; depth ≥ 3000) | argmax agree | min CPU margin at a checkpoint (ε range) |
+|---|---|---|---|---|---|---|---|---|
+| short_english | 5 | 3904 | 0 / 0 | 322.25 (203×) | 12 of 3900 | 5.97e-2 / 0.055; 0.055 | 16/16 | 10.60 (1.8–2.2) |
+| multi_sentence | 39 | 3938 | 0 / 0 | 361.00 (181×) | 49 | 5.56e-2 / 0.050; 0.050 | 16/16 | 10.02 (2.0–2.3) |
+| code_snippet | 24 | 3923 | 0 / 0 | 389.50 (168×) | 16 | 8.99e-2 / 0.062; 0.027 | 16/16 | 8.41 (1.4–2.9) |
+| non_ascii | 62 | 3961 | 0 / 0 | 358.50 (183×) | 32 | 2.55e-2 / 0.028; 0.026 | 16/16 | 7.54 (1.6–1.8) |
+| chat_template | 23 | 3922 | 0 / 0 | 391.50 (167×) | 34 | 9.33e-2 / 0.078; 0.031 | 16/16 | 9.89 (1.7–3.3) |
+
+- **fp16-overflow tripwires: clean.** 0 non-finite logits over 19,500
+  steps; 0 non-finite entries over the 1,126,694,912 fp16 K/V slots
+  scanned (every layer, head and position actually written); the
+  largest K/V magnitude anywhere is 391.5 — ≥167× below the fp16
+  range. Activations at full 4K depth sit nowhere near overflow.
+- **Checkpoints: 80 of 80 within every species, 80 of 80 argmax
+  agreements.** Divergence (a) none on every prompt; divergence (b)
+  none. Worst full-vocab ratio across all 80 is 0.078 (chat_template
+  step 768, depth 790: |Δ| 9.33e-2 vs 2⁻⁵·M_step 1.19); worst top-64
+  ratio 0.078 (same checkpoint); max fingerprint deltas Δlse 9.3e-2,
+  Δmean 1.9e-2, Δstd 1.3e-2 — all inside their species by ≥ 13×. The
+  smallest CPU margin at any checkpoint (7.54) is ≥ 2.3× its ε_tie, so
+  no checkpoint was decided inside the tie band.
+- **No depth trend.** Restricted to depth ≥ 3000 the worst full-vocab
+  ratio is 0.055 (short_english), and on three of five prompts the
+  deep ratio is LOWER than the shallow one (0.027 vs 0.062, 0.026 vs
+  0.028, 0.031 vs 0.078). The per-logit deviation of the fp16 GPU path
+  does not grow with cache depth — the measurement the convexity
+  argument predicted.
+- **Fork-eligible population:** 12 / 49 / 16 / 32 / 34 steps of 3900
+  (0.3–1.3%) had a GPU top-1 margin below 2⁻⁴·M64 (min margin 0.019,
+  code_snippet; exact ties 0). These are the steps where a legitimate
+  near-tie fork COULD occur; at the 80 sampled depths none did. The
+  128-step reports' NONE ×5 at shallow depth therefore extends to
+  ≈3900 as "no observed fork at any sampled checkpoint", not as a
+  per-step guarantee — stated as such.
+- **Degeneracy (a property of greedy decoding at depth on a 1.7B
+  model, not of the engine — the writeup's honest caveat on what the
+  long-depth regime contains):** every trajectory settles into a loop
+  (distinct tokens in the last 256: 14 / 22 / 54 / 4 / 36; e.g.
+  short_english repeats "The capital of the United States is in the
+  city of Washington, D.C." and non_ascii repeats 数理モデル、). The
+  texts are coherent up to the loop (chat_template answers the
+  Rayleigh-scattering question, emits <|im_end|> and continues into a
+  "Final Answer"). So the measured 4K cache is varied text for its
+  first several hundred positions and low-entropy repetition after —
+  which is also exactly what the pinned regenerate-loop sustained
+  protocol produces on-device.
+- **Mac GPU numbers are DIAGNOSTIC, never rows:** 34.9–37.8 tok/s
+  overall over the 3900-step runs (GPU Σ 95.6–96.8 s per prompt), the
+  logits-observing loop reading 605 KB of logits per step.
+
+**Harness (tests only; hard rule 3 — tests landed with it):** opt-in
+`QWEN_LONG_DEPTH_REPORT=1`, knobs `QWEN_LONG_DEPTH_STEPS` (default 3900),
+`QWEN_LONG_DEPTH_CHECKPOINT_EVERY` (default 512; this run used 256 after
+a 600-step calibration showed the CPU cost allowed it),
+`QWEN_LONG_DEPTH_PROMPTS` (comma list), `QWEN_LONG_DEPTH_REPORT_FILE`
+(the DEV-2 lesson — the file is the artifact quoted above). Reproduce:
+`QWEN_LONG_DEPTH_REPORT=1 QWEN_LONG_DEPTH_CHECKPOINT_EVERY=256
+QWEN_LONG_DEPTH_REPORT_FILE=<path> swift test -c release --filter
+LongDepthFreeRunReportTests` (detached via nohup; ~31 min). Unit tests
+(artifact-free): checkpoint schedule (every N + final, no duplicate,
+short runs, bad knobs rejected), positive-int knob parsing (names the
+knob on rejection), prompt-list parsing (unknown name / empty list
+rejected), the single-pass top-64 selection vs a sort reference over
+10k random values with duplicates and non-finite entries, per-step
+stats (non-finite count, margin, M64, fork eligibility, degenerate
+vectors), checkpoint classification against the species (identical,
+one logit nudged past 2⁻⁵·M_step, a flip inside vs beyond the tie
+band, a one-finite-logit reference reported rather than crashed), the
+KV-cache scan on a tiny cache (counts only the scanned positions,
+rejects positions > maxContext), tail-distinct-token count, nearest-
+rank quantiles, excerpting.
+
+**Verification (SOP step 5):** release helpers "Executed 10 tests, with
+0 failures (0 unexpected) in 0.030 (0.032) seconds"; the report run
+"Executed 1 test, with 0 failures (0 unexpected) in 1830.761 (1830.771)
+seconds" (rc 0). Post-review re-run of the unit tests and the backlog
+drift test are quoted in the LD-1 commit's report message.
+
+**Post-task review (inline fresh-eyes; swap at 94% — the 2026-09-27
+precedent for not dispatching review agents):** one hardening landed
+after the run (a reference vector with < 2 finite logits is reported,
+not crashed — a path the fp32 oracle never takes, so the archived
+report is unaffected) with its unit test; the report test is a long
+function in the shape of the three existing free-run harnesses
+(precedent kept). Deviations: none from METHODOLOGY or the spec; the
+GPU Σ timing in the report is a decode-side figure (the tiled prefill
+call contributes its last chunk's record only) and is labeled
+DIAGNOSTIC.
+
+**Writeup input (P6-6, §7 fp16-depth item — measured, not an open
+caveat):** "The fp16 activation path was measured at full 4K cache
+depth on the production build: five 3900-token greedy free-runs
+(depth 3904–3961) produced no non-finite logit and no non-finite KV
+entry (max |K/V| 391.5 vs the 65504 fp16 limit), and 80 of 80 sampled
+CPU-quant (fp32) checkpoints on the GPU's own trajectories lay within
+the Phase 2 Tier-E species with the same argmax, with no growth of the
+deviation with depth (worst full-vocab ratio 0.078 shallow, 0.055 at
+depth ≥ 3000). Caveats: checkpoints every 256 steps, not every step;
+the deep cache content is greedy-loop repetition."
+
+**Backlog:** LD-1 done. P6-6 (the writeup) blocked → ready — both of its
+dependencies (P6-5, LD-1) are done; it is the next agent task by rank.
+Follow-ups seeded: none — nothing surfaced that is not already tracked
+(DEV-2 covers the Phase 2 harness's print-only report; the new harness
+writes its file from the start).

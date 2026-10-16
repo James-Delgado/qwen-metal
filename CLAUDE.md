@@ -31,9 +31,12 @@ vs 387.60 / 440.71, tripwires PASS; P6-5 (the energy round, James) done
 2026-10-15: net J/token ours 0.198 / MLX 0.143 / llama.cpp 0.174 (n=4
 each; the 80→70 start band was waived by decision for rounds 1–3 — cycles
 labeled off-band, the writeup's dominant energy limitation; round 4 ran
-at the 80 mark: ours 0.169 / MLX 0.119 / llama.cpp 0.196, n=1 each). Next agent task by
-rank: LD-1 (Mac-only long-depth free-run report), which unblocks P6-6
-(the writeup). Pinned model: Qwen/Qwen3-1.7B @ 70d244cc on iPhone
+at the 80 mark: ours 0.169 / MLX 0.119 / llama.cpp 0.196, n=1 each); LD-1
+(Mac-only long-depth free-run report) done 2026-10-16: 5 prompts × 3900
+steps to depth 3904–3961 on the production default, 0 non-finite
+logits/KV entries, 80/80 sampled CPU-quant checkpoints within the Tier-E
+species, no depth trend. Next agent task by rank: P6-6 (the writeup).
+Pinned model: Qwen/Qwen3-1.7B @ 70d244cc on iPhone
 15 Pro. The engine decodes end-to-end from the packed 4-bit q4g64 format
 on-device at 31.67 tok/s warm-burst — the committed 29.4 target (0.75 × MLX)
 is EXCEEDED — and prefills through a tiled dequant-GEMM + query-tiled

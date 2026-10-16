@@ -29,7 +29,7 @@
 #            P6-EXEC ◄── SPEC-P6 ◄── P5-EXEC ◄── SPEC-P5 ◄── P4-EXEC ◄── SPEC-P4
 #
 version: 1
-last_updated: 2026-10-15
+last_updated: 2026-10-16
 
 schema:
   task_status: [ready, blocked, in_progress, done, skipped]
@@ -2558,7 +2558,7 @@ tasks:
   - id: P6-6
     rank: 22.6
     title: "The writeup: docs/writeup.md + docs/writeup/ figures regenerated from benchmarks/phase6/ — headline table, verdict input, thermal chart, energy with both error bars, roofline from measured denominators, per-component headroom, measurement limitations, honest gaps, reproducibility"
-    status: blocked
+    status: ready
     depends_on: [P6-5, LD-1]
     blocks: [P6-EXEC]
     p6_2_handoff: |
@@ -2603,6 +2603,17 @@ tasks:
       disagreement (85->70 vs 83->73), the unrealized Latin square (MLX always second),
       airplane mode ON (energy) vs OFF (speed). Thermal chart = docs/writeup/thermal.png
       (our cycles' x-axis is sum-of-generation-wall; external cycles loop-clock).
+    ld_1_handoff: |
+      Limitations section 7, fp16-depth item (MEASURED): cite the DECISIONS.md
+      2026-10-16 LD-1 entry — five 3900-token greedy free-runs on the production
+      default (depth 3904-3961), 0 non-finite logits and 0 non-finite KV entries
+      (max |K/V| 391.5 vs the 65504 fp16 limit), 80 of 80 sampled CPU-quant fp32
+      checkpoints on the GPU's own trajectories within the Phase 2 Tier-E species
+      with the same argmax, no growth of the deviation with depth (worst
+      full-vocab ratio 0.078 shallow vs 0.055 at depth >= 3000). State the two
+      caveats: checkpoints every 256 steps (not per-step), and the deep cache
+      content is greedy-loop repetition. Raw report:
+      benchmarks/long-depth/ld1-report-2026-10-16.txt.
 
   - id: P6-EXEC
     rank: 23
@@ -2809,8 +2820,9 @@ tasks:
   - id: LD-1
     rank: 22.35
     title: "Long-depth GPU free-run report: fp16-activation behavior at multi-thousand-token cache depth"
-    status: in_progress
+    status: done
     started_at: 2026-10-16T03:13:20Z
+    completed_at: 2026-10-16T03:57:30Z
     depends_on: [P4-4]
     blocks: [P6-6]
     deliverable:
@@ -2844,6 +2856,13 @@ tasks:
       device sessions (P6-4/P6-5); its report becomes writeup section
       7's fp16-depth item (measured, not an open caveat). Report-only
       stays: nothing here gates.
+      2026-10-16 DONE: 5 prompts x 3900 steps to depth 3904-3961 on the
+      production default; 0 non-finite logits / KV entries (max |K/V| 391.5);
+      80/80 sampled CPU-quant checkpoints within the Tier-E species, 80/80
+      argmax agreement, no depth trend. Oracle strategy chosen: sampled
+      teacher-forced CPU-quant checkpoints every 256 steps on the GPU's own
+      trajectory (recorded why in DECISIONS.md). Raw report archived at
+      benchmarks/long-depth/ld1-report-2026-10-16.txt.
 
   - id: DEV-1
     rank: 25
