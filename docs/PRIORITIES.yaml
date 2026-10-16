@@ -2636,7 +2636,8 @@ tasks:
   - id: P6-EXEC
     rank: 23
     title: "Phase 6 exit milestone: exit criteria walked, success-metric verdict (PLAN formula), llama.cpp-energy decision recorded, architecture.pdf v1.9 + README/CLAUDE.md refresh; unblocks CAMP-1"
-    status: ready
+    status: in_progress
+    started_at: 2026-10-16T04:50:18Z
     depends_on: [P6-6]
     blocks: [CAMP-1]
     p6_6_handoff: |
