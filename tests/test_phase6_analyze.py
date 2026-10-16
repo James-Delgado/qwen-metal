@@ -812,3 +812,128 @@ def test_in_band_subset_is_reported_alongside_the_any_start_headline(tmp_path):
     assert e.headline.n == 3 and e.in_band.n == 2
     assert e.in_band.values == pytest.approx([c.net_joules_per_token for c in e.cycles if c.soc_start == 80])
     assert e.in_band.mean_j_per_token == pytest.approx(sum(e.in_band.values) / 2)
+
+
+# --------------------------------------------------------------------------
+# P6-6 additions (writeup §5): roofline rows for every engine with a labeled
+# basis, the 43.84 GB/s denominator of record alongside the session triad,
+# the derived ceilings, and the roofline figure
+# --------------------------------------------------------------------------
+
+def test_roofline_external_engines_on_our_bytes_basis_are_labeled(tmp_path):
+    """The external engines' per-token byte counts are not measured; without a
+    manifest figure their implied bandwidth is reported on the qwen-metal
+    bytes/token basis and LABELED as such (never silently as measured)."""
+    r = an.analyze_archive(write_archive(tmp_path / "a", manifest(), full_speed_files(), {}))
+    assert set(r.roofline) == {"ours", "mlx", "llama"}
+    assert r.roofline["ours"].basis == an.BASIS_MEASURED
+    mlx = r.roofline["mlx"]
+    assert mlx.basis == an.BASIS_OURS_PROXY
+    assert mlx.bytes_per_token == an.WEIGHT_BYTES + an.KV_BYTES_PER_POSITION * (84 + 320)
+    assert mlx.implied_gbps == pytest.approx(39.2 * mlx.bytes_per_token / 1e9)
+    llama = r.roofline["llama"]
+    assert llama.basis == an.BASIS_OURS_PROXY
+    assert llama.bytes_per_token == an.WEIGHT_BYTES + an.KV_BYTES_PER_POSITION * (92 + 320)
+
+
+def test_roofline_manifest_weight_bytes_override_the_proxy_basis(tmp_path):
+    m = manifest()
+    m["roofline"] = {"weight_bytes": {"llama": 1_190_000_000}}
+    r = an.analyze_archive(write_archive(tmp_path / "a", m, full_speed_files(), {}))
+    assert r.roofline["llama"].basis == an.BASIS_MANIFEST
+    assert r.roofline["llama"].bytes_per_token == 1_190_000_000 + an.KV_BYTES_PER_POSITION * (92 + 320)
+    assert r.roofline["mlx"].basis == an.BASIS_OURS_PROXY
+
+
+def test_roofline_fraction_of_record_denominators_and_ceilings(tmp_path):
+    r = an.analyze_archive(write_archive(tmp_path / "a", manifest(), full_speed_files(), {}))
+    ro = r.roofline["ours"]
+    session_triad = (43.84 + 43.70) / 2
+    assert an.ROOFLINE_GBPS_OF_RECORD == 43.84  # DECISIONS.md 2026-08-22, consumed verbatim
+    assert ro.fraction_of_record == pytest.approx(ro.implied_gbps / an.ROOFLINE_GBPS_OF_RECORD)
+    assert ro.ceiling_tok_s_record == pytest.approx(an.ROOFLINE_GBPS_OF_RECORD * 1e9 / ro.bytes_per_token)
+    assert ro.ceiling_tok_s_session == pytest.approx(session_triad * 1e9 / ro.bytes_per_token)
+    d = r.roofline_denominators
+    assert d["triad_of_record_gbps"] == an.ROOFLINE_GBPS_OF_RECORD
+    assert d["triad_session_gbps"] == pytest.approx(session_triad)
+    assert d["readonly_session_gbps"] == pytest.approx((45.10 + 44.90) / 2)
+    assert d["sequential_prefill_ceiling_tok_s"] == pytest.approx(an.ROOFLINE_GBPS_OF_RECORD * 1e9 / an.WEIGHT_BYTES)
+    assert d["weight_bytes"] == an.WEIGHT_BYTES and d["kv_bytes_per_position"] == an.KV_BYTES_PER_POSITION
+
+
+def test_roofline_without_bandwidth_rows_keeps_only_the_record_denominator(tmp_path):
+    files = {k: v for k, v in full_speed_files().items() if not k.startswith("bandwidth")}
+    r = an.analyze_archive(write_archive(tmp_path / "a", manifest(), files, {}))
+    ro = r.roofline["ours"]
+    assert ro.fraction_of_triad is None and ro.ceiling_tok_s_session is None
+    assert ro.fraction_of_record is not None and ro.ceiling_tok_s_record is not None
+    assert r.roofline_denominators["triad_session_gbps"] is None
+    assert r.roofline_denominators["readonly_session_gbps"] is None
+
+
+def test_roofline_engine_without_a_window_row_has_no_implied_bandwidth(tmp_path):
+    files = {k: v for k, v in full_speed_files().items() if not k.startswith("mlx-decode")}
+    r = an.analyze_archive(write_archive(tmp_path / "a", manifest(), files, {}))
+    assert r.roofline["mlx"].implied_gbps is None and r.roofline["mlx"].fraction_of_record is None
+    assert [b.engine for b in an.roofline_bar_data(r.roofline)] == ["ours", "llama"]
+
+
+def test_roofline_figure_renders_every_engine_with_the_denominator_lines(tmp_path):
+    r = an.analyze_archive(write_archive(tmp_path / "a", manifest(), full_speed_files(), {}))
+    bars = an.roofline_bar_data(r.roofline)
+    assert [b.engine for b in bars] == ["ours", "mlx", "llama"]
+    assert bars[0].implied_gbps == pytest.approx(r.roofline["ours"].implied_gbps)
+    assert bars[1].basis == an.BASIS_OURS_PROXY
+    out = an.render_roofline_chart(bars, r.roofline_denominators, tmp_path / "roofline.png")
+    assert out.exists() and out.stat().st_size > 1000
+
+
+def test_cli_writes_roofline_figure_tables_and_denominators(tmp_path):
+    archive = write_archive(tmp_path / "a", manifest(), full_speed_files(), full_energy_files())
+    out = tmp_path / "out"
+    assert an.main([str(archive), "--out", str(out)]) == 0
+    assert (out / "roofline.png").exists()
+    tables = (out / "tables.md").read_text()
+    assert an.BASIS_OURS_PROXY in tables and "43.84" in tables
+    summary = json.loads((out / "summary.json").read_text())
+    assert summary["roofline_denominators"]["triad_of_record_gbps"] == 43.84
+    assert summary["roofline"]["mlx"]["basis"] == an.BASIS_OURS_PROXY
+
+
+def test_energy_cycles_double_as_thermal_rows_in_report_and_tables(tmp_path):
+    """D4: each energy cycle is the sustained-thermal run of record; the report lists
+    first/last/second-half-median window rates per cycle (from the D1 timeline), so
+    the writeup's §3 plateau readings are regenerated, never typed."""
+    archive = write_archive(tmp_path / "a", manifest(), full_speed_files(), full_energy_files())
+    r = an.analyze_archive(archive)
+    rows = r.thermal_cycles
+    assert [t.file for t in rows] == ["llama-energy-0", "llama-energy-1", "llama-energy-2",
+                                      "mlx-energy-0", "mlx-energy-1", "mlx-energy-2",
+                                      "ours-energy-0", "ours-energy-1", "ours-energy-2"]
+    ours0 = next(t for t in rows if t.file == "ours-energy-0")
+    assert ours0.generations == 18 and ours0.first_window == pytest.approx(31.5)
+    assert ours0.last_window == pytest.approx(31.5 - 17 * 1.5)
+    assert ours0.plateau_second_half_median is not None and ours0.minutes == pytest.approx((18 * 58.0 + 3.0) / 60)
+    from phase6_tables import render_tables
+    tables = render_tables(r)
+    assert "Energy cycles as thermal runs" in tables and "ours-energy-0" in tables
+    summary = an.summary_dict(r)
+    assert summary["thermal_cycles"][0]["file"] == "llama-energy-0"
+
+
+def test_idle_baseline_watts_are_reported(tmp_path):
+    archive = write_archive(tmp_path / "a", manifest(), full_speed_files(), full_energy_files())
+    r = an.analyze_archive(archive)
+    idle = r.idle_summary
+    assert idle["soc_drop_percent"] == 5 and idle["wall_seconds"] == 4500
+    assert idle["joules_per_percent"] == pytest.approx(453.6)
+    assert idle["watts"] == pytest.approx(5 * 453.6 / 4500)
+    from phase6_tables import render_tables
+    assert f"{idle['watts']:.3f} W" in render_tables(r)
+    assert an.summary_dict(r)["idle_baseline"]["watts"] == pytest.approx(idle["watts"])
+
+
+def test_idle_summary_is_none_when_the_baseline_is_refused(tmp_path):
+    archive = write_archive(tmp_path / "a", manifest(idle=False), full_speed_files(), full_energy_files())
+    r = an.analyze_archive(archive)
+    assert r.idle_summary is None and an.summary_dict(r)["idle_baseline"] is None

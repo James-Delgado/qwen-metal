@@ -121,5 +121,8 @@ analyzer REFUSES any headline that depends on a missing field.
 .venv/bin/python tools/phase6_analyze.py benchmarks/phase6 --out docs/writeup
 ```
 
-Writes `docs/writeup/tables.md`, `summary.json`, `thermal.png`, `energy.png`.
-Tests: `.venv/bin/python -m pytest tests/test_phase6_analyze.py -q`.
+Writes `docs/writeup/tables.md`, `summary.json`, `thermal.png`, `energy.png`,
+`roofline.png`. `docs/writeup.md` (P6-6) embeds the tables verbatim between
+`<!-- phase6:table N -->` markers and `tests/test_writeup.py` holds every
+block and every inline headline number to a fresh regeneration.
+Tests: `.venv/bin/python -m pytest tests/test_phase6_analyze.py tests/test_writeup.py -q`.

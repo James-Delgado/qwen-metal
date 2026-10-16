@@ -1,9 +1,11 @@
 """Figures for the Phase 6 analyzer (tools/phase6_analyze.py; task P6-3).
 
 Thermal chart (D4: per-generation window rate vs elapsed, all cycles, median
-cycle bold) and energy bars (D4: net J/token with statistical and systematic
-error bars). Colors = the dataviz reference palette's first three categorical
-slots (validated all-pairs in both modes); text stays in ink tokens.
+cycle bold), energy bars (D4: net J/token with statistical and systematic
+error bars) and the decode roofline chart (D8 §5: implied GB/s per engine
+against the measured denominators). Colors = the dataviz reference palette's
+first three categorical slots (validated all-pairs in both modes); text stays
+in ink tokens.
 """
 
 from __future__ import annotations
@@ -33,6 +35,14 @@ class EnergyBar:
     mean: float
     statistical_halfwidth: float
     systematic_halfwidth: float
+
+
+@dataclass
+class RooflineBar:
+    engine: str
+    implied_gbps: float
+    window_tok_s: float
+    basis: str
 
 
 def render_thermal_chart(series: list[ThermalSeries], out: Path) -> Path:
@@ -92,6 +102,48 @@ def render_energy_bars(energy: dict, out: Path) -> Path:
     if refused:
         fig.text(0.01, 0.01, "no headline (below the ≥3 valid-cycle pin or refused): " + ", ".join(refused),
                  fontsize=8, color="#52514e", ha="left", va="bottom")
+    _style_axes(ax)
+    fig.tight_layout(rect=(0, 0.04, 1, 1))
+    fig.savefig(out)
+    plt.close(fig)
+    return out
+
+
+def roofline_bar_data(roofline: dict) -> list[RooflineBar]:
+    return [RooflineBar(e, r.implied_gbps, r.window_tok_s, r.basis)
+            for e in ENGINES if e in roofline and (r := roofline[e]).implied_gbps is not None]
+
+
+def render_roofline_chart(bars: list[RooflineBar], denominators: dict, out: Path) -> Path:
+    """Implied decode bandwidth (window tok/s × bytes/token) per engine, against the
+    measured denominators: the 43.84 GB/s triad of record (solid), the same-session
+    triad median (dashed) and the session read-only median (dotted, the BW-1 bound).
+    A hatched bar marks an engine computed on the qwen-metal bytes/token basis."""
+    plt = _pyplot()
+    fig, ax = plt.subplots(figsize=(6.5, 4.4), dpi=150)
+    xs = list(range(len(bars)))
+    for x, b in zip(xs, bars):
+        proxy = not b.basis.startswith("measured")
+        ax.bar(x, b.implied_gbps, width=0.55, color=ENGINE_COLORS[b.engine], linewidth=0,
+               hatch="//" if proxy else None, edgecolor="#fcfcfb" if proxy else None)
+        ax.annotate(f"{b.implied_gbps:.1f} GB/s\n{b.window_tok_s:.2f} tok/s", (x, b.implied_gbps),
+                    textcoords="offset points", xytext=(0, 6), ha="center", fontsize=8)
+    lines = (("triad_of_record_gbps", "-", "triad of record (2026-08-22)"),
+             ("triad_session_gbps", "--", "session triad median"),
+             ("readonly_session_gbps", ":", "session read-only median (BW-1 bound)"))
+    for key, style, label in lines:
+        value = denominators.get(key)
+        if value:
+            ax.axhline(value, color="#52514e", linewidth=1.0, linestyle=style, label=f"{label}: {value:.2f}")
+    ax.set_xticks(xs, [ENGINE_LABELS[b.engine] for b in bars])
+    tallest = max([b.implied_gbps for b in bars] + [v for v in denominators.values() if isinstance(v, float) and v < 1e3] + [1.0])
+    ax.set_ylim(0, tallest * 1.35)
+    ax.set_ylabel("implied GB/s (window tok/s × bytes/token)")
+    ax.set_title("Decode roofline — implied bandwidth vs measured denominators")
+    if any(not b.basis.startswith("measured") for b in bars):
+        fig.text(0.01, 0.01, "hatched = on the qwen-metal bytes/token basis (per-token bytes not measured)",
+                 fontsize=8, color="#52514e", ha="left", va="bottom")
+    ax.legend(frameon=False, fontsize=8, loc="upper left")
     _style_axes(ax)
     fig.tight_layout(rect=(0, 0.04, 1, 1))
     fig.savefig(out)

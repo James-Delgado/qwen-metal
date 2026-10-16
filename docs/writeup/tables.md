@@ -26,7 +26,26 @@ ours 31.16 ÷ MLX 43.40 = 0.718 vs ≥ 0.75 ⇒ **NOT MET** (the committed 29.4 
 | MLX LLMEval | 5 | 40.53 | 35.10 | 34.94 | 5.1 | text gen lines |
 | llama.cpp | 5 | 33.98 | 27.41 | 27.41 | 5.0 | text gen lines |
 
+Energy cycles as thermal runs (D4 — the chart of record, docs/writeup/thermal.png):
+
+| cycle | engine | generations | first window tok/s | last window tok/s | 2nd-half median | minutes | elapsed basis |
+|---|---|---|---|---|---|---|---|
+| llama-energy-0 | llama.cpp | 12 | 31.50 | 25.18 | 25.79 | 13.9 | text gen lines |
+| llama-energy-1 | llama.cpp | 18 | 34.47 | 25.32 | 25.35 | 21.6 | text gen lines |
+| llama-energy-2 | llama.cpp | 15 | 33.22 | 25.05 | 25.51 | 17.6 | text gen lines |
+| llama-energy-3 | llama.cpp | 12 | 33.12 | 25.61 | 27.04 | 14.2 | text gen lines |
+| mlx-energy-0 | MLX LLMEval | 17 | 43.06 | 35.55 | 35.31 | 16.5 | text gen lines |
+| mlx-energy-1 | MLX LLMEval | 14 | 42.39 | 33.26 | 33.30 | 14.7 | text gen lines |
+| mlx-energy-2 | MLX LLMEval | 13 | 42.03 | 34.53 | 35.12 | 12.7 | text gen lines |
+| mlx-energy-3 | MLX LLMEval | 18 | 42.79 | 33.53 | 33.67 | 18.1 | text gen lines |
+| ours-energy-0 | qwen-metal | 14 | 31.79 | 22.33 | 23.00 | 18.7 | text gen lines |
+| ours-energy-1 | qwen-metal | 10 | 30.87 | 21.63 | 22.23 | 13.2 | text gen lines |
+| ours-energy-2 | qwen-metal | 14 | 30.73 | 22.30 | 22.32 | 19.0 | text gen lines |
+| ours-energy-3 | qwen-metal | 16 | 31.26 | 21.67 | 22.16 | 22.0 | text gen lines |
+
 ## 4. Energy per token (energy round)
+
+Idle baseline (same iOS build, app foregrounded, no generation): 93→74% over 36000 s at health 100% (453.6 J per 1% SoC) = 0.239 W, scaled pro-rata to each cycle's wall.
 
 | engine | cycle | health % | SoC start→end | ΔSoC | cycle wall s | tokens | gross J | implied W | idle ΔSoC (scaled) | net J | net J/token | valid |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -59,9 +78,13 @@ ours 31.16 ÷ MLX 43.40 = 0.718 vs ≥ 0.75 ⇒ **NOT MET** (the committed 29.4 
 
 ## 6. Roofline inputs (decode)
 
-| engine | window tok/s | bytes/token (weights + KV at window-median depth) | implied GB/s | triad GB/s | fraction |
-|---|---|---|---|---|---|
-| qwen-metal | 31.16 | 1,014,087,680 | 31.60 | 42.21 | 0.749 |
+Denominators (all measured): triad of record 43.84 GB/s (DECISIONS.md 2026-08-22); session triad median 42.21 GB/s; session read-only median 43.65 GB/s (the BW-1 bound). bytes/token = weights + 114,688 B × (prompt tokens + 320) of fp16 KV. Sequential-prefill structural ceiling (weights re-streamed per token at the record denominator): 45.30 tok/s.
+
+| engine | window tok/s | bytes/token | basis | implied GB/s | ÷ session triad | ÷ triad of record | ceiling tok/s (record / session) |
+|---|---|---|---|---|---|---|---|
+| qwen-metal | 31.16 | 1,014,087,680 | measured (qwen-metal packed weights + fp16 KV) | 31.60 | 0.749 | 0.721 | 43.23 / 41.62 |
+| MLX LLMEval | 43.40 | 1,014,087,680 | qwen-metal bytes/token basis (this engine's per-token bytes are not measured — labeled) | 44.01 | 1.043 | 1.004 | 43.23 / 41.62 |
+| llama.cpp | 34.80 | 1,014,087,680 | qwen-metal bytes/token basis (this engine's per-token bytes are not measured — labeled) | 35.29 | 0.836 | 0.805 | 43.23 / 41.62 |
 
 ## 7. Refusals and notes
 

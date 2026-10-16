@@ -2558,8 +2558,25 @@ tasks:
   - id: P6-6
     rank: 22.6
     title: "The writeup: docs/writeup.md + docs/writeup/ figures regenerated from benchmarks/phase6/ — headline table, verdict input, thermal chart, energy with both error bars, roofline from measured denominators, per-component headroom, measurement limitations, honest gaps, reproducibility"
-    status: in_progress
+    status: done
     started_at: 2026-10-16 04:17:39+00:00
+    completed_at: 2026-10-16 04:45:00+00:00
+    p6_6_landed: |
+      2026-10-16 (done): docs/writeup.md — the nine D8 sections + a summary and
+      an appendix; every Phase 6 table embedded verbatim between
+      `<!-- phase6:table N -->` markers from tools/phase6_analyze.py output,
+      history ledger-cited with dates, derived ratios shown with both inputs.
+      Analyzer extensions (test-first, 10 new tests, 51 green): roofline rows
+      for every engine with a labeled basis (external engines on the
+      qwen-metal bytes/token basis — per-token bytes not measured), the
+      43.84 GB/s denominator of record alongside the session triad and
+      read-only medians, derived ceilings (tools/phase6_roofline.py, new),
+      roofline.png (third figure), per-energy-cycle thermal rows, the idle
+      baseline as watts. tests/test_writeup.py (18 tests): embedded blocks ==
+      fresh regeneration, committed tables/summary == regeneration, every
+      inline headline number and derived ratio recomputed from summary.json
+      or the attribution exports, D8 content items present, pins present.
+      PDF render skipped (D8: optional, never the source). DECISIONS.md entry.
     depends_on: [P6-5, LD-1]
     blocks: [P6-EXEC]
     p6_2_handoff: |
@@ -2619,9 +2636,23 @@ tasks:
   - id: P6-EXEC
     rank: 23
     title: "Phase 6 exit milestone: exit criteria walked, success-metric verdict (PLAN formula), llama.cpp-energy decision recorded, architecture.pdf v1.9 + README/CLAUDE.md refresh; unblocks CAMP-1"
-    status: blocked
+    status: ready
     depends_on: [P6-6]
     blocks: [CAMP-1]
+    p6_6_handoff: |
+      The writeup (docs/writeup.md) is the exit-walk input: §2 carries the
+      verdict input 31.16 ÷ 43.40 = 0.718 ⇒ NOT MET (29.4 exceeded alongside),
+      §7 the limitations incl. provisional-vs-final, §8 the gaps. The
+      llama.cpp-energy decision is moot (n=4 delivered, KEPT). Close-out
+      actions: README.md + CLAUDE.md status must lead with the Phase 6
+      same-session numbers and link docs/writeup.md (the repo must not
+      present Phase 5's 240.86 / 31.67 as the current comparison);
+      architecture.pdf v1.9 — the roofline figure gains the three-engine
+      implied-bandwidth reading (docs/writeup/roofline.png is the source
+      data via summary.json), the phase table marks Phase 6 exited, the
+      executive summary carries the NOT MET verdict with anatomy. Run
+      `.venv/bin/python -m pytest tests/test_writeup.py -q` in the close-out
+      (any later edit to docs/writeup.md must keep it green).
     deliverable:
       file: "DECISIONS.md exit entry + docs/architecture.pdf + README.md/CLAUDE.md status"
       tests: "Phase 6 exit criteria (PLAN.md table row 6, walked per docs/phases/phase-6.md); verdict = ours window median / MLX same-session window median >= 0.75 reported MET or NOT MET with anatomy (never blocks exit); 29.4 constant reported alongside"
@@ -3093,6 +3124,27 @@ tasks:
       per-row). Cosmetic parity for the D7 same-build rule. Not needed for P6-4/P6-5
       (the manifest covers it); if taken before P6-4 it must land before the build
       of the two harness apps for the session. Filler: never blocks the phase chain.
+  - id: WR-1
+    rank: 29.9
+    title: "Measure the external engines' per-token weight bytes (MLX 4-bit checkpoint tensor bytes; GGUF Q4_K_M per-token read set) and type them into manifest.json roofline.weight_bytes so the writeup's §5 proxy rows become measured"
+    status: ready
+    depends_on: []
+    blocks: []
+    deliverable:
+      file: tools/ (a pinned-deps script that sums the quantized tensor bytes of the pinned MLX checkpoint and the pinned GGUF, excluding the embedding rows not read per token) + benchmarks/phase6/manifest.json roofline.weight_bytes + docs/writeup.md §5 rows re-rendered (basis label flips to 'manifest weight bytes') + DECISIONS.md entry
+      tests: "script output pinned on the two local artifacts (sha256-verified); tests/test_writeup.py stays green after regeneration; the analyzer's basis label test covers the manifest path already"
+    est_complexity: small
+    notes: |
+      Seeded 2026-10-16 from P6-6: the writeup's decode roofline reports MLX and
+      llama.cpp implied bandwidth on the qwen-metal bytes/token basis, LABELED,
+      because their per-token byte counts are not measured (MLX's 4-bit g64
+      affine format is 4.5 bits/weight like ours; llama.cpp's Q4_K_M is 5.03 BPW
+      at the file level, so its true fraction is likely above the 0.84 shown).
+      Measuring the two counts (tensor-size sums from the pinned artifacts; which
+      tensors are read per decode token — tied output head read fully, embedding
+      gather one row) turns the labeled rows into measured ones via the analyzer's
+      existing manifest path (tools/phase6_roofline.py BASIS_MANIFEST). Filler:
+      never blocks the phase chain; cosmetic to the verdict (ours is measured).
   - id: KP-1
     rank: 30
     title: "Remove (or keep, with a decision) the naive kernel-path toggle on the packed pipeline after the P4-5 before/after row"

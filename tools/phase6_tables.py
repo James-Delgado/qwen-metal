@@ -68,12 +68,23 @@ def _sustained_table(r: an.Report) -> list[str]:
             continue
         rows.append(f"| {ENGINE_LABELS[e]} | {s.generations} | {_fmt(s.first_window)} | {_fmt(s.last_window)} | "
                     f"{_fmt(s.plateau_second_half_median)} | {_fmt(s.minutes, 1)} | {s.basis} |")
+    rows += ["", "Energy cycles as thermal runs (D4 — the chart of record, docs/writeup/thermal.png):", "",
+             "| cycle | engine | generations | first window tok/s | last window tok/s | 2nd-half median | minutes | elapsed basis |",
+             "|---|---|---|---|---|---|---|---|"]
+    for (name, row, _), t in zip(r.energy_rows, r.thermal_cycles):
+        rows.append(f"| {t.file} | {ENGINE_LABELS[row.engine]} | {t.generations} | {_fmt(t.first_window)} | "
+                    f"{_fmt(t.last_window)} | {_fmt(t.plateau_second_half_median)} | {_fmt(t.minutes, 1)} | {t.basis} |")
     rows.append("")
     return rows
 
 
 def _energy_tables(r: an.Report) -> list[str]:
-    rows = ["## 4. Energy per token (energy round)", "",
+    idle = r.idle_summary
+    idle_line = ("no valid idle baseline — every energy headline is refused" if idle is None else
+                 f"Idle baseline (same iOS build, app foregrounded, no generation): {idle['soc_start']:g}→{idle['soc_end']:g}% "
+                 f"over {idle['wall_seconds']:g} s at health {idle['health_percent']:g}% "
+                 f"({idle['joules_per_percent']:.1f} J per 1% SoC) = {idle['watts']:.3f} W, scaled pro-rata to each cycle's wall.")
+    rows = ["## 4. Energy per token (energy round)", "", idle_line, "",
             "| engine | cycle | health % | SoC start→end | ΔSoC | cycle wall s | tokens | gross J | implied W | idle ΔSoC (scaled) | net J | net J/token | valid |",
             "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for e in ENGINES:
@@ -113,11 +124,19 @@ def _bandwidth_section(r: an.Report) -> list[str]:
 
 
 def _roofline_section(r: an.Report) -> list[str]:
+    d = r.roofline_denominators
     lines = ["## 6. Roofline inputs (decode)", "",
-             "| engine | window tok/s | bytes/token (weights + KV at window-median depth) | implied GB/s | triad GB/s | fraction |", "|---|---|---|---|---|---|"]
+             f"Denominators (all measured): triad of record {d['triad_of_record_gbps']:.2f} GB/s (DECISIONS.md 2026-08-22); "
+             f"session triad median {_fmt(d['triad_session_gbps'])} GB/s; session read-only median {_fmt(d['readonly_session_gbps'])} GB/s (the BW-1 bound). "
+             f"bytes/token = weights + {d['kv_bytes_per_position']:,} B × (prompt tokens + {d['window_median_depth_offset']}) of fp16 KV. "
+             f"Sequential-prefill structural ceiling (weights re-streamed per token at the record denominator): {d['sequential_prefill_ceiling_tok_s']:.2f} tok/s.",
+             "",
+             "| engine | window tok/s | bytes/token | basis | implied GB/s | ÷ session triad | ÷ triad of record | ceiling tok/s (record / session) |",
+             "|---|---|---|---|---|---|---|---|"]
     for e, ro in r.roofline.items():
-        lines.append(f"| {ENGINE_LABELS[e]} | {_fmt(ro.window_tok_s)} | {ro.bytes_per_token:,} | {_fmt(ro.implied_gbps)} | "
-                     f"{_fmt(ro.denominator_gbps)} | {_fmt(ro.fraction_of_triad, 3)} |")
+        lines.append(f"| {ENGINE_LABELS[e]} | {_fmt(ro.window_tok_s)} | {ro.bytes_per_token:,} | {ro.basis} | {_fmt(ro.implied_gbps)} | "
+                     f"{_fmt(ro.fraction_of_triad, 3)} | {_fmt(ro.fraction_of_record, 3)} | "
+                     f"{_fmt(ro.ceiling_tok_s_record)} / {_fmt(ro.ceiling_tok_s_session)} |")
     lines.append("")
     return lines
 

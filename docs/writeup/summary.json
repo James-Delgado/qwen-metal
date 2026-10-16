@@ -794,10 +794,47 @@
       "engine": "ours",
       "window_tok_s": 31.16,
       "bytes_per_token": 1014087680,
+      "basis": "measured (qwen-metal packed weights + fp16 KV)",
       "implied_gbps": 31.598972108799998,
       "denominator_gbps": 42.209999999999994,
-      "fraction_of_triad": 0.7486134117223407
+      "fraction_of_triad": 0.7486134117223407,
+      "fraction_of_record": 0.7207794732846714,
+      "ceiling_tok_s_record": 43.23097584619113,
+      "ceiling_tok_s_session": 41.6236197643186
+    },
+    "mlx": {
+      "engine": "mlx",
+      "window_tok_s": 43.4,
+      "bytes_per_token": 1014087680,
+      "basis": "qwen-metal bytes/token basis (this engine's per-token bytes are not measured — labeled)",
+      "implied_gbps": 44.011405312,
+      "denominator_gbps": 42.209999999999994,
+      "fraction_of_triad": 1.0426772165837481,
+      "fraction_of_record": 1.0039097927007299,
+      "ceiling_tok_s_record": 43.23097584619113,
+      "ceiling_tok_s_session": 41.6236197643186
+    },
+    "llama": {
+      "engine": "llama",
+      "window_tok_s": 34.8,
+      "bytes_per_token": 1014087680,
+      "basis": "qwen-metal bytes/token basis (this engine's per-token bytes are not measured — labeled)",
+      "implied_gbps": 35.290251264,
+      "denominator_gbps": 42.209999999999994,
+      "fraction_of_triad": 0.8360637589196873,
+      "fraction_of_record": 0.8049783591240874,
+      "ceiling_tok_s_record": 43.23097584619113,
+      "ceiling_tok_s_session": 41.6236197643186
     }
+  },
+  "roofline_denominators": {
+    "triad_of_record_gbps": 43.84,
+    "triad_session_gbps": 42.209999999999994,
+    "readonly_session_gbps": 43.65,
+    "weight_bytes": 967753728,
+    "kv_bytes_per_position": 114688,
+    "window_median_depth_offset": 320,
+    "sequential_prefill_ceiling_tok_s": 45.30078131613253
   },
   "verdict": {
     "ours_median": 31.16,
@@ -862,5 +899,125 @@
     "ours-energy-1: operator-supplied post hoc via manifest — round",
     "ours-energy-2: round marker '3' is a listed alias of the session round 'phase6-energy-2026-10-12' (operator typed the round index) — mapped, labeled",
     "ours-energy-3: round marker '4' is a listed alias of the session round 'phase6-energy-2026-10-12' (operator typed the round index) — mapped, labeled"
-  ]
+  ],
+  "thermal_cycles": [
+    {
+      "file": "llama-energy-0",
+      "generations": 12,
+      "first_window": 31.5,
+      "last_window": 25.18,
+      "plateau_second_half_median": 25.79,
+      "minutes": 13.896666666666667,
+      "basis": "text gen lines"
+    },
+    {
+      "file": "llama-energy-1",
+      "generations": 18,
+      "first_window": 34.47,
+      "last_window": 25.32,
+      "plateau_second_half_median": 25.35,
+      "minutes": 21.576666666666664,
+      "basis": "text gen lines"
+    },
+    {
+      "file": "llama-energy-2",
+      "generations": 15,
+      "first_window": 33.22,
+      "last_window": 25.05,
+      "plateau_second_half_median": 25.51,
+      "minutes": 17.615000000000002,
+      "basis": "text gen lines"
+    },
+    {
+      "file": "llama-energy-3",
+      "generations": 12,
+      "first_window": 33.12,
+      "last_window": 25.61,
+      "plateau_second_half_median": 27.04,
+      "minutes": 14.191666666666666,
+      "basis": "text gen lines"
+    },
+    {
+      "file": "mlx-energy-0",
+      "generations": 17,
+      "first_window": 43.06,
+      "last_window": 35.55,
+      "plateau_second_half_median": 35.31,
+      "minutes": 16.523333333333333,
+      "basis": "text gen lines"
+    },
+    {
+      "file": "mlx-energy-1",
+      "generations": 14,
+      "first_window": 42.39,
+      "last_window": 33.26,
+      "plateau_second_half_median": 33.3,
+      "minutes": 14.735000000000001,
+      "basis": "text gen lines"
+    },
+    {
+      "file": "mlx-energy-2",
+      "generations": 13,
+      "first_window": 42.03,
+      "last_window": 34.53,
+      "plateau_second_half_median": 35.120000000000005,
+      "minutes": 12.729999999999999,
+      "basis": "text gen lines"
+    },
+    {
+      "file": "mlx-energy-3",
+      "generations": 18,
+      "first_window": 42.79,
+      "last_window": 33.53,
+      "plateau_second_half_median": 33.67,
+      "minutes": 18.1,
+      "basis": "text gen lines"
+    },
+    {
+      "file": "ours-energy-0",
+      "generations": 14,
+      "first_window": 31.79,
+      "last_window": 22.33,
+      "plateau_second_half_median": 23.0,
+      "minutes": 18.665000000000003,
+      "basis": "text gen lines"
+    },
+    {
+      "file": "ours-energy-1",
+      "generations": 10,
+      "first_window": 30.87,
+      "last_window": 21.63,
+      "plateau_second_half_median": 22.23,
+      "minutes": 13.225,
+      "basis": "text gen lines"
+    },
+    {
+      "file": "ours-energy-2",
+      "generations": 14,
+      "first_window": 30.73,
+      "last_window": 22.3,
+      "plateau_second_half_median": 22.32,
+      "minutes": 19.041666666666668,
+      "basis": "text gen lines"
+    },
+    {
+      "file": "ours-energy-3",
+      "generations": 16,
+      "first_window": 31.26,
+      "last_window": 21.67,
+      "plateau_second_half_median": 22.165,
+      "minutes": 22.028333333333332,
+      "basis": "text gen lines"
+    }
+  ],
+  "idle_baseline": {
+    "soc_start": 93,
+    "soc_end": 74,
+    "soc_drop_percent": 19.0,
+    "wall_seconds": 36000,
+    "health_percent": 100,
+    "joules_per_percent": 453.6,
+    "watts": 0.2394,
+    "ios_build": "26.6.1"
+  }
 }

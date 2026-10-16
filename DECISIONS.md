@@ -6169,3 +6169,138 @@ dependencies (P6-5, LD-1) are done; it is the next agent task by rank.
 Follow-ups seeded: none — nothing surfaced that is not already tracked
 (DEV-2 covers the Phase 2 harness's print-only report; the new harness
 writes its file from the start).
+
+## 2026-10-16 — P6-6: the Phase 6 writeup landed — docs/writeup.md (nine D8 sections, every Phase 6 table embedded verbatim from the analyzer, drift-tested); analyzer gains labeled per-engine roofline rows, the 43.84 denominator of record, a roofline figure, per-cycle thermal rows and the idle watts
+
+Spec: docs/phases/phase-6.md D8 (+ the P6-2/P6-3/P6-5/LD-1 handoff notes
+on the task). No engine change (frozen at `phase6-build`); no gate,
+tolerance or protocol pin moved (hard rule 6); the analyzer's constants
+are consumed verbatim and the two numbers added to it are measurements on
+record (43.84 GB/s, DECISIONS 2026-08-22) or model-config byte counts.
+
+**What landed:**
+
+- `docs/writeup.md` — summary; §1 headline table; §2 verdict (31.16 ÷
+  43.40 = 0.718 ⇒ NOT MET as the P6-EXEC input, 29.4 exceeded alongside,
+  tripwires PASS, bookend +0.05); §3 thermal (the twelve energy cycles +
+  the three 5-min loops; one thermal step then a flat plateau on every
+  engine — ours −27%, MLX −14%, llama.cpp −19% on the loops; no
+  bimodality); §4 energy (n=4 per engine, both error bars, implied watts,
+  idle 0.239 W, capacity basis from health, the any-start deviation named
+  as the dominant limitation with the measured consequence: each engine's
+  60–61%-start cycle is its highest J/token and highest-watts reading; the
+  80-region spot readings cited as n=1); §5 roofline (decode: ours 31.60
+  GB/s implied = 0.749 of the session triad / 0.721 of the record, with
+  the matvec stream at 35.2 GB/s ≈ 80% from the attribution export; MLX
+  44.01 GB/s = 1.043 × / 1.004 × on our byte basis — at the triad ceiling;
+  llama.cpp 0.836 / 0.805 labeled; prefill: GEMMs at 0.773 TFLOPS = the
+  0.78 plateau vs ≥1.09 / ≥1.24 implied by MLX / llama.cpp spans, the
+  45.30 tok/s sequential ceiling, crossover below M=8); §6 headroom (both
+  attribution exports quoted verbatim; every component with a measured
+  value, a share, a headroom reading and an owner — matvec stream rate,
+  PIPE-1, GE-1, P5-2C); §7 seventeen limitations incl. the
+  provisional-vs-final table with causes per engine, BW-1 and LD-1 as
+  measured; §8 honest gaps (the verdict, the two FAILED gates with
+  anatomy and remedies, the single prefill owner, the thermal step,
+  the energy row's weakness, the non-goals); §9 reproducibility (every
+  pin with its hash, the runbook, the archive, the regeneration and test
+  commands); Appendix A = the analyzer's refusal/note ledger.
+- Provenance rule, written into the document's preamble and enforced by
+  `tests/test_writeup.py` (18 tests): every table between
+  `<!-- phase6:table N -->` markers must equal section N of a FRESH
+  `tools/phase6_analyze.py` run over `benchmarks/phase6/`; the committed
+  `docs/writeup/tables.md` + `summary.json` must equal that regeneration;
+  every inline headline number (medians, means, footprints, the verdict
+  string, ratios, ceilings, bandwidth medians, idle watts, spreads, thermal
+  steps and plateau bands, the low-start-cycle claim) is recomputed from
+  `summary.json` and must appear at the prose's precision; the two
+  attribution exports must appear verbatim and the stream-rate / TFLOPS
+  derivations are recomputed from them; the nine D8 sections, the three
+  figures, the limitations/gaps/reproducibility items and the pins must
+  be present. History (Phase 0–5) is ledger-cited with dates.
+- Analyzer (test-first; 10 new tests in `tests/test_phase6_analyze.py`,
+  51 green): `tools/phase6_roofline.py` (new module — the roofline code
+  moved out of the analyzer, which stays under the 800-line rule at 753):
+  a `Roofline` row for EVERY engine with a `basis` label — ours measured;
+  an external engine on the manifest's `roofline.weight_bytes` when
+  present, otherwise on the qwen-metal bytes/token basis LABELED as
+  "per-token bytes not measured" (never silently); `fraction_of_record`
+  against 43.84 alongside `fraction_of_triad` (session); the ceilings
+  43.84 ÷ bytes/token and session ÷ bytes/token; a `roofline_denominators`
+  dict (record, session triad, session read-only, weight bytes, KV bytes
+  per position, the 45.30 sequential-prefill ceiling). `phase6_figures.py`:
+  `roofline.png` (implied GB/s per engine, hatched on the proxy basis, the
+  three denominators as lines). `thermal_cycles` (first/last/second-half
+  median per energy cycle from the D1 timeline — the §3 plateau readings
+  are regenerated, not typed) and `idle_summary` (watts from the ≥4%
+  baseline; None whenever the baseline would be refused) in the report,
+  tables and `summary.json`. tables §3 gains the per-cycle rows, §4 the
+  idle line, §6 the basis column + record fraction + ceilings.
+- READMEs: `benchmarks/phase6/README.md` and `tools/README.md` list the
+  new outputs, module and test.
+
+**Decisions taken here (agent, reversible, convention-following —
+surfaced, not blocked on):**
+
+1. **External-engine roofline rows on the qwen-metal bytes/token basis,
+   labeled.** The spec asks for "each engine's implied effective
+   bandwidth"; the external engines' per-token byte counts are not
+   measured by this project (METHODOLOGY 4 forbids inventing them).
+   Chosen: compute on our measured 1,014,087,680 B/token and label every
+   such cell (MLX's 4-bit g64 affine format is 4.5 bits/weight like ours,
+   so the proxy is close; llama.cpp's Q4_K_M is 5.03 BPW at the file
+   level, so its true fraction is likely above the 0.84 shown). The
+   manifest path (`roofline.weight_bytes`) flips the label to "manifest
+   weight bytes" when a count is supplied — WR-1 seeded to measure both.
+2. **Two denominators side by side.** 43.84 GB/s (of record) and the
+   session triad median 42.21 with the session read-only median 43.65 as
+   the BW-1 bound; fractions are reported against both. The analyzer's
+   existing session-triad fraction is unchanged.
+3. **Embed-and-drift-test convention** for the writeup (marker blocks +
+   `tests/test_writeup.py`) rather than a generated document: the prose
+   stays hand-written and reviewable, the numbers stay machine-held.
+4. **No PDF render** (D8: optional, never the source). The P6-EXEC
+   architecture.pdf v1.9 refresh is the rendered surface.
+5. **Writeup length:** docs/writeup.md is 803 lines with the embedded
+   tables; the 800-line rule is a code-file rule and is not applied to
+   the document (noted, not worked around).
+
+**Post-task review (inline fresh-eyes; corrections landed before the
+commit, each with its test where testable):** "two cycles at 60–61%" was
+three (one per engine) — restated as the testable claim that each is its
+engine's maximum J/token and maximum watts (test added); the
+llama.swiftui per-token transcript re-layout predates the Phase 0 rows,
+so it cannot explain the Phase 0 → 6 sustained change — cause stated as
+not established (OS, reset policy and SoC band all moved); 240.86 ÷ 452
+is 53%, not 51%; "two orders of magnitude" overstated a 73× margin —
+restated as "more than 70×" with both inputs (tested); "faithful proxy"
+/ "higher" softened to "close proxy" / "likely higher" for the external
+byte bases; two derived ratios had been split across line breaks and
+one was rounded wrong (1.218 → 1.219) — caught by the test's substring
+checks; the thermal-step ranges per engine were restated from the
+regenerated per-cycle rows (−27% to −29% / −16% to −21% / −18% to −26%)
+and are tested. Deviations from METHODOLOGY or the spec: none. The
+roofline figure's first render had its title and legend colliding with
+the MLX bar; fixed (y-limit headroom, legend upper-left) before commit.
+
+**Verification (SOP step 5, quoted):**
+
+- `.venv/bin/python -m pytest tests/test_priorities.py
+  tests/test_phase6_analyze.py tests/test_writeup.py -q` → **"74 passed in
+  1.75s"** (5 backlog drift + 51 analyzer + 18 writeup; the 7 roofline
+  tests and the 3 thermal/idle tests were red before their code landed:
+  "7 failed, 41 passed", then "3 failed, 48 passed").
+- `.venv/bin/python tools/phase6_analyze.py benchmarks/phase6 --out
+  <scratch>` → "wrote …/tables.md (0 refusal(s))"; `cmp` against the
+  committed `docs/writeup/`: tables.md, summary.json, thermal.png,
+  energy.png, roofline.png — all **identical** (thermal.png and
+  energy.png are byte-identical to the P6-5 commit's files; only
+  tables.md/summary.json gained the new sections and roofline.png is new).
+
+**Follow-ups:** WR-1 seeded (measure the external engines' per-token
+weight bytes → manifest `roofline.weight_bytes`; rank 29.9, filler).
+P6-EXEC handoff note appended (the verdict input, README/CLAUDE.md must
+lead with the Phase 6 numbers and link the writeup, architecture.pdf
+v1.9 roofline figure from summary.json, keep `tests/test_writeup.py`
+green). Backlog: P6-6 done; P6-EXEC blocked → ready (James-heavy
+close-out; the next task by rank).

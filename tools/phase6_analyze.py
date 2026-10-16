@@ -15,7 +15,8 @@ Usage:
 
 Outputs: tables.md (every table + the refusal ledger), summary.json (the same
 values, machine-readable), thermal.png (D4 sustained-thermal chart from the D1
-timeline), energy.png (net J/token with both error bars).
+timeline), energy.png (net J/token with both error bars), roofline.png (implied decode
+bandwidth per engine against the measured denominators).
 """
 
 from __future__ import annotations
@@ -33,8 +34,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import phase6_exports as ex  # noqa: E402
 from phase6_exports import Refusal  # noqa: E402,F401  (re-exported for callers)
 from phase6_figures import (  # noqa: E402,F401  (re-exported for callers)
-    ENGINE_COLORS, ENGINE_LABELS, ENGINES, EnergyBar, ThermalSeries, energy_bar_data,
-    render_energy_bars, render_thermal_chart)
+    ENGINE_COLORS, ENGINE_LABELS, ENGINES, EnergyBar, RooflineBar, ThermalSeries, energy_bar_data,
+    render_energy_bars, render_roofline_chart, render_thermal_chart, roofline_bar_data)
+from phase6_roofline import (  # noqa: E402,F401  (measured denominators + byte counts; re-exported)
+    BASIS_MANIFEST, BASIS_MEASURED, BASIS_OURS_PROXY, DEFAULT_DECODE_PROMPT_TOKENS, KV_BYTES_PER_POSITION,
+    ROOFLINE_GBPS_OF_RECORD, WEIGHT_BYTES, WINDOW_MEDIAN_DEPTH_OFFSET, Roofline, roofline,
+    denominators as roofline_denominators)
 
 # --- Pre-committed constants, consumed verbatim (never tuned here) -----------
 RATED_WATT_HOURS = 12.6                       # iPhone 15 Pro rated capacity (DECISIONS 2026-09-05)
@@ -50,10 +55,6 @@ TRIPWIRE_DECODE_TOK_S = 24.0                  # Phase 4/5 constant, reused (D7)
 TRIPWIRE_PREFILL_TOK_S = 135.0                # Phase 5 constant, reused (D7)
 SUCCESS_RATIO = 0.75                          # PLAN success metric: ours / MLX ≥ 0.75
 CONSTANT_29_4 = 29.4                          # the Phase 0 planning constant, reported alongside
-WEIGHT_BYTES = 967_753_728                    # packed q4g64 weights streamed per token (P4-EXEC)
-KV_BYTES_PER_POSITION = 28 * 2 * 8 * 128 * 2  # 28 layers × K,V × 8 kv heads × head_dim 128 × fp16
-WINDOW_MEDIAN_DEPTH_OFFSET = (128 + 512) // 2  # generated-token depth at the window's median
-DEFAULT_DECODE_PROMPT_TOKENS = 84             # decode-essay, HF count (used only when no decode row parsed)
 DECODE_PROMPT = "decode-essay"                # decode rows, sustained loops, energy cycles (PLAN pins)
 PREFILL_PROMPT = "prefill-summarize"          # prefill rows
 ENERGY_PROMPT = DECODE_PROMPT
@@ -200,28 +201,21 @@ class BandwidthStat:
 
 
 @dataclass
-class Roofline:
-    engine: str
-    window_tok_s: Optional[float]
-    bytes_per_token: int
-    implied_gbps: Optional[float]
-    denominator_gbps: Optional[float]
-    fraction_of_triad: Optional[float]
-
-
-@dataclass
 class Report:
     manifest: dict
     speed: dict
     energy: dict
     bandwidth: dict
     roofline: dict
+    roofline_denominators: dict
     verdict: Verdict
     tripwires: dict
     bookend_delta: Optional[float]
     refusals: list[str]
     notes: list[str]
     energy_rows: list  # (file, RowExport, Timeline|None) for the thermal chart
+    thermal_cycles: list = field(default_factory=list)   # Sustained per energy cycle (D4: the thermal runs)
+    idle_summary: Optional[dict] = None                  # the D4 idle baseline as watts (None when refused)
 
 
 # --------------------------------------------------------------------------
@@ -632,22 +626,6 @@ def tripwires(speed: dict) -> dict:
     }
 
 
-def roofline(speed: dict, bandwidth: dict, manifest: dict) -> dict:
-    denominator = bandwidth["triad"].median
-    out = {}
-    weight_bytes = {"ours": WEIGHT_BYTES, **{k: int(v) for k, v in (manifest.get("roofline", {}).get("weight_bytes") or {}).items()}}
-    for engine, stat in speed.items():
-        if engine not in weight_bytes:
-            continue
-        prompt_tokens = stat.decode_warm.token_count or DEFAULT_DECODE_PROMPT_TOKENS
-        bytes_per_token = weight_bytes[engine] + KV_BYTES_PER_POSITION * (prompt_tokens + WINDOW_MEDIAN_DEPTH_OFFSET)
-        window = stat.decode_warm.median
-        implied = None if window is None else window * bytes_per_token / 1e9
-        fraction = None if (implied is None or not denominator) else implied / denominator
-        out[engine] = Roofline(engine, window, bytes_per_token, implied, denominator, fraction)
-    return out
-
-
 # --------------------------------------------------------------------------
 # Figures (edge test 6): the D1 timeline, never the cumulative line
 # --------------------------------------------------------------------------
@@ -694,9 +672,27 @@ def analyze_archive(root: Path) -> Report:
     energy, energy_rows = analyze_energy(root, manifest, refusals, notes)
     return Report(
         manifest=manifest, speed=speed, energy=energy, bandwidth=bandwidth,
-        roofline=roofline(speed, bandwidth, manifest), verdict=success_verdict(speed),
+        roofline=roofline(speed, bandwidth, manifest), roofline_denominators=roofline_denominators(bandwidth),
+        verdict=success_verdict(speed),
         tripwires=tripwires(speed), bookend_delta=bookend_delta, refusals=refusals, notes=notes,
-        energy_rows=energy_rows)
+        energy_rows=energy_rows,
+        thermal_cycles=[sustained_from(name, row, timeline) for name, row, timeline in energy_rows],
+        idle_summary=idle_summary(manifest.get("sessions", {}).get("energy")))
+
+
+def idle_summary(session: Optional[dict]) -> Optional[dict]:
+    """The D4 idle baseline as watts (SoC drop × J-per-1% from HEALTH ÷ wall) — None
+    whenever the baseline would be refused, so no idle figure exists without a valid one."""
+    if not session:
+        return None
+    idle = _idle_baseline(session, [])
+    if idle is None:
+        return None
+    j_per_pct = joules_per_soc_percent(idle.health_percent)
+    return {"soc_start": idle.soc_start, "soc_end": idle.soc_end, "soc_drop_percent": idle.soc_drop,
+            "wall_seconds": idle.wall_seconds, "health_percent": idle.health_percent,
+            "joules_per_percent": j_per_pct, "watts": idle.soc_drop * j_per_pct / float(idle.wall_seconds),
+            "ios_build": idle.ios_build}
 
 
 # --------------------------------------------------------------------------
@@ -722,8 +718,10 @@ def summary_dict(r: Report) -> dict:
                   for e, s in r.speed.items()},
         "energy": {e: _jsonable(en) for e, en in r.energy.items()},
         "bandwidth": {k: (_jsonable(v) if not isinstance(v, (list, dict)) else v) for k, v in r.bandwidth.items()},
-        "roofline": _jsonable(r.roofline), "verdict": _jsonable(r.verdict), "tripwires": _jsonable(r.tripwires),
+        "roofline": _jsonable(r.roofline), "roofline_denominators": _jsonable(r.roofline_denominators),
+        "verdict": _jsonable(r.verdict), "tripwires": _jsonable(r.tripwires),
         "bookend_delta": r.bookend_delta, "refusals": r.refusals, "notes": r.notes,
+        "thermal_cycles": _jsonable(r.thermal_cycles), "idle_baseline": r.idle_summary,
     }
 
 
@@ -746,6 +744,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not args.no_figures:
         render_thermal_chart(thermal_series(report), out / "thermal.png")
         render_energy_bars(report.energy, out / "energy.png")
+        render_roofline_chart(roofline_bar_data(report.roofline), report.roofline_denominators, out / "roofline.png")
     print(f"wrote {out / 'tables.md'} ({len(report.refusals)} refusal(s))")
     return 0
 

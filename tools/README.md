@@ -51,6 +51,8 @@ tools/.venv/bin/python tools/consolidate_shards.py --out <path>.safetensors
 | `phase6_analyze.py` | P6-3: Phase 6 archive (`benchmarks/phase6/`) → writeup tables + figures; refuses headline values that violate the pre-committed validity criteria. Runs under the REPO-ROOT `.venv` |
 | `phase6_exports.py` | parsers for the three row-export formats + the two bandwidth exports |
 | `phase6_tables.py` | Markdown rendering of the analyzer's report |
+| `phase6_figures.py` | the thermal chart, the energy bars (both error bars) and the decode roofline chart |
+| `phase6_roofline.py` | P6-6: decode roofline inputs — the measured denominators (43.84 GB/s of record, the session triad and read-only medians), bytes/token, per-engine implied bandwidth with a labeled basis, ceilings |
 | `requirements-phase6.txt` | pins for the analyzer (repo-root `.venv`: matplotlib, numpy, pytest) |
 
 ## Quality-gate fixtures (tests/fixtures/qwen3-1.7b-quality/)
@@ -68,8 +70,9 @@ committed — sha256 in DECISIONS.md). Validated by
 ```sh
 .venv/bin/pip install -r tools/requirements-phase6.txt
 .venv/bin/python tools/phase6_analyze.py benchmarks/phase6 --out docs/writeup
-.venv/bin/python -m pytest tests/test_phase6_analyze.py -q
+.venv/bin/python -m pytest tests/test_phase6_analyze.py tests/test_writeup.py -q
 ```
 
 Archive layout and the operator manifest: `benchmarks/phase6/README.md`.
-Runbook: `benchmarks/phase6-runbook.md`.
+Runbook: `benchmarks/phase6-runbook.md`. The writeup that embeds the
+regenerated tables: `docs/writeup.md` (drift-tested by `tests/test_writeup.py`).
